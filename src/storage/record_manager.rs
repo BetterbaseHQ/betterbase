@@ -17,7 +17,7 @@ use crate::{
         self,
         patch_log::{append_patch, deserialize_patches, serialize_patches, EMPTY_PATCH_LOG},
     },
-    error::{LessDbError, MigrationError, Result, StorageError, ValidationErrors},
+    error::{LessDbError, MigrationError, Result, StorageError},
     index::types::{IndexDefinition, IndexableValue},
     schema::{
         node::{is_immutable_field, SchemaNode},
@@ -182,7 +182,7 @@ pub fn prepare_update(
     existing: &SerializedRecord,
     new_data: Value,
     session_id: u64,
-    opts: &PatchOptions,
+    _opts: &PatchOptions,
 ) -> Result<PrepareUpdateResult> {
     debug_assert!(!existing.deleted, "prepare_update called on a tombstone record");
     // Check immutable fields
