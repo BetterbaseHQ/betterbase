@@ -132,7 +132,10 @@ pub fn updated_at_schema() -> SchemaNode {
 
 /// Returns true for Key, CreatedAt, and UpdatedAt — fields managed automatically by the store.
 pub fn is_auto_field(node: &SchemaNode) -> bool {
-    matches!(node, SchemaNode::Key | SchemaNode::CreatedAt | SchemaNode::UpdatedAt)
+    matches!(
+        node,
+        SchemaNode::Key | SchemaNode::CreatedAt | SchemaNode::UpdatedAt
+    )
 }
 
 /// Returns true for CreatedAt and UpdatedAt — auto-managed timestamp fields.

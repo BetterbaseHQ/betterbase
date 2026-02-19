@@ -229,7 +229,10 @@ mod tests {
             create_model(&initial, MIN_SESSION_ID).expect("create_model should succeed");
         let updated = json!({"score": 20});
         let patch = diff_model(&model, &updated);
-        assert!(patch.is_some(), "diff against changed data should return Some");
+        assert!(
+            patch.is_some(),
+            "diff against changed data should return Some"
+        );
 
         // Apply the patch and verify the view updated.
         if let Some(p) = patch {
@@ -324,8 +327,7 @@ mod tests {
     #[test]
     fn fork_model_creates_independent_copy() {
         let data = json!({"x": 1});
-        let original =
-            create_model(&data, MIN_SESSION_ID).expect("create_model should succeed");
+        let original = create_model(&data, MIN_SESSION_ID).expect("create_model should succeed");
 
         let fork_sid = MIN_SESSION_ID + 500;
         let mut forked = fork_model(&original, fork_sid).expect("fork_model should succeed");
@@ -381,8 +383,7 @@ mod tests {
         }
 
         // The remote model is a replica of the same initial binary (same CRDT history).
-        let mut remote =
-            model_from_binary(&initial_bytes).expect("remote decode should succeed");
+        let mut remote = model_from_binary(&initial_bytes).expect("remote decode should succeed");
 
         merge_with_pending_patches(&mut remote, &patches);
 

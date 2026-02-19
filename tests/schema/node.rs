@@ -1,8 +1,8 @@
+use less_db::schema::node::t;
 use less_db::schema::node::{
     created_at_schema, is_auto_field, is_immutable_field, is_indexable_node, is_timestamp_field,
     key_schema, updated_at_schema, LiteralValue, SchemaNode,
 };
-use less_db::schema::node::t;
 use std::collections::BTreeMap;
 
 // ============================================================================
@@ -64,7 +64,10 @@ fn object_holds_properties() {
 #[test]
 fn literal_str_variant() {
     let schema = t::literal_str("active");
-    assert_eq!(schema, SchemaNode::Literal(LiteralValue::String("active".to_string())));
+    assert_eq!(
+        schema,
+        SchemaNode::Literal(LiteralValue::String("active".to_string()))
+    );
 }
 
 #[test]
@@ -82,7 +85,10 @@ fn literal_bool_variant() {
 #[test]
 fn union_holds_variants() {
     let schema = t::union(vec![t::string(), t::number()]);
-    assert_eq!(schema, SchemaNode::Union(vec![SchemaNode::String, SchemaNode::Number]));
+    assert_eq!(
+        schema,
+        SchemaNode::Union(vec![SchemaNode::String, SchemaNode::Number])
+    );
 }
 
 #[test]

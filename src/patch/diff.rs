@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
+use super::changeset::{create_changeset, Changeset};
 use crate::schema::node::{LiteralValue, SchemaNode};
-use super::changeset::{Changeset, create_changeset};
 
 const MAX_DIFF_DEPTH: usize = 100;
 
@@ -13,11 +13,22 @@ const MAX_DIFF_DEPTH: usize = 100;
 /// Compute differences between old and new values given an object schema.
 /// Returns a Changeset of dot-notation paths that changed.
 /// `schema` is the properties map of an Object node.
-pub fn diff(schema: &BTreeMap<String, SchemaNode>, old_value: &Value, new_value: &Value) -> Changeset {
+pub fn diff(
+    schema: &BTreeMap<String, SchemaNode>,
+    old_value: &Value,
+    new_value: &Value,
+) -> Changeset {
     let object_schema = SchemaNode::Object(schema.clone());
     let mut changes = create_changeset();
     let mut path: Vec<String> = Vec::new();
-    diff_node(&object_schema, old_value, new_value, &mut changes, &mut path, 0);
+    diff_node(
+        &object_schema,
+        old_value,
+        new_value,
+        &mut changes,
+        &mut path,
+        0,
+    );
     changes
 }
 
@@ -121,12 +132,8 @@ fn diff_node(
             let new_obj = new_val.as_object();
 
             for (key, prop_schema) in props {
-                let old_child = old_obj
-                    .and_then(|o| o.get(key))
-                    .unwrap_or(&Value::Null);
-                let new_child = new_obj
-                    .and_then(|o| o.get(key))
-                    .unwrap_or(&Value::Null);
+                let old_child = old_obj.and_then(|o| o.get(key)).unwrap_or(&Value::Null);
+                let new_child = new_obj.and_then(|o| o.get(key)).unwrap_or(&Value::Null);
 
                 path.push(key.clone());
                 diff_node(prop_schema, old_child, new_child, changes, path, depth + 1);

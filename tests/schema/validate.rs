@@ -1,5 +1,7 @@
-use less_db::schema::node::{created_at_schema, key_schema, updated_at_schema, t};
-use less_db::schema::validate::{deserialize_and_validate, validate, validate_or_throw, validate_shape};
+use less_db::schema::node::{created_at_schema, key_schema, t, updated_at_schema};
+use less_db::schema::validate::{
+    deserialize_and_validate, validate, validate_or_throw, validate_shape,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -361,7 +363,11 @@ fn union_first_matching_variant_wins() {
 
 #[test]
 fn union_literal_variants() {
-    let schema = t::union(vec![t::literal_str("a"), t::literal_str("b"), t::literal_str("c")]);
+    let schema = t::union(vec![
+        t::literal_str("a"),
+        t::literal_str("b"),
+        t::literal_str("c"),
+    ]);
     assert!(validate(&schema, &json!("a")).is_ok());
     assert!(validate(&schema, &json!("b")).is_ok());
     assert!(validate(&schema, &json!("c")).is_ok());

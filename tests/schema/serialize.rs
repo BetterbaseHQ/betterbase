@@ -1,4 +1,4 @@
-use less_db::schema::node::{created_at_schema, key_schema, updated_at_schema, t};
+use less_db::schema::node::{created_at_schema, key_schema, t, updated_at_schema};
 use less_db::schema::serialize::{deserialize, serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -86,7 +86,10 @@ fn serialize_array_of_dates() {
         &t::array(t::date()),
         &json!(["2024-01-01T00:00:00.000Z", "2024-02-01T00:00:00.000Z"]),
     );
-    assert_eq!(result, json!(["2024-01-01T00:00:00.000Z", "2024-02-01T00:00:00.000Z"]));
+    assert_eq!(
+        result,
+        json!(["2024-01-01T00:00:00.000Z", "2024-02-01T00:00:00.000Z"])
+    );
 }
 
 // ============================================================================
@@ -143,7 +146,10 @@ fn serialize_object_skips_null_optional_fields() {
 
 #[test]
 fn serialize_literal_str_passthrough() {
-    assert_eq!(serialize(&t::literal_str("active"), &json!("active")), json!("active"));
+    assert_eq!(
+        serialize(&t::literal_str("active"), &json!("active")),
+        json!("active")
+    );
 }
 
 #[test]
@@ -157,7 +163,10 @@ fn serialize_literal_num_passthrough() {
 
 #[test]
 fn serialize_key_passthrough() {
-    assert_eq!(serialize(&key_schema(), &json!("abc-123")), json!("abc-123"));
+    assert_eq!(
+        serialize(&key_schema(), &json!("abc-123")),
+        json!("abc-123")
+    );
 }
 
 // ============================================================================

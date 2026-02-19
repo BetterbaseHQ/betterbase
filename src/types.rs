@@ -190,8 +190,7 @@ pub enum DeleteResolution {
 // ============================================================================
 
 /// Options for put() operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PutOptions {
     /// Override record ID instead of auto-generating
     pub id: Option<String>,
@@ -203,10 +202,8 @@ pub struct PutOptions {
     pub meta: Option<Value>,
 }
 
-
 /// Options for patch() operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PatchOptions {
     pub id: String,
     pub session_id: Option<u64>,
@@ -214,15 +211,12 @@ pub struct PatchOptions {
     pub meta: Option<Value>,
 }
 
-
 /// Options for delete() operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DeleteOptions {
     pub id: String,
     pub session_id: Option<u64>,
 }
-
 
 /// Options for get() operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -243,14 +237,12 @@ impl Default for GetOptions {
 }
 
 /// Options for list/getAll operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ListOptions {
     pub include_deleted: bool,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
-
 
 /// Options for purge_tombstones
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,14 +254,12 @@ pub struct PurgeTombstonesOptions {
 }
 
 /// Options for scan_raw backend method
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScanOptions {
     pub include_deleted: bool,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
-
 
 /// Raw batch result from backend (before deserialization)
 #[derive(Debug, Clone)]
@@ -278,13 +268,11 @@ pub struct RawBatchResult {
 }
 
 /// Options for applying remote changes
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ApplyRemoteOptions {
     pub delete_conflict_strategy: Option<DeleteConflictStrategyName>,
     pub received_at: Option<String>, // ISO timestamp
 }
-
 
 /// Serializable name-only version of `DeleteConflictStrategy` (no closure variant).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -346,9 +334,13 @@ mod tests {
 
     #[test]
     fn delete_conflict_strategy_debug_custom() {
-        let strategy = DeleteConflictStrategy::Custom(Box::new(|_local, _remote| DeleteResolution::Keep));
+        let strategy =
+            DeleteConflictStrategy::Custom(Box::new(|_local, _remote| DeleteResolution::Keep));
         let debug_str = format!("{:?}", strategy);
-        assert!(debug_str.contains("Custom(...)"), "expected Custom(...): {debug_str}");
+        assert!(
+            debug_str.contains("Custom(...)"),
+            "expected Custom(...): {debug_str}"
+        );
     }
 
     #[test]

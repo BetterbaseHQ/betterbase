@@ -1,6 +1,6 @@
 use less_db::patch::diff::{diff, node_equals};
-use less_db::schema::node::SchemaNode;
 use less_db::schema::node::t;
+use less_db::schema::node::SchemaNode;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 // Helpers
 // ============================================================================
 
-fn obj_schema(props: impl IntoIterator<Item = (&'static str, SchemaNode)>) -> BTreeMap<String, SchemaNode> {
+fn obj_schema(
+    props: impl IntoIterator<Item = (&'static str, SchemaNode)>,
+) -> BTreeMap<String, SchemaNode> {
     props.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
 }
 
@@ -320,7 +322,11 @@ fn node_equals_matching_arrays() {
 #[test]
 fn node_equals_different_arrays() {
     let schema = t::array(t::string());
-    assert!(!node_equals(&schema, &json!(["a", "b"]), &json!(["a", "c"])));
+    assert!(!node_equals(
+        &schema,
+        &json!(["a", "b"]),
+        &json!(["a", "c"])
+    ));
 }
 
 #[test]

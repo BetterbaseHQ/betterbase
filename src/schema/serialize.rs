@@ -51,9 +51,11 @@ fn serialize_node(schema: &SchemaNode, value: &Value, depth: usize) -> Value {
 
         SchemaNode::Array(element) => match value.as_array() {
             None => value.clone(),
-            Some(arr) => {
-                Value::Array(arr.iter().map(|item| serialize_node(element, item, depth + 1)).collect())
-            }
+            Some(arr) => Value::Array(
+                arr.iter()
+                    .map(|item| serialize_node(element, item, depth + 1))
+                    .collect(),
+            ),
         },
 
         SchemaNode::Record(val_schema) => match value.as_object() {
@@ -74,8 +76,12 @@ fn serialize_node(schema: &SchemaNode, value: &Value, depth: usize) -> Value {
                 for (key, prop_schema) in props {
                     if let Some(prop_value) = map.get(key) {
                         // Skip null-valued optional fields (undefined in JS)
-                        if !prop_value.is_null() || !matches!(prop_schema, SchemaNode::Optional(_)) {
-                            result.insert(key.clone(), serialize_node(prop_schema, prop_value, depth + 1));
+                        if !prop_value.is_null() || !matches!(prop_schema, SchemaNode::Optional(_))
+                        {
+                            result.insert(
+                                key.clone(),
+                                serialize_node(prop_schema, prop_value, depth + 1),
+                            );
                         }
                     }
                 }
@@ -134,9 +140,11 @@ fn deserialize_node(schema: &SchemaNode, value: &Value, depth: usize) -> Value {
 
         SchemaNode::Array(element) => match value.as_array() {
             None => value.clone(),
-            Some(arr) => {
-                Value::Array(arr.iter().map(|item| deserialize_node(element, item, depth + 1)).collect())
-            }
+            Some(arr) => Value::Array(
+                arr.iter()
+                    .map(|item| deserialize_node(element, item, depth + 1))
+                    .collect(),
+            ),
         },
 
         SchemaNode::Record(val_schema) => match value.as_object() {
@@ -156,7 +164,10 @@ fn deserialize_node(schema: &SchemaNode, value: &Value, depth: usize) -> Value {
                 let mut result = Map::new();
                 for (key, prop_schema) in props {
                     if let Some(prop_value) = map.get(key) {
-                        result.insert(key.clone(), deserialize_node(prop_schema, prop_value, depth + 1));
+                        result.insert(
+                            key.clone(),
+                            deserialize_node(prop_schema, prop_value, depth + 1),
+                        );
                     }
                 }
                 Value::Object(result)
@@ -193,22 +204,19 @@ fn matches_variant(schema: &SchemaNode, value: &Value, depth: usize) -> bool {
             use super::node::LiteralValue;
             match lit {
                 LiteralValue::String(s) => value.as_str() == Some(s.as_str()),
-                LiteralValue::Number(n) => {
-                    value.as_f64().map(|v| v.to_bits() == n.to_bits()).unwrap_or(false)
-                }
+                LiteralValue::Number(n) => value
+                    .as_f64()
+                    .map(|v| v.to_bits() == n.to_bits())
+                    .unwrap_or(false),
                 LiteralValue::Bool(b) => value.as_bool() == Some(*b),
             }
         }
         SchemaNode::Array(_) => value.is_array(),
-        SchemaNode::Object(_) | SchemaNode::Record(_) => {
-            value.is_object()
-        }
-        SchemaNode::Optional(inner) => {
-            value.is_null() || matches_variant(inner, value, depth + 1)
-        }
-        SchemaNode::Union(variants) => {
-            variants.iter().any(|v| matches_variant(v, value, depth + 1))
-        }
+        SchemaNode::Object(_) | SchemaNode::Record(_) => value.is_object(),
+        SchemaNode::Optional(inner) => value.is_null() || matches_variant(inner, value, depth + 1),
+        SchemaNode::Union(variants) => variants
+            .iter()
+            .any(|v| matches_variant(v, value, depth + 1)),
     }
 }
 
@@ -227,9 +235,10 @@ fn matches_serialized_variant(schema: &SchemaNode, value: &Value, depth: usize) 
             use super::node::LiteralValue;
             match lit {
                 LiteralValue::String(s) => value.as_str() == Some(s.as_str()),
-                LiteralValue::Number(n) => {
-                    value.as_f64().map(|v| v.to_bits() == n.to_bits()).unwrap_or(false)
-                }
+                LiteralValue::Number(n) => value
+                    .as_f64()
+                    .map(|v| v.to_bits() == n.to_bits())
+                    .unwrap_or(false),
                 LiteralValue::Bool(b) => value.as_bool() == Some(*b),
             }
         }
@@ -238,8 +247,8 @@ fn matches_serialized_variant(schema: &SchemaNode, value: &Value, depth: usize) 
         SchemaNode::Optional(inner) => {
             value.is_null() || matches_serialized_variant(inner, value, depth + 1)
         }
-        SchemaNode::Union(variants) => {
-            variants.iter().any(|v| matches_serialized_variant(v, value, depth + 1))
-        }
+        SchemaNode::Union(variants) => variants
+            .iter()
+            .any(|v| matches_serialized_variant(v, value, depth + 1)),
     }
 }

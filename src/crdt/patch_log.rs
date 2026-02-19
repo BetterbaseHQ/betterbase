@@ -314,10 +314,8 @@ mod tests {
         let log = append_patch(&log, &p2);
 
         // Both should deserialize to the same number of patches
-        let from_batch =
-            deserialize_patches(&batch).expect("batch deserialize failed");
-        let from_append =
-            deserialize_patches(&log).expect("append deserialize failed");
+        let from_batch = deserialize_patches(&batch).expect("batch deserialize failed");
+        let from_append = deserialize_patches(&log).expect("append deserialize failed");
 
         assert_eq!(from_batch.len(), from_append.len());
     }

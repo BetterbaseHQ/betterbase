@@ -33,7 +33,11 @@ impl fmt::Display for ValidationErrors {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Validation failed:")?;
         for e in &self.0 {
-            write!(f, "\n  - {}: expected {}, received {}", e.path, e.expected, e.received)?;
+            write!(
+                f,
+                "\n  - {}: expected {}, received {}",
+                e.path, e.expected, e.received
+            )?;
         }
         Ok(())
     }
@@ -153,7 +157,11 @@ pub struct MergeConflictError {
 }
 
 impl MergeConflictError {
-    pub fn new(collection: impl Into<String>, record_id: impl Into<String>, conflicting_fields: &[&str]) -> Self {
+    pub fn new(
+        collection: impl Into<String>,
+        record_id: impl Into<String>,
+        conflicting_fields: &[&str],
+    ) -> Self {
         Self {
             collection: collection.into(),
             record_id: record_id.into(),
@@ -338,7 +346,10 @@ mod tests {
     fn storage_error_not_initialized_mentions_initialize() {
         let e = StorageError::NotInitialized;
         let msg = e.to_string();
-        assert!(msg.contains("initialize()"), "missing 'initialize()': {msg}");
+        assert!(
+            msg.contains("initialize()"),
+            "missing 'initialize()': {msg}"
+        );
     }
 
     // --- StorageError::CollectionNotRegistered ---
@@ -348,7 +359,10 @@ mod tests {
         let e = StorageError::CollectionNotRegistered("orders".to_string());
         let msg = e.to_string();
         assert!(msg.contains("orders"), "collection name missing: {msg}");
-        assert!(msg.contains("initialization"), "missing 'initialization': {msg}");
+        assert!(
+            msg.contains("initialization"),
+            "missing 'initialization': {msg}"
+        );
     }
 
     // --- StorageError::Transaction with source ---
@@ -385,7 +399,10 @@ mod tests {
         assert!(msg.contains("body"), "field 'body' missing: {msg}");
         assert!(msg.contains("tags"), "field 'tags' missing: {msg}");
         // Fields should be comma-separated
-        assert!(msg.contains("title, body") || msg.contains("title,"), "join separator missing: {msg}");
+        assert!(
+            msg.contains("title, body") || msg.contains("title,"),
+            "join separator missing: {msg}"
+        );
     }
 
     // --- LessDbError From conversions ---

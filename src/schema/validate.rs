@@ -32,7 +32,10 @@ struct ValidationContext {
 
 impl ValidationContext {
     fn new() -> Self {
-        Self { errors: vec![], path: vec![] }
+        Self {
+            errors: vec![],
+            path: vec![],
+        }
     }
 
     fn push_key(&mut self, key: impl Into<String>) {
@@ -168,38 +171,37 @@ fn walk(schema: &SchemaNode, value: &Value, ctx: &mut ValidationContext, depth: 
             }
         }
 
-        SchemaNode::Date | SchemaNode::CreatedAt | SchemaNode::UpdatedAt => {
-            match value.as_str() {
-                Some(s) if is_valid_iso_date(s) => value.clone(),
-                Some(_) => {
-                    ctx.add_error("Date or ISO string", type_name(value));
-                    value.clone()
-                }
-                None => {
-                    ctx.add_error("Date or ISO string", type_name(value));
-                    value.clone()
-                }
+        SchemaNode::Date | SchemaNode::CreatedAt | SchemaNode::UpdatedAt => match value.as_str() {
+            Some(s) if is_valid_iso_date(s) => value.clone(),
+            Some(_) => {
+                ctx.add_error("Date or ISO string", type_name(value));
+                value.clone()
             }
-        }
+            None => {
+                ctx.add_error("Date or ISO string", type_name(value));
+                value.clone()
+            }
+        },
 
-        SchemaNode::Bytes => {
-            match value.as_str() {
-                Some(s) if is_valid_base64(s) => value.clone(),
-                Some(_) => {
-                    ctx.add_error("Uint8Array or base64 string", type_name(value));
-                    value.clone()
-                }
-                None => {
-                    ctx.add_error("Uint8Array or base64 string", type_name(value));
-                    value.clone()
-                }
+        SchemaNode::Bytes => match value.as_str() {
+            Some(s) if is_valid_base64(s) => value.clone(),
+            Some(_) => {
+                ctx.add_error("Uint8Array or base64 string", type_name(value));
+                value.clone()
             }
-        }
+            None => {
+                ctx.add_error("Uint8Array or base64 string", type_name(value));
+                value.clone()
+            }
+        },
 
         SchemaNode::Literal(lit) => {
             let matches = match lit {
                 LiteralValue::String(s) => value.as_str() == Some(s.as_str()),
-                LiteralValue::Number(n) => value.as_f64().map(|v| v.to_bits() == n.to_bits()).unwrap_or(false),
+                LiteralValue::Number(n) => value
+                    .as_f64()
+                    .map(|v| v.to_bits() == n.to_bits())
+                    .unwrap_or(false),
                 LiteralValue::Bool(b) => value.as_bool() == Some(*b),
             };
             if matches {
@@ -220,23 +222,21 @@ fn walk(schema: &SchemaNode, value: &Value, ctx: &mut ValidationContext, depth: 
             }
         }
 
-        SchemaNode::Array(element) => {
-            match value.as_array() {
-                None => {
-                    ctx.add_error("array", type_name(value));
-                    value.clone()
-                }
-                Some(arr) => {
-                    let mut result = Vec::with_capacity(arr.len());
-                    for (i, item) in arr.iter().enumerate() {
-                        ctx.push_index(i);
-                        result.push(walk(element, item, ctx, depth + 1));
-                        ctx.pop();
-                    }
-                    Value::Array(result)
-                }
+        SchemaNode::Array(element) => match value.as_array() {
+            None => {
+                ctx.add_error("array", type_name(value));
+                value.clone()
             }
-        }
+            Some(arr) => {
+                let mut result = Vec::with_capacity(arr.len());
+                for (i, item) in arr.iter().enumerate() {
+                    ctx.push_index(i);
+                    result.push(walk(element, item, ctx, depth + 1));
+                    ctx.pop();
+                }
+                Value::Array(result)
+            }
+        },
 
         SchemaNode::Record(val_schema) => {
             match value.as_object() {
@@ -249,7 +249,11 @@ fn walk(schema: &SchemaNode, value: &Value, ctx: &mut ValidationContext, depth: 
                     for (key, val) in map {
                         ctx.push_key(key);
                         // Validate key constraints (non-empty, no dots or brackets)
-                        if key.is_empty() || key.contains('.') || key.contains('[') || key.contains(']') {
+                        if key.is_empty()
+                            || key.contains('.')
+                            || key.contains('[')
+                            || key.contains(']')
+                        {
                             ctx.add_error(
                                 "valid key (non-empty, no dots or brackets)",
                                 format!("{key:?}"),
@@ -263,25 +267,23 @@ fn walk(schema: &SchemaNode, value: &Value, ctx: &mut ValidationContext, depth: 
             }
         }
 
-        SchemaNode::Object(props) => {
-            match value.as_object() {
-                None => {
-                    ctx.add_error("object", type_name(value));
-                    value.clone()
-                }
-                Some(map) => {
-                    let mut result = Map::new();
-                    for (key, prop_schema) in props {
-                        ctx.push_key(key);
-                        let prop_value = map.get(key).unwrap_or(&Value::Null);
-                        let coerced = walk(prop_schema, prop_value, ctx, depth + 1);
-                        result.insert(key.clone(), coerced);
-                        ctx.pop();
-                    }
-                    Value::Object(result)
-                }
+        SchemaNode::Object(props) => match value.as_object() {
+            None => {
+                ctx.add_error("object", type_name(value));
+                value.clone()
             }
-        }
+            Some(map) => {
+                let mut result = Map::new();
+                for (key, prop_schema) in props {
+                    ctx.push_key(key);
+                    let prop_value = map.get(key).unwrap_or(&Value::Null);
+                    let coerced = walk(prop_schema, prop_value, ctx, depth + 1);
+                    result.insert(key.clone(), coerced);
+                    ctx.pop();
+                }
+                Value::Object(result)
+            }
+        },
 
         SchemaNode::Union(variants) => {
             let mut best_result = value.clone();
@@ -370,6 +372,9 @@ pub fn validate_or_throw(schema: &SchemaNode, value: &Value) -> Result<Value, Le
 
 /// Deserialize + validate. Since all types are already `serde_json::Value`
 /// (dates as ISO strings, bytes as base64), this is identical to `validate`.
-pub fn deserialize_and_validate(schema: &SchemaNode, value: &Value) -> Result<Value, ValidationErrors> {
+pub fn deserialize_and_validate(
+    schema: &SchemaNode,
+    value: &Value,
+) -> Result<Value, ValidationErrors> {
     validate(schema, value)
 }
