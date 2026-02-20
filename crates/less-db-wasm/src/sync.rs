@@ -25,11 +25,7 @@ extern "C" {
     ) -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch)]
-    async fn pull(
-        this: &JsTransport,
-        collection: &str,
-        since: f64,
-    ) -> Result<JsValue, JsValue>;
+    async fn pull(this: &JsTransport, collection: &str, since: f64) -> Result<JsValue, JsValue>;
 }
 
 // ============================================================================
@@ -131,10 +127,7 @@ impl less_db::sync::types::SyncTransport for JsSyncTransport {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let sequence = v
-                    .get("sequence")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0) as i64;
+                let sequence = v.get("sequence").and_then(|v| v.as_f64()).unwrap_or(0.0) as i64;
                 less_db::sync::types::PushAck { id, sequence }
             })
             .collect();
@@ -188,10 +181,7 @@ impl less_db::sync::types::SyncTransport for JsSyncTransport {
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string(),
-                        sequence: v
-                            .get("sequence")
-                            .and_then(|v| v.as_f64())
-                            .unwrap_or(0.0) as i64,
+                        sequence: v.get("sequence").and_then(|v| v.as_f64()).unwrap_or(0.0) as i64,
                         error: v
                             .get("error")
                             .and_then(|v| v.as_str())

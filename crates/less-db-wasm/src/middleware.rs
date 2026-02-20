@@ -243,9 +243,10 @@ impl WasmTypedDb {
         for arc in &arcs {
             self.collections.insert(arc.name.clone(), arc.clone());
         }
-        let mut reactive = self.reactive.take().ok_or_else(|| {
-            JsValue::from_str("initialize() has already been called")
-        })?;
+        let mut reactive = self
+            .reactive
+            .take()
+            .ok_or_else(|| JsValue::from_str("initialize() has already been called"))?;
         reactive.initialize(&arcs).into_js()?;
         let typed = TypedAdapter::new(reactive, Arc::clone(&self.middleware));
         self.adapter = Some(typed);
@@ -276,12 +277,7 @@ impl WasmTypedDb {
     }
 
     /// Get a record by id (with middleware enrichment).
-    pub fn get(
-        &self,
-        collection: &str,
-        id: &str,
-        options: JsValue,
-    ) -> Result<JsValue, JsValue> {
+    pub fn get(&self, collection: &str, id: &str, options: JsValue) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
         let opts = parse_get_options(&options)?;
         let result = self.typed()?.get(&def, id, Some(&opts)).into_js()?;
@@ -610,14 +606,11 @@ impl WasmTypedDb {
 
 impl WasmTypedDb {
     fn get_def(&self, collection: &str) -> Result<Arc<CollectionDef>, JsValue> {
-        self.collections
-            .get(collection)
-            .cloned()
-            .ok_or_else(|| {
-                JsValue::from_str(&format!(
-                    "Collection \"{collection}\" not registered. Call initialize() first."
-                ))
-            })
+        self.collections.get(collection).cloned().ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "Collection \"{collection}\" not registered. Call initialize() first."
+            ))
+        })
     }
 
     fn typed(&self) -> Result<&TypedAdapter<JsStorageBackend>, JsValue> {
@@ -684,7 +677,7 @@ fn parse_put_options(js: &JsValue) -> Result<PutOptions, JsValue> {
             .get("skipUniqueCheck")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
-        meta: None, // TypedAdapter resolves meta via middleware
+        meta: None,                    // TypedAdapter resolves meta via middleware
         should_reset_sync_state: None, // TypedAdapter handles this
     })
 }
@@ -699,10 +692,7 @@ fn parse_get_options(js: &JsValue) -> Result<GetOptions, JsValue> {
             .get("includeDeleted")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
-        migrate: val
-            .get("migrate")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
+        migrate: val.get("migrate").and_then(|v| v.as_bool()).unwrap_or(true),
     })
 }
 

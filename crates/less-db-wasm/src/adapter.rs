@@ -82,12 +82,7 @@ impl WasmDb {
     }
 
     /// Get a record by id.
-    pub fn get(
-        &self,
-        collection: &str,
-        id: &str,
-        options: JsValue,
-    ) -> Result<JsValue, JsValue> {
+    pub fn get(&self, collection: &str, id: &str, options: JsValue) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
         let opts = parse_get_options(&options)?;
         let result = self.adapter.get(&def, id, &opts).into_js()?;
@@ -112,12 +107,7 @@ impl WasmDb {
     }
 
     /// Delete a record by id.
-    pub fn delete(
-        &self,
-        collection: &str,
-        id: &str,
-        options: JsValue,
-    ) -> Result<bool, JsValue> {
+    pub fn delete(&self, collection: &str, id: &str, options: JsValue) -> Result<bool, JsValue> {
         let def = self.get_def(collection)?;
         let opts = parse_delete_options(id, &options)?;
         self.adapter.delete(&def, id, &opts).into_js()
@@ -379,14 +369,11 @@ impl WasmDb {
 
 impl WasmDb {
     fn get_def(&self, collection: &str) -> Result<Arc<CollectionDef>, JsValue> {
-        self.collections
-            .get(collection)
-            .cloned()
-            .ok_or_else(|| {
-                JsValue::from_str(&format!(
-                    "Collection \"{collection}\" not registered. Call initialize() first."
-                ))
-            })
+        self.collections.get(collection).cloned().ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "Collection \"{collection}\" not registered. Call initialize() first."
+            ))
+        })
     }
 }
 
@@ -400,10 +387,7 @@ unsafe impl Sync for SendSyncCallback {}
 /// Call a JS callback with a change event, converted to a JsValue.
 /// This standalone function avoids capturing JsValue-containing types in a closure,
 /// which would prevent the closure from implementing Send+Sync.
-fn call_change_callback(
-    cb: &SendSyncCallback,
-    event: &less_db::reactive::event::ChangeEvent,
-) {
+fn call_change_callback(cb: &SendSyncCallback, event: &less_db::reactive::event::ChangeEvent) {
     let val = change_event_to_value(event);
     let js_val = value_to_js(&val).unwrap_or(JsValue::NULL);
     let _ = cb.0.call1(&JsValue::NULL, &js_val);
@@ -552,10 +536,7 @@ fn parse_get_options(js: &JsValue) -> Result<GetOptions, JsValue> {
             .get("includeDeleted")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
-        migrate: val
-            .get("migrate")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
+        migrate: val.get("migrate").and_then(|v| v.as_bool()).unwrap_or(true),
     })
 }
 

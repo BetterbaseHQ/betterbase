@@ -30,9 +30,8 @@ pub fn parse_schema(js: &JsValue) -> Result<BTreeMap<String, SchemaNode>, JsValu
 
     let mut schema = BTreeMap::new();
     for (key, node_val) in obj {
-        let node = parse_schema_node(node_val).map_err(|e| {
-            JsValue::from_str(&format!("Invalid schema for field \"{key}\": {e}"))
-        })?;
+        let node = parse_schema_node(node_val)
+            .map_err(|e| JsValue::from_str(&format!("Invalid schema for field \"{key}\": {e}")))?;
         schema.insert(key.clone(), node);
     }
     Ok(schema)
