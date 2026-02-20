@@ -312,7 +312,9 @@ fn records_equal(
 
 pub(crate) fn matches_variant(schema: &SchemaNode, value: &Value) -> bool {
     match schema {
-        SchemaNode::String | SchemaNode::Text | SchemaNode::Key => matches!(value, Value::String(_)),
+        SchemaNode::String | SchemaNode::Text | SchemaNode::Key => {
+            matches!(value, Value::String(_))
+        }
         SchemaNode::Number => matches!(value, Value::Number(_)),
         SchemaNode::Boolean => matches!(value, Value::Bool(_)),
         SchemaNode::Date | SchemaNode::CreatedAt | SchemaNode::UpdatedAt => {

@@ -14,7 +14,7 @@ use less_db::{
         sqlite::SqliteBackend,
         traits::{StorageLifecycle, StorageRead, StorageSync, StorageWrite},
     },
-    types::{GetOptions, PatchOptions, PutOptions},
+    types::{GetOptions, PutOptions},
 };
 use serde_json::{json, Value};
 
@@ -94,7 +94,7 @@ impl Middleware for SpacesMiddleware {
         Some(Box::new(move |meta: Option<&Value>| -> bool {
             meta.and_then(|m| m.get("spaceId"))
                 .and_then(|v| v.as_str())
-                .map_or(false, |sid| sid == target)
+                .is_some_and(|sid| sid == target)
         }))
     }
 
@@ -105,7 +105,7 @@ impl Middleware for SpacesMiddleware {
             .and_then(|v| v.as_str());
 
         match new_space {
-            Some(new_sid) => old_space.map_or(true, |old_sid| new_sid != old_sid),
+            Some(new_sid) => old_space != Some(new_sid),
             None => false,
         }
     }
@@ -183,7 +183,12 @@ fn on_read_enriches_get_results() {
     let typed = make_typed(&def);
 
     let record = typed
-        .put(&def, json!({"title": "Buy milk", "done": false}), None, Some(&put_opts()))
+        .put(
+            &def,
+            json!({"title": "Buy milk", "done": false}),
+            None,
+            Some(&put_opts()),
+        )
         .expect("put");
 
     let id = get_id(&record);
@@ -198,10 +203,20 @@ fn on_read_enriches_get_all_results() {
     let typed = make_typed(&def);
 
     typed
-        .put(&def, json!({"title": "A", "done": false}), None, Some(&put_opts()))
+        .put(
+            &def,
+            json!({"title": "A", "done": false}),
+            None,
+            Some(&put_opts()),
+        )
         .expect("put A");
     typed
-        .put(&def, json!({"title": "B", "done": true}), None, Some(&put_opts()))
+        .put(
+            &def,
+            json!({"title": "B", "done": true}),
+            None,
+            Some(&put_opts()),
+        )
         .expect("put B");
 
     let result = typed.get_all(&def, None).expect("get_all");
@@ -217,14 +232,23 @@ fn on_read_enriches_query_results() {
     let typed = make_typed(&def);
 
     typed
-        .put(&def, json!({"title": "A", "done": false}), None, Some(&put_opts()))
+        .put(
+            &def,
+            json!({"title": "A", "done": false}),
+            None,
+            Some(&put_opts()),
+        )
         .expect("put");
 
     let result = typed
-        .query(&def, Some(&less_db::query::types::Query {
-            filter: Some(json!({"done": false})),
-            ..Default::default()
-        }), None)
+        .query(
+            &def,
+            Some(&less_db::query::types::Query {
+                filter: Some(json!({"done": false})),
+                ..Default::default()
+            }),
+            None,
+        )
         .expect("query");
 
     assert_eq!(result.records.len(), 1);
@@ -299,7 +323,12 @@ fn on_write_defaults_to_personal_when_no_option() {
     let typed = make_typed(&def);
 
     let record = typed
-        .put(&def, json!({"title": "Default", "done": false}), None, Some(&put_opts()))
+        .put(
+            &def,
+            json!({"title": "Default", "done": false}),
+            None,
+            Some(&put_opts()),
+        )
         .expect("put");
 
     assert_eq!(record["_spaceId"], json!("personal"));
@@ -455,12 +484,7 @@ fn meta_preserved_through_patch() {
 
     let id = get_id(&record);
     typed
-        .patch(
-            &def,
-            json!({"id": id, "done": true}),
-            None,
-            None,
-        )
+        .patch(&def, json!({"id": id, "done": true}), None, None)
         .expect("patch");
 
     let stored = typed
@@ -533,7 +557,11 @@ fn reactive_adapter_works_without_middleware() {
     let adapter = make_adapter(&def);
 
     let record = adapter
-        .put(&def, json!({"title": "No middleware", "done": false}), &put_opts())
+        .put(
+            &def,
+            json!({"title": "No middleware", "done": false}),
+            &put_opts(),
+        )
         .expect("put");
 
     assert_eq!(record.data["title"], json!("No middleware"));
@@ -569,7 +597,7 @@ fn existing_observe_works_without_middleware() {
     adapter.wait_for_flush();
 
     let log = observed.lock().unwrap();
-    assert!(log.len() >= 1);
+    assert!(!log.is_empty());
     let data = log[0].as_ref().expect("should have data");
     assert_eq!(data["title"], json!("Test"));
 }
@@ -606,7 +634,7 @@ fn observe_enriches_records_with_space_id() {
     typed.wait_for_flush();
 
     let log = observed.lock().unwrap();
-    assert!(log.len() >= 1);
+    assert!(!log.is_empty());
     let data = log[0].as_ref().expect("should have data");
     assert_eq!(data["_spaceId"], json!("space-1"));
     assert_eq!(data["title"], json!("Observable"));
@@ -641,7 +669,7 @@ fn observe_query_enriches_records_with_space_id() {
     typed.wait_for_flush();
 
     let log = observed.lock().unwrap();
-    assert!(log.len() >= 1);
+    assert!(!log.is_empty());
     let result = &log[0];
     assert_eq!(result.records.len(), 1);
     assert_eq!(result.records[0]["_spaceId"], json!("space-1"));
@@ -946,12 +974,7 @@ fn bulk_patch_preserves_existing_meta_when_no_options() {
 
     let a_id = get_id(&a).to_string();
     typed
-        .bulk_patch(
-            &def,
-            vec![json!({"id": a_id, "done": true})],
-            None,
-            None,
-        )
+        .bulk_patch(&def, vec![json!({"id": a_id, "done": true})], None, None)
         .expect("bulk_patch");
 
     let stored = typed
@@ -1163,7 +1186,7 @@ fn observe_query_filters_by_space() {
     typed.wait_for_flush();
 
     let log = observed.lock().unwrap();
-    assert!(log.len() >= 1);
+    assert!(!log.is_empty());
     let result = &log[0];
     assert_eq!(result.records.len(), 1);
     assert_eq!(result.records[0]["_spaceId"], json!("space-1"));
@@ -1203,18 +1226,17 @@ fn observe_fires_callback_when_record_updated() {
 
     // Update the record
     typed
-        .patch(
-            &def,
-            json!({"id": id, "title": "Updated"}),
-            None,
-            None,
-        )
+        .patch(&def, json!({"id": id, "title": "Updated"}), None, None)
         .expect("patch");
 
     typed.wait_for_flush();
 
     let log = observed.lock().unwrap();
-    assert!(log.len() >= 2, "should have at least 2 notifications, got {}", log.len());
+    assert!(
+        log.len() >= 2,
+        "should have at least 2 notifications, got {}",
+        log.len()
+    );
     let latest = log.last().unwrap().as_ref().expect("should have data");
     assert_eq!(latest["title"], json!("Updated"));
     assert_eq!(latest["_spaceId"], json!("space-1"));
@@ -1281,7 +1303,12 @@ fn middleware_with_only_on_read() {
     let typed = TypedAdapter::new(ra, Arc::new(ReadOnlyMiddleware));
 
     let record = typed
-        .put(&def, json!({"title": "Test", "done": false}), None, Some(&put_opts()))
+        .put(
+            &def,
+            json!({"title": "Test", "done": false}),
+            None,
+            Some(&put_opts()),
+        )
         .expect("put");
     assert_eq!(record["_tag"], json!("enriched"));
 
@@ -1305,7 +1332,12 @@ fn middleware_with_no_hooks_acts_as_passthrough() {
     let typed = TypedAdapter::new(ra, Arc::new(NoopMiddleware));
 
     let record = typed
-        .put(&def, json!({"title": "Test", "done": false}), None, Some(&put_opts()))
+        .put(
+            &def,
+            json!({"title": "Test", "done": false}),
+            None,
+            Some(&put_opts()),
+        )
         .expect("put");
     assert_eq!(record["title"], json!("Test"));
     assert!(record.get("_spaceId").is_none());
@@ -1362,7 +1394,10 @@ fn middleware_with_only_on_write_and_should_reset() {
 
     // Without onRead, records come back without enrichment
     let result = typed.query(&def, None, None).expect("query");
-    let fetched = typed.get(&def, get_id(&result.records[0]), None).expect("get").expect("found");
+    let fetched = typed
+        .get(&def, get_id(&result.records[0]), None)
+        .expect("get")
+        .expect("found");
     assert!(fetched.get("_spaceId").is_none());
 }
 
@@ -1405,12 +1440,7 @@ fn space_change_resets_sync_state() {
 
     // Make a local edit so there are pending_patches
     typed
-        .patch(
-            &def,
-            json!({"id": id, "title": "Edited"}),
-            None,
-            None,
-        )
+        .patch(&def, json!({"id": id, "title": "Edited"}), None, None)
         .expect("patch");
 
     let before_move = typed

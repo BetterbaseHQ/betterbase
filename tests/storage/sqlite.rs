@@ -104,7 +104,10 @@ fn put_raw_then_get_raw_round_trips() {
     assert_eq!(fetched.id, "user-1");
     assert_eq!(fetched.collection, "users");
     assert_eq!(fetched.version, 2);
-    assert_eq!(fetched.data, json!({ "name": "Alice", "email": "alice@example.com" }));
+    assert_eq!(
+        fetched.data,
+        json!({ "name": "Alice", "email": "alice@example.com" })
+    );
     assert_eq!(fetched.crdt, vec![1, 2, 3]);
     assert_eq!(fetched.pending_patches, vec![4, 5]);
     assert_eq!(fetched.sequence, 42);
@@ -143,11 +146,11 @@ fn put_raw_overwrites_existing_record() {
 fn scan_raw_returns_all_live_records() {
     let backend = make_backend();
     for i in 0..3 {
-        backend.put_raw(&make_record(&format!("r{i}"), "col")).unwrap();
+        backend
+            .put_raw(&make_record(&format!("r{i}"), "col"))
+            .unwrap();
     }
-    let result = backend
-        .scan_raw("col", &ScanOptions::default())
-        .unwrap();
+    let result = backend.scan_raw("col", &ScanOptions::default()).unwrap();
     assert_eq!(result.records.len(), 3);
 }
 
@@ -162,7 +165,13 @@ fn scan_raw_skips_tombstones_by_default() {
     backend.put_raw(&r).unwrap();
 
     let result = backend
-        .scan_raw("col", &ScanOptions { include_deleted: false, ..Default::default() })
+        .scan_raw(
+            "col",
+            &ScanOptions {
+                include_deleted: false,
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert_eq!(result.records.len(), 1);
     assert_eq!(result.records[0].id, "alive");
@@ -179,7 +188,13 @@ fn scan_raw_includes_tombstones_when_requested() {
     backend.put_raw(&r).unwrap();
 
     let result = backend
-        .scan_raw("col", &ScanOptions { include_deleted: true, ..Default::default() })
+        .scan_raw(
+            "col",
+            &ScanOptions {
+                include_deleted: true,
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert_eq!(result.records.len(), 2);
 }
@@ -188,10 +203,18 @@ fn scan_raw_includes_tombstones_when_requested() {
 fn scan_raw_respects_limit() {
     let backend = make_backend();
     for i in 0..5 {
-        backend.put_raw(&make_record(&format!("r{i}"), "col")).unwrap();
+        backend
+            .put_raw(&make_record(&format!("r{i}"), "col"))
+            .unwrap();
     }
     let result = backend
-        .scan_raw("col", &ScanOptions { limit: Some(2), ..Default::default() })
+        .scan_raw(
+            "col",
+            &ScanOptions {
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert_eq!(result.records.len(), 2);
 }
@@ -200,7 +223,9 @@ fn scan_raw_respects_limit() {
 fn scan_raw_respects_offset() {
     let backend = make_backend();
     for i in 0..5 {
-        backend.put_raw(&make_record(&format!("r{i}"), "col")).unwrap();
+        backend
+            .put_raw(&make_record(&format!("r{i}"), "col"))
+            .unwrap();
     }
     let result = backend
         .scan_raw(
@@ -221,9 +246,7 @@ fn scan_raw_only_returns_records_for_requested_collection() {
     backend.put_raw(&make_record("a", "col_a")).unwrap();
     backend.put_raw(&make_record("b", "col_b")).unwrap();
 
-    let result = backend
-        .scan_raw("col_a", &ScanOptions::default())
-        .unwrap();
+    let result = backend.scan_raw("col_a", &ScanOptions::default()).unwrap();
     assert_eq!(result.records.len(), 1);
     assert_eq!(result.records[0].id, "a");
 }
@@ -265,7 +288,9 @@ fn scan_dirty_raw_returns_empty_when_none_dirty() {
 fn count_raw_counts_live_records() {
     let backend = make_backend();
     for i in 0..4 {
-        backend.put_raw(&make_record(&format!("r{i}"), "col")).unwrap();
+        backend
+            .put_raw(&make_record(&format!("r{i}"), "col"))
+            .unwrap();
     }
     // One tombstone — should not be counted
     let mut t = make_record("tomb", "col");
@@ -378,7 +403,13 @@ fn purge_tombstones_raw_dry_run_does_not_delete() {
     assert_eq!(would_purge, 1);
     // Record should still be there
     let result = backend
-        .scan_raw("col", &ScanOptions { include_deleted: true, ..Default::default() })
+        .scan_raw(
+            "col",
+            &ScanOptions {
+                include_deleted: true,
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert_eq!(result.records.len(), 1);
 }
@@ -445,8 +476,14 @@ fn check_unique_field_returns_error_when_conflict_exists() {
 
     let err = result.unwrap_err();
     let err_str = err.to_string();
-    assert!(err_str.contains("idx_name"), "error should mention index: {err_str}");
-    assert!(err_str.contains("col"), "error should mention collection: {err_str}");
+    assert!(
+        err_str.contains("idx_name"),
+        "error should mention index: {err_str}"
+    );
+    assert!(
+        err_str.contains("col"),
+        "error should mention collection: {err_str}"
+    );
 }
 
 #[test]
@@ -460,13 +497,7 @@ fn check_unique_field_excludes_self_when_updating() {
 
     let index = field_index_single("idx_name", "name", true);
     // Updating the same record — should not conflict with itself
-    let result = backend.check_unique(
-        "col",
-        &index,
-        &json!({ "name": "Alice" }),
-        None,
-        Some("r1"),
-    );
+    let result = backend.check_unique("col", &index, &json!({ "name": "Alice" }), None, Some("r1"));
     assert!(result.is_ok(), "should not conflict with self: {result:?}");
 }
 
@@ -538,7 +569,10 @@ fn check_unique_computed_returns_error_on_conflict() {
     );
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("emailLower"), "error should mention index: {err}");
+    assert!(
+        err.contains("emailLower"),
+        "error should mention index: {err}"
+    );
 }
 
 // ============================================================================
@@ -633,7 +667,10 @@ fn scan_index_raw_range_lower_inclusive() {
 
     let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
     let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
-    assert!(ids.contains(&"r30"), "inclusive lower bound should include 30");
+    assert!(
+        ids.contains(&"r30"),
+        "inclusive lower bound should include 30"
+    );
     assert!(ids.contains(&"r40"));
     assert!(ids.contains(&"r50"));
     assert_eq!(result.records.len(), 3);
@@ -665,7 +702,10 @@ fn scan_index_raw_range_lower_exclusive() {
 
     let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
     let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
-    assert!(!ids.contains(&"r30"), "exclusive lower bound should not include 30");
+    assert!(
+        !ids.contains(&"r30"),
+        "exclusive lower bound should not include 30"
+    );
     assert!(ids.contains(&"r40"));
     assert!(ids.contains(&"r50"));
     assert_eq!(result.records.len(), 2);
@@ -699,7 +739,10 @@ fn scan_index_raw_range_upper_only_inclusive() {
     let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
     assert!(ids.contains(&"r10"));
     assert!(ids.contains(&"r20"));
-    assert!(ids.contains(&"r30"), "inclusive upper bound should include 30");
+    assert!(
+        ids.contains(&"r30"),
+        "inclusive upper bound should include 30"
+    );
     assert_eq!(result.records.len(), 3);
 }
 
@@ -731,7 +774,10 @@ fn scan_index_raw_range_upper_only_exclusive() {
     let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
     assert!(ids.contains(&"r10"));
     assert!(ids.contains(&"r20"));
-    assert!(!ids.contains(&"r30"), "exclusive upper bound should not include 30");
+    assert!(
+        !ids.contains(&"r30"),
+        "exclusive upper bound should not include 30"
+    );
     assert_eq!(result.records.len(), 2);
 }
 
@@ -917,7 +963,10 @@ fn check_unique_sparse_computed_index_allows_null() {
     });
 
     let result = backend.check_unique("col", &index, &json!({}), None, None);
-    assert!(result.is_ok(), "sparse computed index should allow null values");
+    assert!(
+        result.is_ok(),
+        "sparse computed index should allow null values"
+    );
 }
 
 // ============================================================================
@@ -950,7 +999,13 @@ fn check_unique_compound_index_detects_conflict() {
     });
 
     let data = json!({ "a": "foo", "b": "bar" });
-    let result = backend.check_unique("col", &index, &data, Some(&json!({ "idx_ab": ["foo", "bar"] })), None);
+    let result = backend.check_unique(
+        "col",
+        &index,
+        &data,
+        Some(&json!({ "idx_ab": ["foo", "bar"] })),
+        None,
+    );
     assert!(result.is_err(), "should detect compound unique conflict");
 }
 
@@ -999,7 +1054,9 @@ fn transaction_rolls_back_on_error() {
 
     let result = backend.transaction(|b| {
         b.put_raw(&make_record("r1", "col"))?;
-        Err::<(), _>(less_db::error::LessDbError::Internal("forced failure".to_string()))
+        Err::<(), _>(less_db::error::LessDbError::Internal(
+            "forced failure".to_string(),
+        ))
     });
 
     assert!(result.is_err());

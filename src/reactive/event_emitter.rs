@@ -4,6 +4,7 @@
 //! Snapshot-on-emit semantics mean:
 //!   - A listener removed *during* emission is still called in that round.
 //!   - A listener added *during* emission is NOT called until the next emit.
+//!
 //! Panics inside a listener propagate to the caller — no error isolation at
 //! this level (the ReactiveAdapter handles isolation above).
 //!

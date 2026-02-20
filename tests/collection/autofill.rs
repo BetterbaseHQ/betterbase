@@ -407,10 +407,7 @@ fn handles_typical_document_schema() {
 
 #[test]
 fn strips_extra_fields_not_in_schema() {
-    let s = schema(&[
-        ("id", key_schema()),
-        ("name", t::string()),
-    ]);
+    let s = schema(&[("id", key_schema()), ("name", t::string())]);
     let result = autofill(
         &s,
         &json!({ "name": "John", "extra_field": "should be stripped", "another": 42 }),
@@ -428,9 +425,7 @@ fn strips_extra_fields_in_nested_objects() {
     let mut inner_props = BTreeMap::new();
     inner_props.insert("name".to_string(), t::string());
 
-    let s = schema(&[
-        ("nested", t::object(inner_props)),
-    ]);
+    let s = schema(&[("nested", t::object(inner_props))]);
     let result = autofill(
         &s,
         &json!({ "nested": { "name": "John", "extra": "gone" } }),
@@ -478,10 +473,7 @@ fn autofills_first_matching_variant_in_union() {
 
 #[test]
 fn union_with_scalar_variants_passes_through() {
-    let s = schema(&[(
-        "value",
-        t::union(vec![t::string(), t::number()]),
-    )]);
+    let s = schema(&[("value", t::union(vec![t::string(), t::number()]))]);
 
     let result = autofill(
         &s,

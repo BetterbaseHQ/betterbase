@@ -4,10 +4,10 @@
 //! records on read, extracting metadata on write, filtering queries by
 //! metadata, and controlling sync state reset.
 
-pub mod types;
 pub mod typed_adapter;
+pub mod types;
 
-pub use types::Middleware;
 pub use typed_adapter::{
-    MiddlewareBatchResult, MiddlewareQueryResult, MiddlewarePatchManyResult, TypedAdapter,
+    MiddlewareBatchResult, MiddlewarePatchManyResult, MiddlewareQueryResult, TypedAdapter,
 };
+pub use types::Middleware;

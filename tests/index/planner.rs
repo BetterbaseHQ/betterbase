@@ -607,10 +607,7 @@ fn extract_in_with_non_indexable_element_goes_to_residual() {
 fn extract_in_empty_array_goes_to_residual() {
     let filter = json!({"status": {"$in": []}});
     let conds = extract_conditions(Some(&filter));
-    assert!(
-        conds.ins.is_empty(),
-        "empty $in should not be extracted"
-    );
+    assert!(conds.ins.is_empty(), "empty $in should not be extracted");
 }
 
 // ============================================================================
@@ -689,10 +686,7 @@ fn plan_compound_two_equalities_with_sort() {
         &indexes,
     );
 
-    assert!(
-        plan.scan.is_some(),
-        "compound index should be selected"
-    );
+    assert!(plan.scan.is_some(), "compound index should be selected");
     assert!(
         plan.index_provides_sort,
         "compound index should provide sort after equality prefix"
@@ -707,12 +701,11 @@ fn plan_compound_two_equalities_with_sort() {
 fn plan_in_over_limit_falls_back_to_full_scan() {
     let indexes = vec![field_index("status", &["status"], false, false)];
     let values: Vec<serde_json::Value> = (0..21).map(|i| json!(format!("v{i}"))).collect();
-    let plan = plan_query(
-        Some(&json!({"status": {"$in": values}})),
-        None,
-        &indexes,
-    );
+    let plan = plan_query(Some(&json!({"status": {"$in": values}})), None, &indexes);
     // Over-limit $in goes to residual, so index can't help → no index scan
     assert!(plan.scan.is_none(), "should fall back to full scan");
-    assert!(plan.post_filter.is_some(), "should have post-filter for residual $in");
+    assert!(
+        plan.post_filter.is_some(),
+        "should have post-filter for residual $in"
+    );
 }

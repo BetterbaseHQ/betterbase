@@ -91,19 +91,15 @@ impl SyncManager {
     /// Push only (under per-collection lock).
     pub async fn push(&self, def: &CollectionDef) -> SyncResult {
         let collection = def.name.clone();
-        self.with_lock(&collection, async {
-            self.push_impl(def).await
-        })
-        .await
+        self.with_lock(&collection, async { self.push_impl(def).await })
+            .await
     }
 
     /// Pull only (under per-collection lock).
     pub async fn pull(&self, def: &CollectionDef) -> SyncResult {
         let collection = def.name.clone();
-        self.with_lock(&collection, async {
-            self.pull_impl(def).await
-        })
-        .await
+        self.with_lock(&collection, async { self.pull_impl(def).await })
+            .await
     }
 
     /// Apply pre-converted remote records directly (for real-time transports).
@@ -115,7 +111,8 @@ impl SyncManager {
     ) -> SyncResult {
         let collection = def.name.clone();
         self.with_lock(&collection, async {
-            self.apply_remote_records_impl(def, records, latest_sequence).await
+            self.apply_remote_records_impl(def, records, latest_sequence)
+                .await
         })
         .await
     }
@@ -342,7 +339,10 @@ impl SyncManager {
                 received_at: None,
             };
 
-            match self.adapter.apply_remote_changes(def, &records_to_apply, &apply_opts) {
+            match self
+                .adapter
+                .apply_remote_changes(def, &records_to_apply, &apply_opts)
+            {
                 Ok(apply_result) => {
                     result.pulled = apply_result.applied.len();
                     result.merged = apply_result.merged_count;
@@ -382,16 +382,14 @@ impl SyncManager {
         }
 
         // Advance cursor (forward only)
-        let latest_sequence = pull_result
-            .latest_sequence
-            .unwrap_or_else(|| {
-                pull_result
-                    .records
-                    .iter()
-                    .map(|r| r.sequence)
-                    .max()
-                    .unwrap_or(0)
-            });
+        let latest_sequence = pull_result.latest_sequence.unwrap_or_else(|| {
+            pull_result
+                .records
+                .iter()
+                .map(|r| r.sequence)
+                .max()
+                .unwrap_or(0)
+        });
 
         if latest_sequence > since {
             if let Err(e) = self.adapter.set_last_sequence(&collection, latest_sequence) {
@@ -465,7 +463,10 @@ impl SyncManager {
                 received_at: None,
             };
 
-            match self.adapter.apply_remote_changes(def, &records_to_apply, &apply_opts) {
+            match self
+                .adapter
+                .apply_remote_changes(def, &records_to_apply, &apply_opts)
+            {
                 Ok(apply_result) => {
                     result.pulled = apply_result.applied.len();
                     result.merged = apply_result.merged_count;

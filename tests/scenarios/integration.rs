@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use less_db::{
     collection::builder::{collection, CollectionDef},
     crdt::{self, MIN_SESSION_ID},
-    reactive::{adapter::ReactiveQueryResult, ReactiveAdapter},
     query::types::{Query, SortDirection, SortEntry, SortInput},
+    reactive::{adapter::ReactiveQueryResult, ReactiveAdapter},
     schema::node::t,
     storage::{
         adapter::Adapter,
@@ -16,8 +16,8 @@ use less_db::{
         traits::{StorageBackend, StorageLifecycle, StorageRead, StorageSync, StorageWrite},
     },
     types::{
-        ApplyRemoteOptions, DeleteConflictStrategyName, DeleteOptions, GetOptions,
-        PatchOptions, PutOptions, RemoteAction, RemoteRecord, SerializedRecord,
+        ApplyRemoteOptions, DeleteConflictStrategyName, DeleteOptions, GetOptions, PatchOptions,
+        PutOptions, RemoteAction, RemoteRecord, SerializedRecord,
     },
 };
 use serde_json::{json, Value};
@@ -94,12 +94,9 @@ fn make_adapter(build_def: fn() -> CollectionDef) -> (Adapter<SqliteBackend>, Co
     let mut backend = SqliteBackend::open_in_memory().expect("open");
     backend.initialize(&[&def1]).expect("backend init");
     let mut adapter = Adapter::new(backend);
-    adapter
-        .initialize(&[Arc::new(def2)])
-        .expect("adapter init");
+    adapter.initialize(&[Arc::new(def2)]).expect("adapter init");
     (adapter, def1)
 }
-
 
 // ============================================================================
 // Scenario 1: Full CRUD lifecycle
@@ -201,7 +198,10 @@ fn query_with_filter_sort_pagination() {
         .iter()
         .map(|r| r.data["name"].as_str().unwrap())
         .collect();
-    assert_eq!(sorted_names, vec!["Alice", "Bob", "Charlie", "Diana", "Eve"]);
+    assert_eq!(
+        sorted_names,
+        vec!["Alice", "Bob", "Charlie", "Diana", "Eve"]
+    );
 
     // Query with filter
     let filtered = adapter
@@ -333,8 +333,14 @@ fn remote_merge_preserves_both_changes() {
         .expect("exists");
 
     // Both name and email should be strings (valid after CRDT merge)
-    assert!(merged.data["name"].is_string(), "name should be a string after merge");
-    assert!(merged.data["email"].is_string(), "email should be a string after merge");
+    assert!(
+        merged.data["name"].is_string(),
+        "name should be a string after merge"
+    );
+    assert!(
+        merged.data["email"].is_string(),
+        "email should be a string after merge"
+    );
     // Sequence should be updated from the remote
     assert_eq!(merged.sequence, 50);
 }
@@ -436,9 +442,7 @@ fn migration_on_read() {
 
     // Now wrap in adapter and read with migration
     let mut adapter = Adapter::new(backend);
-    adapter
-        .initialize(&[Arc::new(def2)])
-        .expect("adapter init");
+    adapter.initialize(&[Arc::new(def2)]).expect("adapter init");
 
     let opts = GetOptions {
         migrate: true,
@@ -549,7 +553,10 @@ fn double_delete_returns_false() {
     let second_delete = adapter
         .delete(&def, &created.id, &DeleteOptions::default())
         .expect("delete");
-    assert!(!second_delete, "deleting already-deleted record should return false");
+    assert!(
+        !second_delete,
+        "deleting already-deleted record should return false"
+    );
 }
 
 // ============================================================================
@@ -686,9 +693,15 @@ fn put_with_missing_required_field() {
     // "name" and "email" are required strings; omit email
     // Schema validation rejects the missing required field
     let result = adapter.put(&def, json!({ "name": "Alice" }), &put_opts());
-    assert!(result.is_err(), "missing required field 'email' should be rejected");
+    assert!(
+        result.is_err(),
+        "missing required field 'email' should be rejected"
+    );
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("email"), "error should mention the missing field: {err_msg}");
+    assert!(
+        err_msg.contains("email"),
+        "error should mention the missing field: {err_msg}"
+    );
 }
 
 // ============================================================================
@@ -699,17 +712,13 @@ fn put_with_missing_required_field() {
 fn query_empty_collection() {
     let (adapter, def) = make_adapter(users_def);
 
-    let result = adapter
-        .query(&def, &Query::default())
-        .expect("query");
+    let result = adapter.query(&def, &Query::default()).expect("query");
     assert_eq!(result.records.len(), 0);
 
     let count = adapter.count(&def, None).expect("count");
     assert_eq!(count, 0);
 
-    let all = adapter
-        .get_all(&def, &Default::default())
-        .expect("get_all");
+    let all = adapter.get_all(&def, &Default::default()).expect("get_all");
     assert_eq!(all.records.len(), 0);
 }
 
@@ -794,7 +803,11 @@ fn patch_preserves_created_at_and_untouched_fields() {
         .expect("patch");
 
     assert_eq!(patched.data["name"], json!("Alice Updated"));
-    assert_eq!(patched.data["email"], json!(original_email), "email untouched");
+    assert_eq!(
+        patched.data["email"],
+        json!(original_email),
+        "email untouched"
+    );
     assert_eq!(patched.data["age"], json!(30), "age untouched");
     assert_eq!(
         patched.data["createdAt"].as_str().unwrap(),
@@ -840,7 +853,10 @@ fn get_with_include_deleted() {
             },
         )
         .expect("get");
-    assert!(found.is_some(), "should find deleted record with include_deleted");
+    assert!(
+        found.is_some(),
+        "should find deleted record with include_deleted"
+    );
     let record = found.unwrap();
     assert!(record.deleted, "record should be marked deleted");
 }
@@ -914,7 +930,11 @@ fn idempotent_remote_apply() {
 
     // Apply once
     adapter
-        .apply_remote_changes(&def, &[remote.clone()], &ApplyRemoteOptions::default())
+        .apply_remote_changes(
+            &def,
+            std::slice::from_ref(&remote),
+            &ApplyRemoteOptions::default(),
+        )
         .expect("first apply");
 
     let after_first = adapter
@@ -937,7 +957,10 @@ fn idempotent_remote_apply() {
     assert_eq!(count, 1);
 
     // Data and sequence must be identical after idempotent apply
-    assert_eq!(after_first.data, after_second.data, "idempotent apply must not change data");
+    assert_eq!(
+        after_first.data, after_second.data,
+        "idempotent apply must not change data"
+    );
     assert_eq!(after_first.sequence, after_second.sequence);
     assert_eq!(after_second.data["name"], json!("Alice Remote"));
 }
@@ -1108,7 +1131,11 @@ fn observe_record_delete_fires_none() {
     // After delete + flush, callback should receive None
     {
         let entries = log.lock().unwrap();
-        assert!(entries.len() >= 2, "should have at least 2 callbacks, got {}", entries.len());
+        assert!(
+            entries.len() >= 2,
+            "should have at least 2 callbacks, got {}",
+            entries.len()
+        );
         assert!(
             entries.last().unwrap().is_none(),
             "callback after delete should receive None"
@@ -1249,7 +1276,11 @@ fn observe_query_tracks_changes() {
     {
         let entries = log.lock().unwrap();
         let latest = entries.last().unwrap();
-        assert_eq!(latest.records.len(), 1, "should have 1 record after deleting Bob");
+        assert_eq!(
+            latest.records.len(),
+            1,
+            "should have 1 record after deleting Bob"
+        );
         assert_eq!(latest.records[0]["name"], json!("Alice"));
     }
 }
@@ -1328,7 +1359,10 @@ fn mark_synced_nonexistent_errors() {
     let (adapter, def) = make_adapter(users_def);
 
     let result = adapter.mark_synced(&def, "nonexistent-id", 42, None);
-    assert!(result.is_err(), "mark_synced on nonexistent record should error");
+    assert!(
+        result.is_err(),
+        "mark_synced on nonexistent record should error"
+    );
 }
 
 // ============================================================================
@@ -1388,7 +1422,11 @@ fn dirty_tracking_lifecycle() {
         .delete(&def, &created.id, &DeleteOptions::default())
         .expect("delete");
     let dirty = adapter.get_dirty(&def).expect("get_dirty");
-    assert_eq!(dirty.records.len(), 1, "deleted record should be dirty for sync");
+    assert_eq!(
+        dirty.records.len(),
+        1,
+        "deleted record should be dirty for sync"
+    );
 }
 
 // ============================================================================
@@ -1435,7 +1473,11 @@ fn remote_insert_new_record() {
     assert_eq!(fetched.sequence, 100);
 
     let dirty = adapter.get_dirty(&def).expect("get_dirty");
-    assert_eq!(dirty.records.len(), 0, "remote-inserted record should not be dirty");
+    assert_eq!(
+        dirty.records.len(),
+        0,
+        "remote-inserted record should not be dirty"
+    );
 }
 
 // ============================================================================
@@ -1537,7 +1579,11 @@ fn query_with_range_filters() {
             },
         )
         .expect("query");
-    assert_eq!(result.records.len(), 3, "ages 40, 50, and 60 should match $gt 30");
+    assert_eq!(
+        result.records.len(),
+        3,
+        "ages 40, 50, and 60 should match $gt 30"
+    );
 
     // age >= 30 AND age <= 40
     let result = adapter
@@ -1625,7 +1671,10 @@ fn put_into_deleted_record_errors() {
         },
     );
 
-    assert!(result.is_err(), "putting into a deleted record should error");
+    assert!(
+        result.is_err(),
+        "putting into a deleted record should error"
+    );
 }
 
 // ============================================================================
@@ -1876,12 +1925,14 @@ fn put_wrong_field_type() {
     let (adapter, def) = make_adapter(users_def);
 
     // "name" should be string, pass a number — schema validation rejects it
-    let result = adapter.put(
-        &def,
-        json!({ "name": 42, "email": "a@x.com" }),
-        &put_opts(),
+    let result = adapter.put(&def, json!({ "name": 42, "email": "a@x.com" }), &put_opts());
+    assert!(
+        result.is_err(),
+        "wrong field type should be rejected by schema validation"
     );
-    assert!(result.is_err(), "wrong field type should be rejected by schema validation");
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("name"), "error should mention the invalid field: {err_msg}");
+    assert!(
+        err_msg.contains("name"),
+        "error should mention the invalid field: {err_msg}"
+    );
 }

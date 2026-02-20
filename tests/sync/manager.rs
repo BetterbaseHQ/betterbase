@@ -3,7 +3,10 @@
 //! Uses mock transport and adapter to test push/pull/sync/quarantine logic.
 
 use std::collections::HashMap;
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -39,8 +42,15 @@ struct PullCall {
 struct MockTransportInner {
     push_calls: Vec<PushCall>,
     pull_calls: Vec<PullCall>,
-    push_response: Option<Box<dyn Fn(&str, &[OutboundRecord]) -> Result<Vec<PushAck>, SyncTransportError> + Send + Sync>>,
-    pull_response: Option<Box<dyn Fn(&str, i64) -> Result<PullResult, SyncTransportError> + Send + Sync>>,
+    push_response: Option<
+        Box<
+            dyn Fn(&str, &[OutboundRecord]) -> Result<Vec<PushAck>, SyncTransportError>
+                + Send
+                + Sync,
+        >,
+    >,
+    pull_response:
+        Option<Box<dyn Fn(&str, i64) -> Result<PullResult, SyncTransportError> + Send + Sync>>,
 }
 
 struct MockTransport {
@@ -61,7 +71,10 @@ impl MockTransport {
 
     fn on_push(
         &self,
-        f: impl Fn(&str, &[OutboundRecord]) -> Result<Vec<PushAck>, SyncTransportError> + Send + Sync + 'static,
+        f: impl Fn(&str, &[OutboundRecord]) -> Result<Vec<PushAck>, SyncTransportError>
+            + Send
+            + Sync
+            + 'static,
     ) {
         self.inner.lock().push_response = Some(Box::new(f));
     }
@@ -109,11 +122,7 @@ impl SyncTransport for MockTransport {
         }
     }
 
-    async fn pull(
-        &self,
-        collection: &str,
-        since: i64,
-    ) -> Result<PullResult, SyncTransportError> {
+    async fn pull(&self, collection: &str, since: i64) -> Result<PullResult, SyncTransportError> {
         let mut inner = self.inner.lock();
         inner.pull_calls.push(PullCall {
             collection: collection.to_string(),
@@ -154,8 +163,19 @@ struct MockAdapterInner {
     sequences: HashMap<String, i64>,
     mark_synced_calls: Vec<MarkSyncedCall>,
     apply_calls: Vec<ApplyCall>,
-    apply_response: Option<Box<dyn Fn(&CollectionDef, &[RemoteRecord], &ApplyRemoteOptions) -> less_db::error::Result<ApplyRemoteResult> + Send + Sync>>,
-    mark_synced_response: Option<Box<dyn Fn(&str, &str, i64) -> less_db::error::Result<()> + Send + Sync>>,
+    apply_response: Option<
+        Box<
+            dyn Fn(
+                    &CollectionDef,
+                    &[RemoteRecord],
+                    &ApplyRemoteOptions,
+                ) -> less_db::error::Result<ApplyRemoteResult>
+                + Send
+                + Sync,
+        >,
+    >,
+    mark_synced_response:
+        Option<Box<dyn Fn(&str, &str, i64) -> less_db::error::Result<()> + Send + Sync>>,
     get_dirty_error: Option<String>,
     get_last_sequence_error: Option<String>,
     set_last_sequence_error: Option<String>,
@@ -215,7 +235,14 @@ impl MockAdapter {
 
     fn on_apply(
         &self,
-        f: impl Fn(&CollectionDef, &[RemoteRecord], &ApplyRemoteOptions) -> less_db::error::Result<ApplyRemoteResult> + Send + Sync + 'static,
+        f: impl Fn(
+                &CollectionDef,
+                &[RemoteRecord],
+                &ApplyRemoteOptions,
+            ) -> less_db::error::Result<ApplyRemoteResult>
+            + Send
+            + Sync
+            + 'static,
     ) {
         self.inner.lock().apply_response = Some(Box::new(f));
     }
@@ -639,7 +666,9 @@ async fn push_mark_synced_failure_captured() {
 
     adapter.set_dirty("tasks", vec![make_dirty_record("r1", "tasks")]);
     adapter.on_mark_synced(|_, _, _| {
-        Err(less_db::error::LessDbError::Internal("mark synced failed".into()))
+        Err(less_db::error::LessDbError::Internal(
+            "mark synced failed".into(),
+        ))
     });
 
     let manager = make_manager(transport.clone(), adapter.clone());
@@ -1042,10 +1071,7 @@ async fn cursor_advances_even_with_partial_apply_errors() {
 
     transport.on_pull(|_, _| {
         Ok(PullResult {
-            records: vec![
-                make_remote_record("r1", 100),
-                make_remote_record("r2", 200),
-            ],
+            records: vec![make_remote_record("r1", 100), make_remote_record("r2", 200)],
             latest_sequence: Some(200),
             failures: Vec::new(),
         })
@@ -1102,7 +1128,9 @@ async fn cursor_does_not_advance_on_complete_apply_failure() {
     });
 
     adapter.on_apply(|_, _, _| {
-        Err(less_db::error::LessDbError::Internal("total failure".into()))
+        Err(less_db::error::LessDbError::Internal(
+            "total failure".into(),
+        ))
     });
 
     let manager = make_manager(transport.clone(), adapter.clone());
@@ -1250,9 +1278,10 @@ async fn on_progress_called() {
     let progress_events: Arc<Mutex<Vec<SyncProgress>>> = Arc::new(Mutex::new(Vec::new()));
     let pe = progress_events.clone();
 
-    let on_progress: Arc<dyn Fn(&SyncProgress) + Send + Sync> = Arc::new(move |p: &SyncProgress| {
-        pe.lock().push(p.clone());
-    });
+    let on_progress: Arc<dyn Fn(&SyncProgress) + Send + Sync> =
+        Arc::new(move |p: &SyncProgress| {
+            pe.lock().push(p.clone());
+        });
 
     let manager = make_manager_with_opts(
         transport.clone(),
@@ -1380,8 +1409,7 @@ async fn pull_passes_delete_strategy_to_apply() {
         })
     });
 
-    let strategy_seen: Arc<Mutex<Option<DeleteConflictStrategyName>>> =
-        Arc::new(Mutex::new(None));
+    let strategy_seen: Arc<Mutex<Option<DeleteConflictStrategyName>>> = Arc::new(Mutex::new(None));
     let ss = strategy_seen.clone();
 
     adapter.on_apply(move |_, records, opts| {
@@ -1510,10 +1538,9 @@ async fn serializes_concurrent_sync_calls() {
     let d1 = def.clone();
     let d2 = def.clone();
 
-    let (r1, r2) = tokio::join!(
-        async move { m1.sync(&d1).await },
-        async move { m2.sync(&d2).await },
-    );
+    let (r1, r2) = tokio::join!(async move { m1.sync(&d1).await }, async move {
+        m2.sync(&d2).await
+    },);
 
     // Both completed (serialized via lock)
     assert!(r1.errors.is_empty());
@@ -1578,10 +1605,7 @@ async fn quarantines_after_consecutive_permanent_failures() {
     transport.on_pull(move |_, _| {
         pc.fetch_add(1, Ordering::SeqCst);
         Ok(PullResult {
-            records: vec![
-                make_remote_record("r1", 100),
-                make_remote_record("r2", 101),
-            ],
+            records: vec![make_remote_record("r1", 100), make_remote_record("r2", 101)],
             latest_sequence: Some(101),
             failures: Vec::new(),
         })
@@ -1957,9 +1981,7 @@ async fn apply_remote_records_does_not_advance_on_complete_failure() {
     let adapter = Arc::new(MockAdapter::new());
     let def = make_def("tasks");
 
-    adapter.on_apply(|_, _, _| {
-        Err(less_db::error::LessDbError::Internal("total crash".into()))
-    });
+    adapter.on_apply(|_, _, _| Err(less_db::error::LessDbError::Internal("total crash".into())));
 
     let manager = make_manager(transport.clone(), adapter.clone());
 
@@ -1993,10 +2015,9 @@ async fn apply_remote_records_serializes_with_sync() {
 
     let records = vec![make_remote_record("r1", 100)];
 
-    let (_r1, _r2) = tokio::join!(
-        async move { m1.sync(&d1).await },
-        async move { m2.apply_remote_records(&d2, &records, 100).await },
-    );
+    let (_r1, _r2) = tokio::join!(async move { m1.sync(&d1).await }, async move {
+        m2.apply_remote_records(&d2, &records, 100).await
+    },);
 
     // Both complete without panics
 }
@@ -2061,10 +2082,7 @@ async fn pull_reports_merged_count() {
 
     transport.on_pull(|_, _| {
         Ok(PullResult {
-            records: vec![
-                make_remote_record("r1", 100),
-                make_remote_record("r2", 101),
-            ],
+            records: vec![make_remote_record("r1", 100), make_remote_record("r2", 101)],
             latest_sequence: Some(101),
             failures: Vec::new(),
         })
@@ -2142,11 +2160,12 @@ async fn push_reports_progress_across_batches() {
     let progress_events: Arc<Mutex<Vec<(usize, usize)>>> = Arc::new(Mutex::new(Vec::new()));
     let pe = progress_events.clone();
 
-    let on_progress: Arc<dyn Fn(&SyncProgress) + Send + Sync> = Arc::new(move |p: &SyncProgress| {
-        if p.phase == SyncPhase::Push {
-            pe.lock().push((p.processed, p.total));
-        }
-    });
+    let on_progress: Arc<dyn Fn(&SyncProgress) + Send + Sync> =
+        Arc::new(move |p: &SyncProgress| {
+            if p.phase == SyncPhase::Push {
+                pe.lock().push((p.processed, p.total));
+            }
+        });
 
     let manager = make_manager_with_opts(
         transport.clone(),

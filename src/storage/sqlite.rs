@@ -158,7 +158,7 @@ impl SqliteBackend {
     {
         let guard = self.conn.lock();
         let conn = guard.borrow();
-        f(&*conn).map_err(storage_err)
+        f(&conn).map_err(storage_err)
     }
 
     /// Create SQL indexes for all indexes in a collection definition.
@@ -208,9 +208,8 @@ impl SqliteBackend {
         let meta_str: Option<String> = row.get(10)?;
         let computed_str: Option<String> = row.get(11)?;
 
-        let data: Value = serde_json::from_str(&data_str).map_err(|e| {
-            rusqlite::Error::InvalidParameterName(format!("data: {e}"))
-        })?;
+        let data: Value = serde_json::from_str(&data_str)
+            .map_err(|e| rusqlite::Error::InvalidParameterName(format!("data: {e}")))?;
 
         let meta: Option<Value> = meta_str
             .map(|s| {
@@ -251,13 +250,13 @@ impl SqliteBackend {
         let meta_str = record
             .meta
             .as_ref()
-            .map(|m| serde_json::to_string(m))
+            .map(serde_json::to_string)
             .transpose()
             .map_err(|e| LessDbError::Internal(format!("serialize meta: {e}")))?;
         let computed_str = record
             .computed
             .as_ref()
-            .map(|c| serde_json::to_string(c))
+            .map(serde_json::to_string)
             .transpose()
             .map_err(|e| LessDbError::Internal(format!("serialize computed: {e}")))?;
         Ok((data_str, meta_str, computed_str))
@@ -303,15 +302,12 @@ impl SqliteBackend {
         scan: &IndexScan,
         index_provides_sort: bool,
     ) -> Option<(String, Vec<rusqlite::types::Value>)> {
-        let mut conditions: Vec<String> = vec![
-            "collection = ?".to_string(),
-            "deleted = 0".to_string(),
-        ];
+        let mut conditions: Vec<String> =
+            vec!["collection = ?".to_string(), "deleted = 0".to_string()];
         let mut params: Vec<rusqlite::types::Value> =
             vec![rusqlite::types::Value::Text(collection.to_string())];
 
-        const SELECT_COLS: &str =
-            "SELECT id, collection, version, data, crdt, pending_patches, \
+        const SELECT_COLS: &str = "SELECT id, collection, version, data, crdt, pending_patches, \
              sequence, dirty, deleted, deleted_at, meta, computed FROM records";
 
         match &scan.index {
@@ -322,16 +318,11 @@ impl SqliteBackend {
                         let field = fi.fields.get(i)?.field.as_str();
                         match val {
                             IndexableValue::Null => {
-                                conditions.push(format!(
-                                    "json_extract(data, '$.{}') IS NULL",
-                                    field
-                                ));
+                                conditions
+                                    .push(format!("json_extract(data, '$.{}') IS NULL", field));
                             }
                             _ => {
-                                conditions.push(format!(
-                                    "json_extract(data, '$.{}') = ?",
-                                    field
-                                ));
+                                conditions.push(format!("json_extract(data, '$.{}') = ?", field));
                                 params.push(indexable_to_sql(val));
                             }
                         }
@@ -343,18 +334,14 @@ impl SqliteBackend {
                 if let Some(range_field) = fi.fields.get(range_idx).map(|f| f.field.as_str()) {
                     if let Some(lower) = &scan.range_lower {
                         let op = if lower.inclusive { ">=" } else { ">" };
-                        conditions.push(format!(
-                            "json_extract(data, '$.{}') {} ?",
-                            range_field, op
-                        ));
+                        conditions
+                            .push(format!("json_extract(data, '$.{}') {} ?", range_field, op));
                         params.push(indexable_to_sql(&lower.value));
                     }
                     if let Some(upper) = &scan.range_upper {
                         let op = if upper.inclusive { "<=" } else { "<" };
-                        conditions.push(format!(
-                            "json_extract(data, '$.{}') {} ?",
-                            range_field, op
-                        ));
+                        conditions
+                            .push(format!("json_extract(data, '$.{}') {} ?", range_field, op));
                         params.push(indexable_to_sql(&upper.value));
                     }
                 }
@@ -364,7 +351,8 @@ impl SqliteBackend {
                     if !in_vals.is_empty() {
                         let in_idx = scan.equality_values.as_ref().map_or(0, |v| v.len());
                         let in_field = fi.fields.get(in_idx).map(|f| f.field.as_str())?;
-                        let placeholders = in_vals.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+                        let placeholders =
+                            in_vals.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
                         conditions.push(format!(
                             "json_extract(data, '$.{}') IN ({})",
                             in_field, placeholders
@@ -375,8 +363,7 @@ impl SqliteBackend {
                     }
                 }
 
-                let mut sql =
-                    format!("{} WHERE {}", SELECT_COLS, conditions.join(" AND "));
+                let mut sql = format!("{} WHERE {}", SELECT_COLS, conditions.join(" AND "));
 
                 if index_provides_sort {
                     use crate::index::types::IndexSortOrder;
@@ -427,7 +414,8 @@ impl SqliteBackend {
 
                 if let Some(in_vals) = &scan.in_values {
                     if !in_vals.is_empty() {
-                        let placeholders = in_vals.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+                        let placeholders =
+                            in_vals.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
                         conditions.push(format!("{} IN ({})", computed_path, placeholders));
                         for v in in_vals {
                             params.push(indexable_to_sql(v));
@@ -435,8 +423,7 @@ impl SqliteBackend {
                     }
                 }
 
-                let sql =
-                    format!("{} WHERE {}", SELECT_COLS, conditions.join(" AND "));
+                let sql = format!("{} WHERE {}", SELECT_COLS, conditions.join(" AND "));
 
                 Some((sql, params))
             }
@@ -587,13 +574,13 @@ impl StorageBackend for SqliteBackend {
             let meta_str = record
                 .meta
                 .as_ref()
-                .map(|m| serde_json::to_string(m))
+                .map(serde_json::to_string)
                 .transpose()
                 .map_err(|e| LessDbError::Internal(format!("serialize meta: {e}")))?;
             let computed_str = record
                 .computed
                 .as_ref()
-                .map(|c| serde_json::to_string(c))
+                .map(serde_json::to_string)
                 .transpose()
                 .map_err(|e| LessDbError::Internal(format!("serialize computed: {e}")))?;
 
@@ -645,7 +632,6 @@ impl StorageBackend for SqliteBackend {
                      AND deleted_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?2)",
                     params![collection, format!("-{secs} seconds")],
                 )
-                .map(|n| n as usize)
             })
         } else {
             self.with_conn(|conn| {
@@ -653,7 +639,6 @@ impl StorageBackend for SqliteBackend {
                     "DELETE FROM records WHERE collection = ?1 AND deleted = 1",
                     params![collection],
                 )
-                .map(|n| n as usize)
             })
         }
     }
@@ -738,11 +723,7 @@ impl StorageBackend for SqliteBackend {
         }
     }
 
-    fn scan_index_raw(
-        &self,
-        collection: &str,
-        scan: &IndexScan,
-    ) -> Result<Option<RawBatchResult>> {
+    fn scan_index_raw(&self, collection: &str, scan: &IndexScan) -> Result<Option<RawBatchResult>> {
         let index_provides_sort = matches!(
             scan.scan_type,
             IndexScanType::Full | IndexScanType::Prefix | IndexScanType::Range
@@ -768,11 +749,9 @@ impl StorageBackend for SqliteBackend {
         let guard = self.conn.lock();
         let conn = guard.borrow();
         let count: i64 = conn
-            .query_row(
-                &count_sql,
-                rusqlite::params_from_iter(params),
-                |row| row.get(0),
-            )
+            .query_row(&count_sql, rusqlite::params_from_iter(params), |row| {
+                row.get(0)
+            })
             .map_err(storage_err)?;
 
         Ok(Some(count as usize))
@@ -788,10 +767,8 @@ impl StorageBackend for SqliteBackend {
     ) -> Result<()> {
         match index {
             IndexDefinition::Field(fi) => {
-                let mut conditions: Vec<String> = vec![
-                    "collection = ?".to_string(),
-                    "deleted = 0".to_string(),
-                ];
+                let mut conditions: Vec<String> =
+                    vec!["collection = ?".to_string(), "deleted = 0".to_string()];
                 let mut params: Vec<rusqlite::types::Value> =
                     vec![rusqlite::types::Value::Text(collection.to_string())];
 
@@ -805,16 +782,11 @@ impl StorageBackend for SqliteBackend {
                                 // Null/missing values are not indexed — no conflict.
                                 return Ok(());
                             }
-                            conditions.push(format!(
-                                "json_extract(data, '$.{}') IS NULL",
-                                field.field
-                            ));
+                            conditions
+                                .push(format!("json_extract(data, '$.{}') IS NULL", field.field));
                         }
                         Some(v) => {
-                            conditions.push(format!(
-                                "json_extract(data, '$.{}') = ?",
-                                field.field
-                            ));
+                            conditions.push(format!("json_extract(data, '$.{}') = ?", field.field));
                             params.push(json_value_to_sql(v));
                         }
                     }
@@ -835,10 +807,9 @@ impl StorageBackend for SqliteBackend {
                 let existing_id: Option<String> = conn
                     .prepare_cached(&sql)
                     .map_err(storage_err)?
-                    .query_row(
-                        rusqlite::params_from_iter(params),
-                        |row| row.get::<_, String>(0),
-                    )
+                    .query_row(rusqlite::params_from_iter(params), |row| {
+                        row.get::<_, String>(0)
+                    })
                     .optional()
                     .map_err(storage_err)?;
 
@@ -883,10 +854,8 @@ impl StorageBackend for SqliteBackend {
                 }
 
                 let computed_path = format!("json_extract(computed, '$.{}')", ci.name);
-                let mut conditions: Vec<String> = vec![
-                    "collection = ?".to_string(),
-                    "deleted = 0".to_string(),
-                ];
+                let mut conditions: Vec<String> =
+                    vec!["collection = ?".to_string(), "deleted = 0".to_string()];
                 let mut params: Vec<rusqlite::types::Value> =
                     vec![rusqlite::types::Value::Text(collection.to_string())];
 
@@ -915,10 +884,9 @@ impl StorageBackend for SqliteBackend {
                 let existing_id: Option<String> = conn
                     .prepare_cached(&sql)
                     .map_err(storage_err)?
-                    .query_row(
-                        rusqlite::params_from_iter(params),
-                        |row| row.get::<_, String>(0),
-                    )
+                    .query_row(rusqlite::params_from_iter(params), |row| {
+                        row.get::<_, String>(0)
+                    })
                     .optional()
                     .map_err(storage_err)?;
 

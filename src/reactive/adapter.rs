@@ -38,11 +38,7 @@ use crate::{
     },
 };
 
-use super::{
-    event::ChangeEvent,
-    event_emitter::EventEmitter,
-    query_fields::extract_query_fields,
-};
+use super::{event::ChangeEvent, event_emitter::EventEmitter, query_fields::extract_query_fields};
 
 // ============================================================================
 // Public result type for reactive queries
@@ -256,7 +252,10 @@ impl<B: StorageBackend> ReactiveAdapter<B> {
             });
 
             if st.initialized {
-                st.record_subs.entry(key.clone()).or_default().push(Arc::clone(&sub));
+                st.record_subs
+                    .entry(key.clone())
+                    .or_default()
+                    .push(Arc::clone(&sub));
                 let dirty = st.dirty_records.entry(key.clone()).or_default();
                 dirty.push(sub);
             } else {
@@ -498,7 +497,10 @@ impl<B: StorageBackend> StorageLifecycle for ReactiveAdapter<B> {
             let pending_records: Vec<(String, Arc<RecordSub>)> =
                 st.pending_record_subs.drain(..).collect();
             for (key, sub) in pending_records {
-                st.record_subs.entry(key.clone()).or_default().push(Arc::clone(&sub));
+                st.record_subs
+                    .entry(key.clone())
+                    .or_default()
+                    .push(Arc::clone(&sub));
                 let dirty = st.dirty_records.entry(key).or_default();
                 if !dirty.iter().any(|s| s.id == sub.id) {
                     dirty.push(sub);
@@ -573,7 +575,10 @@ impl<B: StorageBackend> StorageWrite for ReactiveAdapter<B> {
         let record = self.inner.lock().put(def, data, opts)?;
         let id = record.id.clone();
         let collection = def.name.clone();
-        self.emit_event(ChangeEvent::Put { collection: collection.clone(), id: id.clone() });
+        self.emit_event(ChangeEvent::Put {
+            collection: collection.clone(),
+            id: id.clone(),
+        });
         self.mark_dirty_record(&collection, &id);
         self.flush();
         Ok(record)
@@ -588,7 +593,10 @@ impl<B: StorageBackend> StorageWrite for ReactiveAdapter<B> {
         let record = self.inner.lock().patch(def, data, opts)?;
         let id = record.id.clone();
         let collection = def.name.clone();
-        self.emit_event(ChangeEvent::Put { collection: collection.clone(), id: id.clone() });
+        self.emit_event(ChangeEvent::Put {
+            collection: collection.clone(),
+            id: id.clone(),
+        });
         self.mark_dirty_record(&collection, &id);
         self.flush();
         Ok(record)
@@ -619,7 +627,10 @@ impl<B: StorageBackend> StorageWrite for ReactiveAdapter<B> {
         let ids: Vec<String> = result.records.iter().map(|r| r.id.clone()).collect();
         if !ids.is_empty() {
             let collection = def.name.clone();
-            self.emit_event(ChangeEvent::Bulk { collection: collection.clone(), ids: ids.clone() });
+            self.emit_event(ChangeEvent::Bulk {
+                collection: collection.clone(),
+                ids: ids.clone(),
+            });
             self.mark_dirty_collection(&collection, &ids);
             self.flush();
         }
@@ -656,7 +667,10 @@ impl<B: StorageBackend> StorageWrite for ReactiveAdapter<B> {
         let ids: Vec<String> = result.records.iter().map(|r| r.id.clone()).collect();
         if !ids.is_empty() {
             let collection = def.name.clone();
-            self.emit_event(ChangeEvent::Bulk { collection: collection.clone(), ids: ids.clone() });
+            self.emit_event(ChangeEvent::Bulk {
+                collection: collection.clone(),
+                ids: ids.clone(),
+            });
             self.mark_dirty_collection(&collection, &ids);
             self.flush();
         }
@@ -694,7 +708,10 @@ impl<B: StorageBackend> StorageWrite for ReactiveAdapter<B> {
         let ids: Vec<String> = result.records.iter().map(|r| r.id.clone()).collect();
         if !ids.is_empty() {
             let collection = def.name.clone();
-            self.emit_event(ChangeEvent::Bulk { collection: collection.clone(), ids: ids.clone() });
+            self.emit_event(ChangeEvent::Bulk {
+                collection: collection.clone(),
+                ids: ids.clone(),
+            });
             self.mark_dirty_collection(&collection, &ids);
             self.flush();
         }
@@ -728,11 +745,7 @@ impl<B: StorageBackend> StorageSync for ReactiveAdapter<B> {
         opts: &ApplyRemoteOptions,
     ) -> Result<ApplyRemoteResult> {
         let result = self.inner.lock().apply_remote_changes(def, records, opts)?;
-        let ids: Vec<String> = result
-            .applied
-            .iter()
-            .map(|r| r.id.clone())
-            .collect();
+        let ids: Vec<String> = result.applied.iter().map(|r| r.id.clone()).collect();
         if !ids.is_empty() {
             let collection = def.name.clone();
             self.emit_event(ChangeEvent::Remote {

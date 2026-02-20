@@ -64,7 +64,10 @@ fn off_removes_listener_by_id() {
     emitter.off(id);
     emitter.emit(&99);
 
-    assert!(log.lock().unwrap().is_empty(), "listener should not fire after off()");
+    assert!(
+        log.lock().unwrap().is_empty(),
+        "listener should not fire after off()"
+    );
 }
 
 #[test]
@@ -165,13 +168,19 @@ fn listener_removed_during_emit_is_still_called_snapshot_semantics() {
     emitter.emit(&1);
 
     // Both should have fired (snapshot was taken before second called off).
-    assert!(*first_called.lock().unwrap(), "first listener should have been called");
+    assert!(
+        *first_called.lock().unwrap(),
+        "first listener should have been called"
+    );
     assert!(log.lock().unwrap().contains(&"second".to_string()));
 
     // But the first listener is now removed — second emit should only fire "second".
     *first_called.lock().unwrap() = false;
     emitter.emit(&2);
-    assert!(!*first_called.lock().unwrap(), "first listener should NOT fire after removal");
+    assert!(
+        !*first_called.lock().unwrap(),
+        "first listener should NOT fire after removal"
+    );
 }
 
 // ============================================================================
@@ -194,7 +203,10 @@ fn throwing_listener_propagates_and_prevents_subsequent_calls() {
         emitter.emit(&1);
     }));
 
-    assert!(result.is_err(), "emit should propagate panics from listeners");
+    assert!(
+        result.is_err(),
+        "emit should propagate panics from listeners"
+    );
     // The second listener should NOT have been called because the panic
     // interrupted iteration.
     assert!(

@@ -117,7 +117,7 @@ fn supports_three_version_chain() {
 fn panics_on_non_sequential_version_numbers() {
     collection("users")
         .v(1, schema(&[("name", t::string())]))
-        .v(3, schema(&[("name", t::string())]), |prev| Ok(prev));
+        .v(3, schema(&[("name", t::string())]), Ok);
 }
 
 #[test]
@@ -197,11 +197,7 @@ fn rejects_reserved_updated_at_field() {
 fn rejects_reserved_fields_in_later_versions() {
     collection("items")
         .v(1, schema(&[("name", t::string())]))
-        .v(
-            2,
-            schema(&[("id", t::string()), ("name", t::string())]),
-            |prev| Ok(prev),
-        );
+        .v(2, schema(&[("id", t::string()), ("name", t::string())]), Ok);
 }
 
 #[test]
@@ -394,7 +390,7 @@ fn get_version_schema_returns_schema_for_valid_version() {
         .v(
             2,
             schema(&[("first_name", t::string()), ("last_name", t::string())]),
-            |prev| Ok(prev),
+            Ok,
         )
         .build();
 

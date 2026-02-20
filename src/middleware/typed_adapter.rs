@@ -13,12 +13,10 @@ use crate::{
     error::{LessDbError, Result},
     query::types::Query,
     reactive::{ReactiveAdapter, Unsubscribe},
-    storage::traits::{
-        StorageBackend, StorageLifecycle, StorageRead, StorageWrite,
-    },
+    storage::traits::{StorageBackend, StorageLifecycle, StorageRead, StorageWrite},
     types::{
-        BulkDeleteResult, DeleteOptions, GetOptions, ListOptions,
-        PatchOptions, PutOptions, StoredRecordWithMeta,
+        BulkDeleteResult, DeleteOptions, GetOptions, ListOptions, PatchOptions, PutOptions,
+        StoredRecordWithMeta,
     },
 };
 
@@ -110,7 +108,7 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
         PutOptions {
             id: base.and_then(|b| b.id.clone()),
             session_id: base.and_then(|b| b.session_id),
-            skip_unique_check: base.map_or(false, |b| b.skip_unique_check),
+            skip_unique_check: base.is_some_and(|b| b.skip_unique_check),
             meta,
             should_reset_sync_state: Some(Arc::new(move |old, new| {
                 mw.should_reset_sync_state(old, new)
@@ -130,7 +128,7 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
         PatchOptions {
             id: id.to_string(),
             session_id: base.and_then(|b| b.session_id),
-            skip_unique_check: base.map_or(false, |b| b.skip_unique_check),
+            skip_unique_check: base.is_some_and(|b| b.skip_unique_check),
             meta,
             should_reset_sync_state: Some(Arc::new(move |old, new| {
                 mw.should_reset_sync_state(old, new)
@@ -188,7 +186,11 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
         let default_opts = ListOptions::default();
         let opts = opts.unwrap_or(&default_opts);
         let result = self.inner.get_all(def, opts)?;
-        let records: Vec<Value> = result.records.iter().map(|r| self.enrich_stored(r)).collect();
+        let records: Vec<Value> = result
+            .records
+            .iter()
+            .map(|r| self.enrich_stored(r))
+            .collect();
         Ok(MiddlewareBatchResult {
             records,
             errors: record_errors_to_values(&result.errors),
@@ -226,11 +228,15 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
             })
         } else {
             // No meta filter — enrich each record using meta from query result
-            let enriched: Vec<Value> = result.records.iter().map(|sr| {
-                let empty = Value::Object(Default::default());
-                let meta = sr.meta.as_ref().unwrap_or(&empty);
-                self.enrich_data(sr.data.clone(), meta)
-            }).collect();
+            let enriched: Vec<Value> = result
+                .records
+                .iter()
+                .map(|sr| {
+                    let empty = Value::Object(Default::default());
+                    let meta = sr.meta.as_ref().unwrap_or(&empty);
+                    self.enrich_data(sr.data.clone(), meta)
+                })
+                .collect();
             let total = result.total.unwrap_or(0);
             Ok(MiddlewareQueryResult {
                 records: enriched,
@@ -289,9 +295,7 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
             .and_then(|obj| obj.get("id"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                patch_opts.map_or_else(String::new, |o| o.id.clone())
-            });
+            .unwrap_or_else(|| patch_opts.map_or_else(String::new, |o| o.id.clone()));
 
         let opts = self.resolve_patch_options(&id, write_opts, patch_opts);
         let record = self.inner.patch(def, data, &opts)?;
@@ -322,7 +326,11 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
     ) -> Result<MiddlewareBatchResult> {
         let opts = self.resolve_put_options(write_opts, put_opts);
         let result = self.inner.bulk_put(def, records, &opts)?;
-        let enriched: Vec<Value> = result.records.iter().map(|r| self.enrich_stored(r)).collect();
+        let enriched: Vec<Value> = result
+            .records
+            .iter()
+            .map(|r| self.enrich_stored(r))
+            .collect();
         Ok(MiddlewareBatchResult {
             records: enriched,
             errors: record_errors_to_values(&result.errors),
@@ -351,7 +359,11 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
     ) -> Result<MiddlewareBatchResult> {
         let opts = self.resolve_patch_options("", write_opts, patch_opts);
         let result = self.inner.bulk_patch(def, patches, &opts)?;
-        let enriched: Vec<Value> = result.records.iter().map(|r| self.enrich_stored(r)).collect();
+        let enriched: Vec<Value> = result
+            .records
+            .iter()
+            .map(|r| self.enrich_stored(r))
+            .collect();
         Ok(MiddlewareBatchResult {
             records: enriched,
             errors: record_errors_to_values(&result.errors),
@@ -381,7 +393,11 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
     ) -> Result<MiddlewarePatchManyResult> {
         let opts = self.resolve_patch_options("", write_opts, patch_opts);
         let result = self.inner.patch_many(def, filter, patch, &opts)?;
-        let enriched: Vec<Value> = result.records.iter().map(|r| self.enrich_stored(r)).collect();
+        let enriched: Vec<Value> = result
+            .records
+            .iter()
+            .map(|r| self.enrich_stored(r))
+            .collect();
         Ok(MiddlewarePatchManyResult {
             records: enriched,
             errors: record_errors_to_values(&result.errors),
@@ -466,18 +482,17 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
 
                     let mut enriched_records = Vec::new();
                     for sr in &result.records {
-                        match inner_clone.get(&def_clone, &sr.id, &GetOptions::default()) {
-                            Ok(Some(stored)) => {
-                                if let Some(ref filter) = meta_filter {
-                                    if !filter(stored.meta.as_ref()) {
-                                        continue;
-                                    }
+                        if let Ok(Some(stored)) =
+                            inner_clone.get(&def_clone, &sr.id, &GetOptions::default())
+                        {
+                            if let Some(ref filter) = meta_filter {
+                                if !filter(stored.meta.as_ref()) {
+                                    continue;
                                 }
-                                let empty = Value::Object(Default::default());
-                                let meta = stored.meta.as_ref().unwrap_or(&empty);
-                                enriched_records.push(mw.on_read(stored.data, meta));
                             }
-                            _ => {}
+                            let empty = Value::Object(Default::default());
+                            let meta = stored.meta.as_ref().unwrap_or(&empty);
+                            enriched_records.push(mw.on_read(stored.data, meta));
                         }
                     }
 

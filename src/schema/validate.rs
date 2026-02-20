@@ -104,7 +104,7 @@ fn is_valid_iso_date(s: &str) -> bool {
 
 /// Validate base64: length divisible by 4, valid character set.
 fn is_valid_base64(s: &str) -> bool {
-    if s.len() % 4 != 0 {
+    if !s.len().is_multiple_of(4) {
         return false;
     }
     STANDARD.decode(s).is_ok()

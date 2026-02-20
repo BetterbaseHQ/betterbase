@@ -446,9 +446,7 @@ fn score_field_index(
     };
 
     let direction = sort_to_index_order(sort.and_then(|s| s.first()));
-    let (range_lower, range_upper) = range_bounds
-        .map(|(lo, hi)| (lo, hi))
-        .unwrap_or((None, None));
+    let (range_lower, range_upper) = range_bounds.unwrap_or((None, None));
 
     let scan = IndexScan {
         scan_type,

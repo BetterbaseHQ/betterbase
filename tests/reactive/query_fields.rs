@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use less_db::{
-    query::types::{Query, SortEntry, SortDirection, SortInput},
+    query::types::{Query, SortDirection, SortEntry, SortInput},
     reactive::extract_query_fields,
 };
 use serde_json::json;
@@ -140,8 +140,14 @@ fn extracts_sort_fields_string_shorthand() {
 fn extracts_sort_fields_sort_entry_array() {
     let q = Query {
         sort: Some(SortInput::Entries(vec![
-            SortEntry { field: "createdAt".to_string(), direction: SortDirection::Desc },
-            SortEntry { field: "name".to_string(), direction: SortDirection::Asc },
+            SortEntry {
+                field: "createdAt".to_string(),
+                direction: SortDirection::Desc,
+            },
+            SortEntry {
+                field: "name".to_string(),
+                direction: SortDirection::Asc,
+            },
         ])),
         ..Default::default()
     };
@@ -185,7 +191,10 @@ fn flags_computed_filters_and_always_invalidates() {
         filter: Some(json!({ "$computed": { "emailLower": "alice@example.com" } })),
         ..Default::default()
     };
-    assert!(has_computed(&q), "has_computed should be true when $computed key present");
+    assert!(
+        has_computed(&q),
+        "has_computed should be true when $computed key present"
+    );
 }
 
 #[test]

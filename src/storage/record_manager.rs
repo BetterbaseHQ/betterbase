@@ -24,7 +24,10 @@ use crate::{
         node::{is_immutable_field, SchemaNode},
         validate::validate,
     },
-    types::{DeleteConflictStrategy, DeleteOptions, DeleteResolution, PatchOptions, PutOptions, PushSnapshot, RemoteRecord, SerializedRecord},
+    types::{
+        DeleteConflictStrategy, DeleteOptions, DeleteResolution, PatchOptions, PushSnapshot,
+        PutOptions, RemoteRecord, SerializedRecord,
+    },
 };
 
 // ============================================================================
@@ -72,7 +75,9 @@ pub struct MergeRecordsResult {
 /// Generate the current UTC time as a Z-format ISO 8601 string.
 /// The format matches the schema validator's regex: .
 fn utc_now_z() -> String {
-    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string()
+    chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.6fZ")
+        .to_string()
 }
 
 // ============================================================================
@@ -80,7 +85,10 @@ fn utc_now_z() -> String {
 // ============================================================================
 
 /// Find the Key field's value in data. Returns None if not found or empty.
-pub fn try_extract_id(schema: &std::collections::BTreeMap<String, SchemaNode>, data: &Value) -> Option<String> {
+pub fn try_extract_id(
+    schema: &std::collections::BTreeMap<String, SchemaNode>,
+    data: &Value,
+) -> Option<String> {
     let obj = data.as_object()?;
 
     // Walk schema looking for a Key field
@@ -193,7 +201,7 @@ fn merge_meta(existing: &Option<Value>, new: &Option<Value>) -> Option<Value> {
         (_, None) => existing.clone(),
         (None, Some(n)) => {
             // Only store non-empty objects
-            if n.as_object().map_or(true, |o| o.is_empty()) {
+            if n.as_object().is_none_or(|o| o.is_empty()) {
                 None
             } else {
                 Some(n.clone())
@@ -235,7 +243,10 @@ pub fn prepare_update(
     session_id: u64,
     opts: &PatchOptions,
 ) -> Result<PrepareUpdateResult> {
-    debug_assert!(!existing.deleted, "prepare_update called on a tombstone record");
+    debug_assert!(
+        !existing.deleted,
+        "prepare_update called on a tombstone record"
+    );
 
     // Merge meta from options onto existing meta
     let merged_meta = merge_meta(&existing.meta, &opts.meta);
@@ -271,7 +282,10 @@ pub fn prepare_update(
 
         // Apply should_reset_sync_state if provided
         if let Some(ref should_reset) = opts.should_reset_sync_state {
-            if should_reset(existing.meta.as_ref(), merged_meta.as_ref().unwrap_or(&Value::Null)) {
+            if should_reset(
+                existing.meta.as_ref(),
+                merged_meta.as_ref().unwrap_or(&Value::Null),
+            ) {
                 record.sequence = 0;
                 record.pending_patches = EMPTY_PATCH_LOG.to_vec();
             }
@@ -324,7 +338,10 @@ pub fn prepare_update(
     // Apply should_reset_sync_state if provided and meta changed
     if meta_changed {
         if let Some(ref should_reset) = opts.should_reset_sync_state {
-            if should_reset(existing.meta.as_ref(), merged_meta.as_ref().unwrap_or(&Value::Null)) {
+            if should_reset(
+                existing.meta.as_ref(),
+                merged_meta.as_ref().unwrap_or(&Value::Null),
+            ) {
                 sequence = 0;
                 final_pending = EMPTY_PATCH_LOG.to_vec();
             }
@@ -368,11 +385,7 @@ pub fn prepare_patch(
     session_id: u64,
     opts: &PatchOptions,
 ) -> Result<PrepareUpdateResult> {
-    let existing_obj = existing
-        .data
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
+    let existing_obj = existing.data.as_object().cloned().unwrap_or_default();
 
     let mut merged = serde_json::Map::new();
 
@@ -495,19 +508,17 @@ pub fn migrate_and_deserialize(
     // Migration needed: run the chain
     let original_version = raw.version;
 
-    let migration_result = crate::collection::migrate::migrate(
-        def,
-        raw.data.clone(),
-        raw.version,
-        Some(&raw.id),
-    )?;
+    let migration_result =
+        crate::collection::migrate::migrate(def, raw.data.clone(), raw.version, Some(&raw.id))?;
 
     let migrated_data = migration_result.data;
 
     // Apply migration as a diff to the CRDT to preserve causal history
     let crdt_binary = match crdt::model_from_binary(&raw.crdt) {
         Ok(mut old_model) => {
-            if let Some(patch) = diff_model_with_schema(&old_model, &migrated_data, &def.current_schema) {
+            if let Some(patch) =
+                diff_model_with_schema(&old_model, &migrated_data, &def.current_schema)
+            {
                 crdt::apply_patch(&mut old_model, &patch);
             }
             crdt::model_to_binary(&old_model)
@@ -515,7 +526,8 @@ pub fn migrate_and_deserialize(
         Err(_) => {
             // CRDT is corrupt — rebuild from migrated data
             let session_id = crdt::generate_session_id();
-            let new_model = create_model_with_schema(&migrated_data, session_id, &def.current_schema)?;
+            let new_model =
+                create_model_with_schema(&migrated_data, session_id, &def.current_schema)?;
             crdt::model_to_binary(&new_model)
         }
     };
@@ -557,12 +569,18 @@ pub fn compute_index_values(data: &Value, indexes: &[IndexDefinition]) -> Option
                 let data_obj = data.as_object();
                 if fi.fields.len() == 1 {
                     let field = &fi.fields[0].field;
-                    let val = data_obj.and_then(|o| o.get(field)).cloned().unwrap_or(Value::Null);
+                    let val = data_obj
+                        .and_then(|o| o.get(field))
+                        .cloned()
+                        .unwrap_or(Value::Null);
                     computed.insert(fi.name.clone(), normalize_index_value(&val));
                     has_values = true;
                 } else {
                     for f in &fi.fields {
-                        let val = data_obj.and_then(|o| o.get(&f.field)).cloned().unwrap_or(Value::Null);
+                        let val = data_obj
+                            .and_then(|o| o.get(&f.field))
+                            .cloned()
+                            .unwrap_or(Value::Null);
                         let key = format!("{}__{}", fi.name, f.field);
                         computed.insert(key, normalize_index_value(&val));
                     }
@@ -585,11 +603,9 @@ fn normalize_index_value_from_indexable(val: Option<IndexableValue>) -> Value {
         None => Value::Null,
         Some(IndexableValue::Null) => Value::Null,
         Some(IndexableValue::String(s)) => Value::String(s),
-        Some(IndexableValue::Number(n)) => {
-            serde_json::Number::from_f64(n)
-                .map(Value::Number)
-                .unwrap_or(Value::Null)
-        }
+        Some(IndexableValue::Number(n)) => serde_json::Number::from_f64(n)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
         Some(IndexableValue::Bool(b)) => Value::Bool(b),
     }
 }
@@ -630,19 +646,27 @@ pub fn merge_records(
 ) -> Result<MergeRecordsResult> {
     // Cross-version merge: migrate remote before merging
     if needs_migration(def, remote_version) {
-        return merge_with_migrated_remote(def, local, remote_crdt, remote_sequence, remote_version);
+        return merge_with_migrated_remote(
+            def,
+            local,
+            remote_crdt,
+            remote_sequence,
+            remote_version,
+        );
     }
 
     let mut remote_model = crdt::model_from_binary(remote_crdt)?;
 
     // Snapshot remote view before applying local patches
-    let remote_only_view = deserialize_from_crdt(&def.current_schema, &crdt::view_model(&remote_model));
+    let remote_only_view =
+        deserialize_from_crdt(&def.current_schema, &crdt::view_model(&remote_model));
 
     // Replay local pending patches onto the remote model
     let local_patches = deserialize_patches(&local.pending_patches)?;
     crdt::merge_with_pending_patches(&mut remote_model, &local_patches);
 
-    let raw_merged_view = deserialize_from_crdt(&def.current_schema, &crdt::view_model(&remote_model));
+    let raw_merged_view =
+        deserialize_from_crdt(&def.current_schema, &crdt::view_model(&remote_model));
 
     // Validate the merged view
     let full_schema = SchemaNode::Object(def.current_schema.clone());
@@ -653,7 +677,8 @@ pub fn merge_records(
     let merged_crdt = crdt::model_to_binary(&remote_model);
 
     // Check if local still has changes beyond what the remote already contains
-    let had_local_changes = !local_patches.is_empty() && !views_equal(&raw_merged_view, &remote_only_view);
+    let had_local_changes =
+        !local_patches.is_empty() && !views_equal(&raw_merged_view, &remote_only_view);
 
     let record = SerializedRecord {
         id: local.id.clone(),
@@ -693,15 +718,20 @@ fn merge_with_migrated_remote(
     let remote_view = deserialize_from_crdt(&def.current_schema, &crdt::view_model(&remote_model));
 
     // Validate against the stored version schema before migration
-    let version_def = def.versions.iter().find(|v| v.version == remote_version)
-        .ok_or_else(|| LessDbError::Migration(MigrationError {
-            collection: def.name.clone(),
-            record_id: local.id.clone(),
-            from_version: remote_version,
-            to_version: def.current_version,
-            failed_at: remote_version,
-            source: format!("Unknown version {remote_version}").into(),
-        }))?;
+    let version_def = def
+        .versions
+        .iter()
+        .find(|v| v.version == remote_version)
+        .ok_or_else(|| {
+            LessDbError::Migration(MigrationError {
+                collection: def.name.clone(),
+                record_id: local.id.clone(),
+                from_version: remote_version,
+                to_version: def.current_version,
+                failed_at: remote_version,
+                source: format!("Unknown version {remote_version}").into(),
+            })
+        })?;
 
     let version_schema = SchemaNode::Object({
         let mut s = version_def.schema.clone();
@@ -723,7 +753,8 @@ fn merge_with_migrated_remote(
 
     // Step 2: Apply migration as a diff to preserve CRDT clock vectors
     let migrated_data = migration_result.data;
-    let migration_patch = diff_model_with_schema(&remote_model, &migrated_data, &def.current_schema);
+    let migration_patch =
+        diff_model_with_schema(&remote_model, &migrated_data, &def.current_schema);
     if let Some(p) = migration_patch {
         crdt::apply_patch(&mut remote_model, &p);
     }
@@ -742,7 +773,7 @@ fn merge_with_migrated_remote(
     let computed = compute_index_values(&merged_view, &def.indexes);
 
     let pending_patches = if let Some(ref p) = local_edit_patch {
-        serialize_patches(&[p.clone()])
+        serialize_patches(std::slice::from_ref(p))
     } else {
         EMPTY_PATCH_LOG.to_vec()
     };
@@ -777,10 +808,7 @@ pub fn prepare_remote_insert(
     _received_at: Option<&str>,
 ) -> Result<PrepareNewResult> {
     let crdt_bytes = remote.crdt.as_ref().ok_or_else(|| {
-        LessDbError::Internal(format!(
-            "Remote record {} missing CRDT binary",
-            remote.id
-        ))
+        LessDbError::Internal(format!("Remote record {} missing CRDT binary", remote.id))
     })?;
 
     // Reject future versions
@@ -806,11 +834,16 @@ pub fn prepare_remote_insert(
 
     if needs_migration(def, remote.version) {
         // Migrate older version
-        let version_def = def.versions.iter().find(|v| v.version == remote.version)
-            .ok_or_else(|| LessDbError::Internal(format!(
-                "Unknown version {} for remote record {}",
-                remote.version, remote.id
-            )))?;
+        let version_def = def
+            .versions
+            .iter()
+            .find(|v| v.version == remote.version)
+            .ok_or_else(|| {
+                LessDbError::Internal(format!(
+                    "Unknown version {} for remote record {}",
+                    remote.version, remote.id
+                ))
+            })?;
 
         let version_schema = SchemaNode::Object({
             let mut s = version_def.schema.clone();
@@ -876,9 +909,7 @@ pub fn prepare_remote_tombstone(
     meta: Option<Value>,
     version: u32,
 ) -> SerializedRecord {
-    let deleted_at = received_at
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| utc_now_z());
+    let deleted_at = received_at.map(|s| s.to_string()).unwrap_or_else(utc_now_z);
 
     SerializedRecord {
         id: remote_id.to_string(),
@@ -964,9 +995,7 @@ fn check_immutable_fields(
         let existing_val = existing_obj
             .and_then(|o| o.get(field))
             .unwrap_or(&Value::Null);
-        let new_val = new_obj
-            .and_then(|o| o.get(field))
-            .unwrap_or(&Value::Null);
+        let new_val = new_obj.and_then(|o| o.get(field)).unwrap_or(&Value::Null);
 
         if existing_val != new_val {
             return Err(LessDbError::Storage(StorageError::ImmutableField {

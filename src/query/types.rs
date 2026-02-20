@@ -86,10 +86,7 @@ pub struct QueryResult {
 ///
 /// Returns the original filter unchanged if no computed keys are found.
 pub fn normalize_computed_filter(filter: Option<Value>, computed_names: &[&str]) -> Option<Value> {
-    let filter = match filter {
-        None => return None,
-        Some(f) => f,
-    };
+    let filter = filter?;
 
     if computed_names.is_empty() {
         return Some(filter);

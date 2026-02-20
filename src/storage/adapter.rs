@@ -20,8 +20,8 @@ use crate::{
     },
     storage::{
         record_manager::{
-            migrate_and_deserialize, prepare_delete, prepare_mark_synced,
-            prepare_new, prepare_patch, prepare_update,
+            migrate_and_deserialize, prepare_delete, prepare_mark_synced, prepare_new,
+            prepare_patch, prepare_update,
         },
         remote_changes::{apply_remote_decisions, process_remote_record, RemoteDecision},
         traits::{StorageBackend, StorageLifecycle, StorageRead, StorageSync, StorageWrite},
@@ -29,8 +29,8 @@ use crate::{
     types::{
         ApplyRemoteOptions, ApplyRemoteResult, BatchResult, BulkDeleteResult, BulkPatchResult,
         DeleteConflictStrategy, DeleteConflictStrategyName, DeleteOptions, GetOptions, ListOptions,
-        PatchManyResult, PatchOptions, PushSnapshot, PutOptions, QueryResult,
-        RecordError, RemoteRecord, ScanOptions, SerializedRecord, StoredRecordWithMeta,
+        PatchManyResult, PatchOptions, PushSnapshot, PutOptions, QueryResult, RecordError,
+        RemoteRecord, ScanOptions, SerializedRecord, StoredRecordWithMeta,
     },
 };
 
@@ -73,9 +73,9 @@ impl<B: StorageBackend> Adapter<B> {
 
         // Try loading from meta store
         if let Some(stored) = self.backend.get_meta("session_id")? {
-            let sid: u64 = stored.parse().map_err(|_| {
-                LessDbError::Internal("Invalid session_id stored in meta".into())
-            })?;
+            let sid: u64 = stored
+                .parse()
+                .map_err(|_| LessDbError::Internal("Invalid session_id stored in meta".into()))?;
             *guard = Some(sid);
             return Ok(sid);
         }
@@ -236,20 +236,17 @@ impl<B: StorageBackend> Adapter<B> {
         query: &Query,
     ) -> Result<(Vec<SerializedRecord>, Vec<Value>, usize)> {
         let sort_entries = normalize_sort(query.sort.clone());
-        let plan = plan_query(
-            query.filter.as_ref(),
-            sort_entries.as_deref(),
-            &def.indexes,
-        );
+        let plan = plan_query(query.filter.as_ref(), sort_entries.as_deref(), &def.indexes);
 
         // Fetch raw records — try index scan first, fall back to full scan
         let raw_records = if let Some(ref scan) = plan.scan {
             match self.backend.scan_index_raw(&def.name, scan)? {
                 Some(result) => result.records,
-                None => self
-                    .backend
-                    .scan_raw(&def.name, &ScanOptions::default())?
-                    .records,
+                None => {
+                    self.backend
+                        .scan_raw(&def.name, &ScanOptions::default())?
+                        .records
+                }
             }
         } else {
             self.backend
@@ -302,15 +299,11 @@ impl<B: StorageBackend> Adapter<B> {
         // Apply filter to data values
         let (filtered_data, filtered_records): (Vec<Value>, Vec<SerializedRecord>) = {
             // Build a filter to apply
-            let needs_filter = plan.post_filter.is_some()
-                || (plan.scan.is_none() && query.filter.is_some());
+            let needs_filter =
+                plan.post_filter.is_some() || (plan.scan.is_none() && query.filter.is_some());
 
             if needs_filter {
-                let filter = plan
-                    .post_filter
-                    .as_ref()
-                    .or(query.filter.as_ref())
-                    .unwrap();
+                let filter = plan.post_filter.as_ref().or(query.filter.as_ref()).unwrap();
 
                 let filtered = filter_records(&data_records, filter)?;
                 // Keep only the records whose data survived the filter
@@ -365,8 +358,10 @@ impl<B: StorageBackend> Adapter<B> {
             &indices[0..0]
         };
 
-        let paginated_records: Vec<SerializedRecord> =
-            page_indices.iter().map(|&i| filtered_records[i].clone()).collect();
+        let paginated_records: Vec<SerializedRecord> = page_indices
+            .iter()
+            .map(|&i| filtered_records[i].clone())
+            .collect();
 
         Ok((paginated_records, errors, total))
     }
@@ -509,11 +504,7 @@ impl<B: StorageBackend> StorageRead for Adapter<B> {
 
     fn explain_query(&self, def: &CollectionDef, query: &Query) -> QueryPlan {
         let sort_entries = normalize_sort(query.sort.clone());
-        plan_query(
-            query.filter.as_ref(),
-            sort_entries.as_deref(),
-            &def.indexes,
-        )
+        plan_query(query.filter.as_ref(), sort_entries.as_deref(), &def.indexes)
     }
 }
 
@@ -634,15 +625,12 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
     ) -> Result<StoredRecordWithMeta> {
         self.check_initialized()?;
 
-        let existing = self
-            .backend
-            .get_raw(&def.name, &opts.id)?
-            .ok_or_else(|| {
-                LessDbError::Storage(StorageError::NotFound {
-                    collection: def.name.clone(),
-                    id: opts.id.clone(),
-                })
-            })?;
+        let existing = self.backend.get_raw(&def.name, &opts.id)?.ok_or_else(|| {
+            LessDbError::Storage(StorageError::NotFound {
+                collection: def.name.clone(),
+                id: opts.id.clone(),
+            })
+        })?;
 
         if existing.deleted {
             return Err(LessDbError::Storage(StorageError::Deleted {
@@ -751,7 +739,10 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
             }
         }
 
-        Ok(BulkDeleteResult { deleted_ids, errors })
+        Ok(BulkDeleteResult {
+            deleted_ids,
+            errors,
+        })
     }
 
     fn bulk_patch(
@@ -837,7 +828,10 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
             }
         }
 
-        Ok(BulkDeleteResult { deleted_ids, errors })
+        Ok(BulkDeleteResult {
+            deleted_ids,
+            errors,
+        })
     }
 
     fn patch_many(
@@ -924,15 +918,12 @@ impl<B: StorageBackend> StorageSync for Adapter<B> {
     ) -> Result<()> {
         self.check_initialized()?;
 
-        let existing = self
-            .backend
-            .get_raw(&def.name, id)?
-            .ok_or_else(|| {
-                LessDbError::Storage(StorageError::NotFound {
-                    collection: def.name.clone(),
-                    id: id.to_string(),
-                })
-            })?;
+        let existing = self.backend.get_raw(&def.name, id)?.ok_or_else(|| {
+            LessDbError::Storage(StorageError::NotFound {
+                collection: def.name.clone(),
+                id: id.to_string(),
+            })
+        })?;
 
         let updated = prepare_mark_synced(&existing, sequence, snapshot);
         self.backend.put_raw(&updated)?;
@@ -974,8 +965,7 @@ impl<B: StorageBackend> StorageSync for Adapter<B> {
                 if remote.deleted {
                     if let Some(ref local_rec) = local {
                         if !local_rec.deleted {
-                            previous_data_map
-                                .insert(remote.id.clone(), local_rec.data.clone());
+                            previous_data_map.insert(remote.id.clone(), local_rec.data.clone());
                         }
                     }
                 }

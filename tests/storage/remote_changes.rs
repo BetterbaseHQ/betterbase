@@ -70,7 +70,7 @@ fn case1_no_local_remote_tombstone_inserts_tombstone() {
     let remote = make_remote_record("x", 5, true);
     let strategy = DeleteConflictStrategy::RemoteWins;
 
-    let (decision, action) =
+    let (decision, _action) =
         process_remote_record(&def, None, &remote, &strategy, None).expect("should succeed");
 
     match decision {
@@ -78,7 +78,7 @@ fn case1_no_local_remote_tombstone_inserts_tombstone() {
             assert!(rec.deleted);
             assert_eq!(rec.id, "x");
         }
-        other => panic!("expected Insert(tombstone), got other"),
+        _other => panic!("expected Insert(tombstone), got other"),
     }
 }
 
@@ -97,7 +97,7 @@ fn case2_no_local_remote_live_inserts() {
             assert!(!rec.deleted);
             assert_eq!(rec.sequence, 10);
         }
-        other => panic!("expected Insert(live), got other"),
+        _other => panic!("expected Insert(live), got other"),
     }
 }
 
@@ -114,14 +114,14 @@ fn case3_clean_alive_remote_tombstone_creates_tombstone() {
     let remote = make_remote_record("user-1", 20, true);
     let strategy = DeleteConflictStrategy::RemoteWins;
 
-    let (decision, _) =
-        process_remote_record(&def, Some(&local), &remote, &strategy, None).expect("should succeed");
+    let (decision, _) = process_remote_record(&def, Some(&local), &remote, &strategy, None)
+        .expect("should succeed");
 
     match decision {
         RemoteDecision::Delete(rec) => {
             assert!(rec.deleted);
         }
-        other => panic!("expected Delete, got other"),
+        _other => panic!("expected Delete, got other"),
     }
 }
 
@@ -138,15 +138,15 @@ fn case4_clean_alive_remote_live_updates() {
     let remote = make_remote_record("user-1", 30, false);
     let strategy = DeleteConflictStrategy::RemoteWins;
 
-    let (decision, _) =
-        process_remote_record(&def, Some(&local), &remote, &strategy, None).expect("should succeed");
+    let (decision, _) = process_remote_record(&def, Some(&local), &remote, &strategy, None)
+        .expect("should succeed");
 
     match decision {
         RemoteDecision::Update(rec) => {
             assert!(!rec.deleted);
             assert_eq!(rec.sequence, 30);
         }
-        other => panic!("expected Update, got other"),
+        _other => panic!("expected Update, got other"),
     }
 }
 
@@ -163,14 +163,14 @@ fn case5_clean_deleted_remote_live_resurrects() {
     let remote = make_remote_record("user-1", 40, false);
     let strategy = DeleteConflictStrategy::RemoteWins;
 
-    let (decision, _) =
-        process_remote_record(&def, Some(&local), &remote, &strategy, None).expect("should succeed");
+    let (decision, _) = process_remote_record(&def, Some(&local), &remote, &strategy, None)
+        .expect("should succeed");
 
     match decision {
         RemoteDecision::Update(rec) => {
             assert!(!rec.deleted);
         }
-        other => panic!("expected Update (resurrect), got other"),
+        _other => panic!("expected Update (resurrect), got other"),
     }
 }
 
@@ -187,15 +187,15 @@ fn case6_clean_deleted_remote_tombstone_updates_sequence() {
     let remote = make_remote_record("user-1", 50, true);
     let strategy = DeleteConflictStrategy::RemoteWins;
 
-    let (decision, _) =
-        process_remote_record(&def, Some(&local), &remote, &strategy, None).expect("should succeed");
+    let (decision, _) = process_remote_record(&def, Some(&local), &remote, &strategy, None)
+        .expect("should succeed");
 
     match decision {
         RemoteDecision::Update(rec) => {
             assert!(rec.deleted);
             assert_eq!(rec.sequence, 50);
         }
-        other => panic!("expected Update (tombstone seq update), got other"),
+        _other => panic!("expected Update (tombstone seq update), got other"),
     }
 }
 
@@ -212,14 +212,14 @@ fn case7_dirty_deleted_remote_tombstone_applies_tombstone() {
     let remote = make_remote_record("user-1", 60, true);
     let strategy = DeleteConflictStrategy::RemoteWins;
 
-    let (decision, _) =
-        process_remote_record(&def, Some(&local), &remote, &strategy, None).expect("should succeed");
+    let (decision, _) = process_remote_record(&def, Some(&local), &remote, &strategy, None)
+        .expect("should succeed");
 
     match decision {
         RemoteDecision::Update(rec) => {
             assert!(rec.deleted);
         }
-        other => panic!("expected Update (tombstone), got other"),
+        _other => panic!("expected Update (tombstone), got other"),
     }
 }
 
@@ -236,14 +236,14 @@ fn case8_dirty_alive_remote_tombstone_delete_wins() {
     let remote = make_remote_record("user-1", 70, true);
     let strategy = DeleteConflictStrategy::DeleteWins;
 
-    let (decision, _) =
-        process_remote_record(&def, Some(&local), &remote, &strategy, None).expect("should succeed");
+    let (decision, _) = process_remote_record(&def, Some(&local), &remote, &strategy, None)
+        .expect("should succeed");
 
     match decision {
         RemoteDecision::Delete(rec) => {
             assert!(rec.deleted);
         }
-        other => panic!("expected Delete, got other"),
+        _other => panic!("expected Delete, got other"),
     }
 }
 
@@ -260,15 +260,15 @@ fn case8_dirty_alive_remote_tombstone_update_wins() {
     let remote = make_remote_record("user-1", 70, true);
     let strategy = DeleteConflictStrategy::UpdateWins;
 
-    let (decision, _) =
-        process_remote_record(&def, Some(&local), &remote, &strategy, None).expect("should succeed");
+    let (decision, _) = process_remote_record(&def, Some(&local), &remote, &strategy, None)
+        .expect("should succeed");
 
     match decision {
         RemoteDecision::Conflict(rec) => {
             assert!(!rec.deleted);
             assert_eq!(rec.sequence, 70);
         }
-        other => panic!("expected Conflict (keep alive), got other"),
+        _other => panic!("expected Conflict (keep alive), got other"),
     }
 }
 
@@ -285,15 +285,15 @@ fn case9_dirty_deleted_remote_live_delete_wins() {
     let remote = make_remote_record("user-1", 80, false);
     let strategy = DeleteConflictStrategy::DeleteWins;
 
-    let (decision, _) =
-        process_remote_record(&def, Some(&local), &remote, &strategy, None).expect("should succeed");
+    let (decision, _) = process_remote_record(&def, Some(&local), &remote, &strategy, None)
+        .expect("should succeed");
 
     match decision {
         RemoteDecision::Conflict(rec) => {
             assert!(rec.deleted);
             assert_eq!(rec.sequence, 80);
         }
-        other => panic!("expected Conflict (keep tombstone), got other"),
+        _other => panic!("expected Conflict (keep tombstone), got other"),
     }
 }
 
@@ -310,14 +310,14 @@ fn case9_dirty_deleted_remote_live_update_wins() {
     let remote = make_remote_record("user-1", 80, false);
     let strategy = DeleteConflictStrategy::UpdateWins;
 
-    let (decision, _) =
-        process_remote_record(&def, Some(&local), &remote, &strategy, None).expect("should succeed");
+    let (decision, _) = process_remote_record(&def, Some(&local), &remote, &strategy, None)
+        .expect("should succeed");
 
     match decision {
         RemoteDecision::Update(rec) => {
             assert!(!rec.deleted);
         }
-        other => panic!("expected Update (resurrect), got other"),
+        _other => panic!("expected Update (resurrect), got other"),
     }
 }
 
@@ -334,14 +334,14 @@ fn case10_dirty_alive_remote_live_merges() {
     let remote = make_remote_record("user-1", 90, false);
     let strategy = DeleteConflictStrategy::RemoteWins;
 
-    let (decision, _) =
-        process_remote_record(&def, Some(&local), &remote, &strategy, None).expect("should succeed");
+    let (decision, _) = process_remote_record(&def, Some(&local), &remote, &strategy, None)
+        .expect("should succeed");
 
     match decision {
         RemoteDecision::Merge(_rec) => {
             // merge occurred — just verify we got a Merge decision
         }
-        other => panic!("expected Merge, got other"),
+        _other => panic!("expected Merge, got other"),
     }
 }
 
@@ -353,18 +353,18 @@ fn skip_when_dirty_local_sequence_gte_remote() {
         let mut rec = make_local_record(&def, "user-1");
         rec.dirty = true;
         rec.deleted = false;
-        rec.sequence = 100;  // local is ahead
+        rec.sequence = 100; // local is ahead
         rec
     };
     let remote = make_remote_record("user-1", 50, false); // remote is behind
     let strategy = DeleteConflictStrategy::RemoteWins;
 
-    let (decision, _) =
-        process_remote_record(&def, Some(&local), &remote, &strategy, None).expect("should succeed");
+    let (decision, _) = process_remote_record(&def, Some(&local), &remote, &strategy, None)
+        .expect("should succeed");
 
     match decision {
         RemoteDecision::Skip => {}
-        other => panic!("expected Skip, got other"),
+        _other => panic!("expected Skip, got other"),
     }
 }
 
@@ -375,7 +375,7 @@ fn skip_when_dirty_local_sequence_gte_remote() {
 #[test]
 fn apply_remote_decisions_calls_put_fn_for_writes() {
     let def = users_def();
-    let local = make_local_record(&def, "user-1");
+    let _local = make_local_record(&def, "user-1");
     let remote = make_remote_record("user-1", 5, false);
     let strategy = DeleteConflictStrategy::RemoteWins;
 
@@ -421,7 +421,9 @@ fn apply_remote_decisions_collects_put_errors() {
 
     let decisions = vec![(decision, action)];
     let (results, errors) = apply_remote_decisions(decisions, &mut |_rec| {
-        Err(less_db::error::LessDbError::Internal("simulated failure".to_string()))
+        Err(less_db::error::LessDbError::Internal(
+            "simulated failure".to_string(),
+        ))
     });
 
     assert!(results.is_empty());

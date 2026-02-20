@@ -23,11 +23,7 @@ pub fn serialize(schema: &SchemaNode, value: &Value) -> Result<Value, SchemaErro
     serialize_node(schema, value, 0)
 }
 
-fn serialize_node(
-    schema: &SchemaNode,
-    value: &Value,
-    depth: usize,
-) -> Result<Value, SchemaError> {
+fn serialize_node(schema: &SchemaNode, value: &Value, depth: usize) -> Result<Value, SchemaError> {
     if depth > MAX_DEPTH {
         return Err(SchemaError::Serialization(format!(
             "Maximum serialize depth exceeded ({MAX_DEPTH})"
@@ -211,11 +207,7 @@ fn deserialize_node(
 // ============================================================================
 
 /// Check whether `value` structurally matches a schema variant (pre-serialization).
-fn matches_variant(
-    schema: &SchemaNode,
-    value: &Value,
-    depth: usize,
-) -> Result<bool, SchemaError> {
+fn matches_variant(schema: &SchemaNode, value: &Value, depth: usize) -> Result<bool, SchemaError> {
     if depth > MAX_DEPTH {
         return Err(SchemaError::Serialization(format!(
             "Maximum depth exceeded in matches_variant ({MAX_DEPTH})"
@@ -225,9 +217,7 @@ fn matches_variant(
         SchemaNode::String | SchemaNode::Text | SchemaNode::Key => Ok(value.is_string()),
         SchemaNode::Number => Ok(value.is_number()),
         SchemaNode::Boolean => Ok(value.is_boolean()),
-        SchemaNode::Date | SchemaNode::CreatedAt | SchemaNode::UpdatedAt => {
-            Ok(value.is_string())
-        }
+        SchemaNode::Date | SchemaNode::CreatedAt | SchemaNode::UpdatedAt => Ok(value.is_string()),
         SchemaNode::Bytes => Ok(value.is_string()),
         SchemaNode::Literal(lit) => {
             use super::node::LiteralValue;
@@ -275,9 +265,7 @@ fn matches_serialized_variant(
         SchemaNode::String | SchemaNode::Text | SchemaNode::Key => Ok(value.is_string()),
         SchemaNode::Number => Ok(value.is_number()),
         SchemaNode::Boolean => Ok(value.is_boolean()),
-        SchemaNode::Date | SchemaNode::CreatedAt | SchemaNode::UpdatedAt => {
-            Ok(value.is_string())
-        }
+        SchemaNode::Date | SchemaNode::CreatedAt | SchemaNode::UpdatedAt => Ok(value.is_string()),
         SchemaNode::Bytes => Ok(value.is_string()),
         SchemaNode::Literal(lit) => {
             use super::node::LiteralValue;

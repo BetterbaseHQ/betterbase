@@ -20,7 +20,7 @@ use less_db::{
         PutOptions, RemoteRecord,
     },
 };
-use serde_json::{json, Value};
+use serde_json::json;
 
 // ============================================================================
 // Helpers
@@ -56,9 +56,7 @@ fn users_unique_email_def() -> CollectionDef {
 /// Build an initialized in-memory adapter for a given collection.
 fn make_adapter(def: &CollectionDef) -> Adapter<SqliteBackend> {
     let mut backend = SqliteBackend::open_in_memory().expect("open in-memory DB");
-    backend
-        .initialize(&[def])
-        .expect("backend initialize");
+    backend.initialize(&[def]).expect("backend initialize");
     let mut adapter = Adapter::new(backend);
     adapter
         .initialize(&[Arc::new(users_def())])
@@ -73,9 +71,7 @@ fn make_adapter_arc(def: Arc<CollectionDef>) -> Adapter<SqliteBackend> {
         .initialize(&[def.as_ref()])
         .expect("backend initialize");
     let mut adapter = Adapter::new(backend);
-    adapter
-        .initialize(&[def])
-        .expect("adapter initialize");
+    adapter.initialize(&[def]).expect("adapter initialize");
     adapter
 }
 
@@ -287,11 +283,7 @@ fn patch_updates_specific_fields() {
     };
 
     let patched = adapter
-        .patch(
-            &def,
-            json!({ "name": "Grace Updated" }),
-            &patch_opts,
-        )
+        .patch(&def, json!({ "name": "Grace Updated" }), &patch_opts)
         .expect("patch");
 
     assert_eq!(patched.id, record.id);
@@ -421,13 +413,25 @@ fn get_all_returns_all_live_records() {
     let adapter = make_adapter(&def);
 
     adapter
-        .put(&def, json!({ "name": "Alice", "email": "a@example.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@example.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "Bob", "email": "b@example.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Bob", "email": "b@example.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "Carol", "email": "c@example.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Carol", "email": "c@example.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let result = adapter
@@ -444,10 +448,18 @@ fn get_all_excludes_deleted_records_by_default() {
     let adapter = make_adapter(&def);
 
     let r1 = adapter
-        .put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "A", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "B", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "B", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     adapter
@@ -474,10 +486,18 @@ fn query_with_filter_returns_matching_records() {
     let adapter = make_adapter(&def);
 
     adapter
-        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Bob", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let query = Query {
@@ -493,19 +513,31 @@ fn query_with_filter_returns_matching_records() {
 
 #[test]
 fn query_with_sort_returns_sorted_records() {
-    use less_db::query::types::{Query, SortEntry, SortDirection, SortInput};
+    use less_db::query::types::{Query, SortDirection, SortEntry, SortInput};
 
     let def = users_def();
     let adapter = make_adapter(&def);
 
     adapter
-        .put(&def, json!({ "name": "Charlie", "email": "c@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Charlie", "email": "c@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Bob", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let query = Query {
@@ -563,10 +595,18 @@ fn count_returns_correct_total() {
     let adapter = make_adapter(&def);
 
     adapter
-        .put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "A", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "B", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "B", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let count = adapter.count(&def, None).expect("count");
@@ -579,10 +619,18 @@ fn count_excludes_deleted_records() {
     let adapter = make_adapter(&def);
 
     let r = adapter
-        .put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "A", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "B", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "B", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     adapter
@@ -601,10 +649,18 @@ fn count_with_filter() {
     let adapter = make_adapter(&def);
 
     adapter
-        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Bob", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let query = Query {
@@ -650,10 +706,18 @@ fn bulk_delete_deletes_multiple_records() {
     let adapter = make_adapter(&def);
 
     let r1 = adapter
-        .put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "A", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     let r2 = adapter
-        .put(&def, json!({ "name": "B", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "B", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let ids: Vec<&str> = vec![r1.id.as_str(), r2.id.as_str()];
@@ -679,7 +743,11 @@ fn get_dirty_returns_dirty_records() {
 
     // New records are dirty by default
     adapter
-        .put(&def, json!({ "name": "Dirty", "email": "d@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Dirty", "email": "d@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let result = adapter.get_dirty(&def).expect("get_dirty");
@@ -693,7 +761,11 @@ fn mark_synced_clears_dirty_flag() {
     let adapter = make_adapter(&def);
 
     let record = adapter
-        .put(&def, json!({ "name": "Synced", "email": "s@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Synced", "email": "s@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     assert!(record.dirty);
@@ -717,7 +789,11 @@ fn mark_synced_with_snapshot_stays_dirty_if_patches_grew() {
     let adapter = make_adapter(&def);
 
     let record = adapter
-        .put(&def, json!({ "name": "User", "email": "u@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "User", "email": "u@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     // Snapshot claims 0 pending bytes — but current record has more
@@ -750,7 +826,9 @@ fn get_last_sequence_defaults_to_zero() {
     let def = users_def();
     let adapter = make_adapter(&def);
 
-    let seq = adapter.get_last_sequence("users").expect("get_last_sequence");
+    let seq = adapter
+        .get_last_sequence("users")
+        .expect("get_last_sequence");
     assert_eq!(seq, 0);
 }
 
@@ -763,7 +841,9 @@ fn set_and_get_last_sequence_round_trip() {
         .set_last_sequence("users", 999)
         .expect("set_last_sequence");
 
-    let seq = adapter.get_last_sequence("users").expect("get_last_sequence");
+    let seq = adapter
+        .get_last_sequence("users")
+        .expect("get_last_sequence");
     assert_eq!(seq, 999);
 }
 
@@ -830,7 +910,9 @@ fn apply_remote_changes_updates_existing_record() {
         .expect("put");
 
     // Mark it synced so it's not dirty
-    adapter.mark_synced(&def, &local.id, 50, None).expect("mark_synced");
+    adapter
+        .mark_synced(&def, &local.id, 50, None)
+        .expect("mark_synced");
 
     let session_id = crdt::generate_session_id();
     let data = json!({
@@ -855,7 +937,10 @@ fn apply_remote_changes_updates_existing_record() {
 
     assert_eq!(result.new_sequence, 200);
     assert!(
-        result.applied.iter().any(|r| r.action == RemoteAction::Updated),
+        result
+            .applied
+            .iter()
+            .any(|r| r.action == RemoteAction::Updated),
         "expected updated action"
     );
 }
@@ -876,7 +961,9 @@ fn apply_remote_changes_handles_tombstone() {
         )
         .expect("put");
 
-    adapter.mark_synced(&def, &local.id, 10, None).expect("mark_synced");
+    adapter
+        .mark_synced(&def, &local.id, 10, None)
+        .expect("mark_synced");
 
     // Remote sends a tombstone
     let remote = RemoteRecord {
@@ -893,7 +980,10 @@ fn apply_remote_changes_handles_tombstone() {
         .expect("apply_remote_changes");
 
     assert!(
-        result.applied.iter().any(|r| r.action == RemoteAction::Deleted),
+        result
+            .applied
+            .iter()
+            .any(|r| r.action == RemoteAction::Deleted),
         "expected deleted action"
     );
 
@@ -966,11 +1056,7 @@ fn unique_constraint_enforced_on_patch() {
         ..Default::default()
     };
 
-    let result = adapter.patch(
-        &def,
-        json!({ "email": "alice@example.com" }),
-        &patch_opts,
-    );
+    let result = adapter.patch(&def, json!({ "email": "alice@example.com" }), &patch_opts);
 
     assert!(
         result.is_err(),
@@ -999,13 +1085,13 @@ fn unique_constraint_allows_self_patch() {
         ..Default::default()
     };
 
-    let result = adapter.patch(
-        &def,
-        json!({ "name": "Alice Updated" }),
-        &patch_opts,
-    );
+    let result = adapter.patch(&def, json!({ "name": "Alice Updated" }), &patch_opts);
 
-    assert!(result.is_ok(), "self-patch should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "self-patch should succeed: {:?}",
+        result.err()
+    );
 }
 
 // ============================================================================
@@ -1043,10 +1129,18 @@ fn bulk_patch_patches_multiple_records() {
     let adapter = make_adapter(&def);
 
     let r1 = adapter
-        .put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "A", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     let r2 = adapter
-        .put(&def, json!({ "name": "B", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "B", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let patch_opts = PatchOptions {
@@ -1093,7 +1187,11 @@ fn bulk_patch_missing_id_collects_error() {
 
     assert_eq!(result.records.len(), 0);
     assert_eq!(result.errors.len(), 1);
-    assert!(result.errors[0].error.contains("id"), "error: {}", result.errors[0].error);
+    assert!(
+        result.errors[0].error.contains("id"),
+        "error: {}",
+        result.errors[0].error
+    );
 }
 
 // ============================================================================
@@ -1106,13 +1204,25 @@ fn delete_many_deletes_matching_records() {
     let adapter = make_adapter(&def);
 
     adapter
-        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Bob", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "Alice", "email": "a2@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a2@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let result = adapter
@@ -1132,11 +1242,19 @@ fn delete_many_no_matches_returns_empty() {
     let adapter = make_adapter(&def);
 
     adapter
-        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let result = adapter
-        .delete_many(&def, &json!({ "name": "Nobody" }), &DeleteOptions::default())
+        .delete_many(
+            &def,
+            &json!({ "name": "Nobody" }),
+            &DeleteOptions::default(),
+        )
         .expect("delete_many");
 
     assert!(result.deleted_ids.is_empty());
@@ -1153,13 +1271,25 @@ fn patch_many_patches_matching_records() {
     let adapter = make_adapter(&def);
 
     adapter
-        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Bob", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     adapter
-        .put(&def, json!({ "name": "Alice", "email": "a2@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a2@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let patch_opts = PatchOptions {
@@ -1190,7 +1320,11 @@ fn patch_many_no_matches_returns_zero() {
     let adapter = make_adapter(&def);
 
     adapter
-        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let patch_opts = PatchOptions {
@@ -1222,7 +1356,11 @@ fn bulk_delete_nonexistent_records_skipped() {
     let adapter = make_adapter(&def);
 
     let r1 = adapter
-        .put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "A", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let result = adapter

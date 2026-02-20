@@ -9,7 +9,10 @@ use std::collections::BTreeMap;
 
 #[test]
 fn serialize_string_passthrough() {
-    assert_eq!(serialize(&t::string(), &json!("hello")).unwrap(), json!("hello"));
+    assert_eq!(
+        serialize(&t::string(), &json!("hello")).unwrap(),
+        json!("hello")
+    );
 }
 
 #[test]
@@ -155,7 +158,10 @@ fn serialize_literal_str_passthrough() {
 
 #[test]
 fn serialize_literal_num_passthrough() {
-    assert_eq!(serialize(&t::literal_num(42.0), &json!(42)).unwrap(), json!(42));
+    assert_eq!(
+        serialize(&t::literal_num(42.0), &json!(42)).unwrap(),
+        json!(42)
+    );
 }
 
 // ============================================================================
@@ -204,7 +210,10 @@ fn serialize_union_no_match_returns_error() {
 
 #[test]
 fn deserialize_string_passthrough() {
-    assert_eq!(deserialize(&t::string(), &json!("hello")).unwrap(), json!("hello"));
+    assert_eq!(
+        deserialize(&t::string(), &json!("hello")).unwrap(),
+        json!("hello")
+    );
 }
 
 #[test]
@@ -274,7 +283,10 @@ fn serialize_exceeds_max_depth_returns_error() {
 
     let result = serialize(&schema, &value);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Maximum serialize depth exceeded"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Maximum serialize depth exceeded"));
 }
 
 #[test]
@@ -299,7 +311,10 @@ fn deserialize_exceeds_max_depth_returns_error() {
 
     let result = deserialize(&schema, &value);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Maximum deserialize depth exceeded"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Maximum deserialize depth exceeded"));
 }
 
 // ============================================================================
@@ -337,12 +352,18 @@ fn round_trip_complex_object() {
 
 #[test]
 fn serialize_text_passthrough() {
-    assert_eq!(serialize(&t::text(), &json!("hello world")).unwrap(), json!("hello world"));
+    assert_eq!(
+        serialize(&t::text(), &json!("hello world")).unwrap(),
+        json!("hello world")
+    );
 }
 
 #[test]
 fn deserialize_text_passthrough() {
-    assert_eq!(deserialize(&t::text(), &json!("hello world")).unwrap(), json!("hello world"));
+    assert_eq!(
+        deserialize(&t::text(), &json!("hello world")).unwrap(),
+        json!("hello world")
+    );
 }
 
 // ============================================================================
@@ -352,7 +373,10 @@ fn deserialize_text_passthrough() {
 #[test]
 fn deserialize_union_string_variant() {
     let schema = t::union(vec![t::string(), t::number()]);
-    assert_eq!(deserialize(&schema, &json!("hello")).unwrap(), json!("hello"));
+    assert_eq!(
+        deserialize(&schema, &json!("hello")).unwrap(),
+        json!("hello")
+    );
 }
 
 #[test]
@@ -374,7 +398,10 @@ fn deserialize_union_with_optional_variant() {
     // Null matches optional variant
     assert_eq!(deserialize(&schema, &Value::Null).unwrap(), Value::Null);
     // String matches optional(string)
-    assert_eq!(deserialize(&schema, &json!("hello")).unwrap(), json!("hello"));
+    assert_eq!(
+        deserialize(&schema, &json!("hello")).unwrap(),
+        json!("hello")
+    );
     // Number matches number variant
     assert_eq!(deserialize(&schema, &json!(42)).unwrap(), json!(42));
 }
@@ -452,7 +479,10 @@ fn deserialize_record_in_union() {
         json!({"a": 1, "b": 2})
     );
     // String matches string variant
-    assert_eq!(deserialize(&schema, &json!("hello")).unwrap(), json!("hello"));
+    assert_eq!(
+        deserialize(&schema, &json!("hello")).unwrap(),
+        json!("hello")
+    );
 }
 
 // ============================================================================
@@ -591,11 +621,17 @@ fn deserialize_nested_union() {
     let outer_union = t::union(vec![t::string(), inner_union]);
 
     // String matches outer first variant
-    assert_eq!(deserialize(&outer_union, &json!("hello")).unwrap(), json!("hello"));
+    assert_eq!(
+        deserialize(&outer_union, &json!("hello")).unwrap(),
+        json!("hello")
+    );
     // Number matches inner union (number variant)
     assert_eq!(deserialize(&outer_union, &json!(42)).unwrap(), json!(42));
     // Boolean matches inner union (boolean variant)
-    assert_eq!(deserialize(&outer_union, &json!(true)).unwrap(), json!(true));
+    assert_eq!(
+        deserialize(&outer_union, &json!(true)).unwrap(),
+        json!(true)
+    );
 }
 
 #[test]
@@ -603,7 +639,10 @@ fn serialize_nested_union() {
     let inner_union = t::union(vec![t::number(), t::boolean()]);
     let outer_union = t::union(vec![t::string(), inner_union]);
 
-    assert_eq!(serialize(&outer_union, &json!("hello")).unwrap(), json!("hello"));
+    assert_eq!(
+        serialize(&outer_union, &json!("hello")).unwrap(),
+        json!("hello")
+    );
     assert_eq!(serialize(&outer_union, &json!(42)).unwrap(), json!(42));
     assert_eq!(serialize(&outer_union, &json!(true)).unwrap(), json!(true));
 }

@@ -9,9 +9,9 @@
 
 use std::collections::BTreeMap;
 
+use json_joy::json_crdt::nodes::TsKey;
 use json_joy::json_crdt::Model;
 use json_joy::json_crdt::ModelApi;
-use json_joy::json_crdt::nodes::TsKey;
 use json_joy::json_crdt_diff::diff_node;
 use json_joy::json_crdt_patch::{Patch, Ts};
 use json_joy_json_pack::PackValue;
@@ -52,9 +52,7 @@ fn wrap_field_for_crdt(schema: &SchemaNode, value: &Value) -> Value {
             // ISO string → epoch-ms number
             if let Some(s) = value.as_str() {
                 if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-                    return Value::Number(
-                        serde_json::Number::from(dt.timestamp_millis()),
-                    );
+                    return Value::Number(serde_json::Number::from(dt.timestamp_millis()));
                 }
             }
             // Already a number or unparseable — pass through
@@ -241,11 +239,7 @@ pub fn create_model_with_schema(
 }
 
 /// Build a CRDT value according to the schema, choosing con vs str node types.
-fn build_crdt_value(
-    api: &mut ModelApi<'_>,
-    schema: &SchemaNode,
-    value: &Value,
-) -> Result<Ts> {
+fn build_crdt_value(api: &mut ModelApi<'_>, schema: &SchemaNode, value: &Value) -> Result<Ts> {
     match schema {
         // Atomic fields → con nodes (LWW)
         SchemaNode::String | SchemaNode::Key | SchemaNode::Bytes | SchemaNode::Literal(_) => {
@@ -258,9 +252,7 @@ fn build_crdt_value(
         }
 
         // Numbers and booleans → con nodes
-        SchemaNode::Number | SchemaNode::Boolean => {
-            Ok(api.builder.con_val(json_to_pack(value)))
-        }
+        SchemaNode::Number | SchemaNode::Boolean => Ok(api.builder.con_val(json_to_pack(value))),
 
         // Collaborative text → str nodes (RGA) for character-level editing.
         // For initial population we insert after `str_id` itself, which is
@@ -725,8 +717,8 @@ mod tests {
             }
         });
 
-        let model = create_model_with_schema(&data, MIN_SESSION_ID, &schema)
-            .expect("create should work");
+        let model =
+            create_model_with_schema(&data, MIN_SESSION_ID, &schema).expect("create should work");
         let view = view_model(&model);
         let result = deserialize_from_crdt(&schema, &view);
 
@@ -748,8 +740,8 @@ mod tests {
             "dates": ["2024-01-01T00:00:00.000Z", "2024-06-15T12:30:00.000Z"]
         });
 
-        let model = create_model_with_schema(&data, MIN_SESSION_ID, &schema)
-            .expect("create should work");
+        let model =
+            create_model_with_schema(&data, MIN_SESSION_ID, &schema).expect("create should work");
         let view = view_model(&model);
         let result = deserialize_from_crdt(&schema, &view);
 
@@ -776,8 +768,8 @@ mod tests {
             }
         });
 
-        let model = create_model_with_schema(&data, MIN_SESSION_ID, &schema)
-            .expect("create should work");
+        let model =
+            create_model_with_schema(&data, MIN_SESSION_ID, &schema).expect("create should work");
         let view = view_model(&model);
         let result = deserialize_from_crdt(&schema, &view);
 

@@ -5,18 +5,17 @@
 use std::collections::BTreeMap;
 
 use less_db::{
-    collection::{
-        autofill::generate_uuid,
-        builder::{collection, CollectionDef},
-    },
+    collection::builder::{collection, CollectionDef},
     crdt::{self, MIN_SESSION_ID},
-    schema::node::{t, SchemaNode},
+    schema::node::t,
     storage::record_manager::{
         compute_index_values, migrate_and_deserialize, normalize_index_value, prepare_delete,
         prepare_mark_synced, prepare_new, prepare_patch, prepare_remote_insert,
         prepare_remote_tombstone, prepare_update, try_extract_id,
     },
-    types::{DeleteOptions, PatchOptions, PushSnapshot, PutOptions, RemoteRecord, SerializedRecord},
+    types::{
+        DeleteOptions, PatchOptions, PushSnapshot, PutOptions, RemoteRecord, SerializedRecord,
+    },
 };
 use serde_json::{json, Value};
 
@@ -33,18 +32,6 @@ fn users_def() -> CollectionDef {
             let mut s = BTreeMap::new();
             s.insert("name".to_string(), t::string());
             s.insert("email".to_string(), t::string());
-            s
-        })
-        .build()
-}
-
-/// Build a def with an optional field.
-fn users_with_optional_def() -> CollectionDef {
-    collection("users")
-        .v(1, {
-            let mut s = BTreeMap::new();
-            s.insert("name".to_string(), t::string());
-            s.insert("email".to_string(), t::optional(t::string()));
             s
         })
         .build()
@@ -141,7 +128,10 @@ fn prepare_new_creates_valid_record() {
     assert!(!rec.deleted);
     assert_eq!(rec.sequence, 0);
     assert!(!rec.crdt.is_empty(), "CRDT binary should be set");
-    assert!(rec.pending_patches.is_empty(), "new record has no pending patches");
+    assert!(
+        rec.pending_patches.is_empty(),
+        "new record has no pending patches"
+    );
 }
 
 #[test]
@@ -178,7 +168,10 @@ fn prepare_new_returns_error_for_invalid_data() {
     let data = json!({"email": "x@example.com"});
     let opts = PutOptions::default();
     let result = prepare_new(&def, data, SID, &opts);
-    assert!(result.is_err(), "missing required field should fail validation");
+    assert!(
+        result.is_err(),
+        "missing required field should fail validation"
+    );
 }
 
 #[test]
@@ -212,7 +205,10 @@ fn prepare_update_detects_changed_fields() {
     let result = prepare_update(&def, &original, Value::Object(new_obj), SID, &opts)
         .expect("prepare_update failed");
 
-    assert!(result.changed_fields.contains("name"), "name should be in changed_fields");
+    assert!(
+        result.changed_fields.contains("name"),
+        "name should be in changed_fields"
+    );
     assert_eq!(result.record.data["name"], json!("Alice Updated"));
 }
 
@@ -266,7 +262,10 @@ fn prepare_update_rejects_immutable_created_at_change() {
 fn prepare_update_appends_to_pending_patches() {
     let def = users_def();
     let original = make_record(&def, "user-1", json!({"name": "Alice", "email": "a@b.com"}));
-    assert!(original.pending_patches.is_empty(), "new record has no patches");
+    assert!(
+        original.pending_patches.is_empty(),
+        "new record has no patches"
+    );
 
     let mut new_obj = original.data.as_object().unwrap().clone();
     new_obj.insert("name".to_string(), json!("Alice Updated"));
@@ -275,7 +274,10 @@ fn prepare_update_appends_to_pending_patches() {
     let result = prepare_update(&def, &original, Value::Object(new_obj), SID, &opts)
         .expect("prepare_update failed");
 
-    assert!(!result.record.pending_patches.is_empty(), "pending_patches should be populated");
+    assert!(
+        !result.record.pending_patches.is_empty(),
+        "pending_patches should be populated"
+    );
 }
 
 // ============================================================================
@@ -289,8 +291,8 @@ fn prepare_patch_does_shallow_merge() {
 
     let patch_data = json!({"name": "Alice Patched"});
     let opts = PatchOptions::default();
-    let result = prepare_patch(&def, &original, patch_data, SID, &opts)
-        .expect("prepare_patch failed");
+    let result =
+        prepare_patch(&def, &original, patch_data, SID, &opts).expect("prepare_patch failed");
 
     assert_eq!(result.record.data["name"], json!("Alice Patched"));
     // email remains unchanged
@@ -307,8 +309,8 @@ fn prepare_patch_skips_auto_fields() {
     // Attempt to patch auto-fields — they should be ignored
     let patch_data = json!({"id": "hacked", "createdAt": "2000-01-01T00:00:00Z", "name": "Bob"});
     let opts = PatchOptions::default();
-    let result = prepare_patch(&def, &original, patch_data, SID, &opts)
-        .expect("prepare_patch failed");
+    let result =
+        prepare_patch(&def, &original, patch_data, SID, &opts).expect("prepare_patch failed");
 
     assert_eq!(result.record.id, original_id);
     assert_eq!(result.record.data["createdAt"], original_created_at);
@@ -345,7 +347,10 @@ fn prepare_delete_retains_crdt_state() {
     let opts = DeleteOptions::default();
     let tombstone = prepare_delete(&original, &opts);
 
-    assert_eq!(tombstone.crdt, original_crdt, "CRDT state should be preserved");
+    assert_eq!(
+        tombstone.crdt, original_crdt,
+        "CRDT state should be preserved"
+    );
 }
 
 // ============================================================================
@@ -367,7 +372,10 @@ fn prepare_mark_synced_clears_dirty_when_snapshot_matches() {
 
     let synced = prepare_mark_synced(&rec, 42, Some(&snapshot));
     assert!(!synced.dirty, "record should be clean after mark_synced");
-    assert!(synced.pending_patches.is_empty(), "pending_patches should be cleared");
+    assert!(
+        synced.pending_patches.is_empty(),
+        "pending_patches should be cleared"
+    );
     assert_eq!(synced.sequence, 42);
 }
 
@@ -386,13 +394,16 @@ fn prepare_mark_synced_stays_dirty_when_patches_grew() {
     let mut new_obj = original.data.as_object().unwrap().clone();
     new_obj.insert("name".to_string(), json!("Alice Updated"));
     let opts = PatchOptions::default();
-    let updated = prepare_update(&def, &original, Value::Object(new_obj), SID, &opts)
-        .expect("update failed");
+    let updated =
+        prepare_update(&def, &original, Value::Object(new_obj), SID, &opts).expect("update failed");
 
     // Now mark synced — patches grew, so record stays dirty
     let synced = prepare_mark_synced(&updated.record, 10, Some(&snapshot));
     assert!(synced.dirty, "record should stay dirty when patches grew");
-    assert!(!synced.pending_patches.is_empty(), "pending_patches should be preserved");
+    assert!(
+        !synced.pending_patches.is_empty(),
+        "pending_patches should be preserved"
+    );
 }
 
 #[test]
@@ -442,7 +453,7 @@ fn migrate_and_deserialize_applies_migration_from_v1() {
     let rec = SerializedRecord {
         id: "doc-1".to_string(),
         collection: "docs".to_string(),
-        version: 1,  // old version
+        version: 1, // old version
         data: v1_data.clone(),
         crdt: crdt_binary,
         pending_patches: vec![],
@@ -605,7 +616,7 @@ fn prepare_remote_insert_returns_error_when_crdt_missing() {
     let remote = RemoteRecord {
         id: "remote-1".to_string(),
         version: 1,
-        crdt: None,  // missing!
+        crdt: None, // missing!
         deleted: false,
         sequence: 1,
         meta: None,
@@ -621,20 +632,17 @@ fn prepare_remote_insert_returns_error_when_crdt_missing() {
 
 #[test]
 fn prepare_remote_tombstone_creates_tombstone() {
-    let tombstone = prepare_remote_tombstone(
-        "dead-1",
-        50,
-        "users",
-        Some("2024-01-15T00:00:00Z"),
-        None,
-        1,
-    );
+    let tombstone =
+        prepare_remote_tombstone("dead-1", 50, "users", Some("2024-01-15T00:00:00Z"), None, 1);
 
     assert_eq!(tombstone.id, "dead-1");
     assert_eq!(tombstone.sequence, 50);
     assert!(tombstone.deleted);
     assert!(!tombstone.dirty);
-    assert_eq!(tombstone.deleted_at, Some("2024-01-15T00:00:00Z".to_string()));
+    assert_eq!(
+        tombstone.deleted_at,
+        Some("2024-01-15T00:00:00Z".to_string())
+    );
     assert!(tombstone.data.is_null());
     assert!(tombstone.crdt.is_empty());
 }
@@ -642,7 +650,10 @@ fn prepare_remote_tombstone_creates_tombstone() {
 #[test]
 fn prepare_remote_tombstone_uses_current_time_when_received_at_none() {
     let tombstone = prepare_remote_tombstone("x", 1, "users", None, None, 1);
-    assert!(tombstone.deleted_at.is_some(), "deleted_at should default to now");
+    assert!(
+        tombstone.deleted_at.is_some(),
+        "deleted_at should default to now"
+    );
 }
 
 // ============================================================================
@@ -662,15 +673,15 @@ fn merge_records_applies_local_patches_to_remote() {
     let mut new_obj = local.data.as_object().unwrap().clone();
     new_obj.insert("name".to_string(), json!("Alice Updated"));
     let opts = PatchOptions::default();
-    let updated = prepare_update(&def, &local, Value::Object(new_obj), SID, &opts)
-        .expect("update failed");
+    let updated =
+        prepare_update(&def, &local, Value::Object(new_obj), SID, &opts).expect("update failed");
     let dirty_local = updated.record;
 
     // Remote is at the original state (same CRDT binary)
     let remote_crdt = local.crdt.clone();
 
-    let result = merge_records(&def, &dirty_local, &remote_crdt, 10, 1, None)
-        .expect("merge_records failed");
+    let result =
+        merge_records(&def, &dirty_local, &remote_crdt, 10, 1, None).expect("merge_records failed");
 
     // Merged record should have Alice's local change
     assert_eq!(result.record.data["name"], json!("Alice Updated"));
@@ -686,8 +697,8 @@ fn merge_records_clears_dirty_when_remote_already_has_changes() {
 
     // Remote already has exactly the same state → no local changes survive
     // Use the local's own CRDT as the "remote" (fully subsumed)
-    let result = merge_records(&def, &local, &local.crdt, 5, 1, None)
-        .expect("merge_records failed");
+    let result =
+        merge_records(&def, &local, &local.crdt, 5, 1, None).expect("merge_records failed");
 
     // No pending changes remain
     assert!(!result.had_local_changes);
@@ -779,8 +790,7 @@ fn merge_records_cross_version_with_local_title_change() {
         "createdAt": "2024-01-01T00:00:00Z",
         "updatedAt": "2024-01-02T00:00:00Z",
     });
-    let local_model =
-        crdt::create_model(&v2_local, SID + 1).expect("model");
+    let local_model = crdt::create_model(&v2_local, SID + 1).expect("model");
     let local_crdt = crdt::model_to_binary(&local_model);
 
     let local = SerializedRecord {
@@ -798,8 +808,8 @@ fn merge_records_cross_version_with_local_title_change() {
         computed: None,
     };
 
-    let result = merge_records(&def, &local, &remote_crdt, 5, 1, None)
-        .expect("cross-version merge failed");
+    let result =
+        merge_records(&def, &local, &remote_crdt, 5, 1, None).expect("cross-version merge failed");
 
     // Local title change should be reapplied on top of migrated remote
     assert_eq!(result.record.data["title"], json!("Local Title"));
@@ -838,7 +848,10 @@ fn prepare_remote_insert_migrates_older_version() {
     let result = prepare_remote_insert(&def, &remote, None)
         .expect("prepare_remote_insert should migrate v1 → v2");
 
-    assert_eq!(result.record.version, 2, "should be upgraded to current version");
+    assert_eq!(
+        result.record.version, 2,
+        "should be upgraded to current version"
+    );
     assert_eq!(result.record.data["title"], json!("Remote Doc"));
     // Migration adds body field with empty string
     assert_eq!(result.record.data["body"], json!(""));
@@ -903,8 +916,7 @@ fn prepare_remote_insert_preserves_meta() {
         meta: Some(json!({"spaceId": "workspace-1"})),
     };
 
-    let result = prepare_remote_insert(&def, &remote, None)
-        .expect("prepare_remote_insert failed");
+    let result = prepare_remote_insert(&def, &remote, None).expect("prepare_remote_insert failed");
     assert_eq!(
         result.record.meta,
         Some(json!({"spaceId": "workspace-1"})),

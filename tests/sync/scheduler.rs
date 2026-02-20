@@ -5,15 +5,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use parking_lot::Mutex;
 use less_db::collection::builder::{collection, CollectionDef};
 use less_db::schema::node::t;
 use less_db::sync::types::*;
 use less_db::sync::{SyncManager, SyncScheduler};
 use less_db::types::{
-    ApplyRemoteOptions, ApplyRemoteRecordResult, ApplyRemoteResult, BatchResult,
-    PushSnapshot, RemoteAction, RemoteRecord,
+    ApplyRemoteOptions, ApplyRemoteRecordResult, ApplyRemoteResult, BatchResult, PushSnapshot,
+    RemoteAction, RemoteRecord,
 };
+use parking_lot::Mutex;
 
 // ============================================================================
 // Shared mock infrastructure (same as manager tests)
@@ -24,8 +24,13 @@ struct MockTransport {
 }
 
 struct MockTransportInner {
-    push_response:
-        Option<Box<dyn Fn(&str, &[OutboundRecord]) -> Result<Vec<PushAck>, SyncTransportError> + Send + Sync>>,
+    push_response: Option<
+        Box<
+            dyn Fn(&str, &[OutboundRecord]) -> Result<Vec<PushAck>, SyncTransportError>
+                + Send
+                + Sync,
+        >,
+    >,
     pull_response:
         Option<Box<dyn Fn(&str, i64) -> Result<PullResult, SyncTransportError> + Send + Sync>>,
 }
@@ -70,11 +75,7 @@ impl SyncTransport for MockTransport {
         }
     }
 
-    async fn pull(
-        &self,
-        collection: &str,
-        since: i64,
-    ) -> Result<PullResult, SyncTransportError> {
+    async fn pull(&self, collection: &str, since: i64) -> Result<PullResult, SyncTransportError> {
         let inner = self.inner.lock();
         if let Some(ref f) = inner.pull_response {
             f(collection, since)
@@ -262,10 +263,9 @@ async fn coalesces_calls_during_cooldown() {
     let d2 = def.clone();
     let d3 = def.clone();
 
-    let (r2, r3) = tokio::join!(
-        async move { s2.schedule_sync(d2).await },
-        async move { s3.schedule_sync(d3).await },
-    );
+    let (r2, r3) = tokio::join!(async move { s2.schedule_sync(d2).await }, async move {
+        s3.schedule_sync(d3).await
+    },);
 
     assert!(r2.is_ok());
     assert!(r3.is_ok());
@@ -293,11 +293,7 @@ async fn coalesces_calls_during_running_sync() {
         })
     });
 
-    let scheduler = Arc::new(make_scheduler(
-        transport.clone(),
-        adapter.clone(),
-        Some(10),
-    ));
+    let scheduler = Arc::new(make_scheduler(transport.clone(), adapter.clone(), Some(10)));
 
     let def = make_def("tasks");
     let d1 = def.clone();
@@ -306,10 +302,9 @@ async fn coalesces_calls_during_running_sync() {
     let s2 = scheduler.clone();
 
     // Two concurrent calls — one fires, one coalesces
-    let (r1, r2) = tokio::join!(
-        async move { s1.schedule_sync(d1).await },
-        async move { s2.schedule_sync(d2).await },
-    );
+    let (r1, r2) = tokio::join!(async move { s1.schedule_sync(d1).await }, async move {
+        s2.schedule_sync(d2).await
+    },);
 
     assert!(r1.is_ok());
     assert!(r2.is_ok());
@@ -447,11 +442,7 @@ async fn schedule_sync_all_uses_separate_slot() {
         })
     });
 
-    let scheduler = Arc::new(make_scheduler(
-        transport.clone(),
-        adapter.clone(),
-        Some(50),
-    ));
+    let scheduler = Arc::new(make_scheduler(transport.clone(), adapter.clone(), Some(50)));
 
     let def = make_def("tasks");
 
@@ -460,10 +451,9 @@ async fn schedule_sync_all_uses_separate_slot() {
     let s2 = scheduler.clone();
     let d1 = def.clone();
 
-    let (r1, r2) = tokio::join!(
-        async move { s1.schedule_sync(d1).await },
-        async move { s2.schedule_sync_all().await },
-    );
+    let (r1, r2) = tokio::join!(async move { s1.schedule_sync(d1).await }, async move {
+        s2.schedule_sync_all().await
+    },);
 
     assert!(r1.is_ok());
     assert!(r2.is_ok());

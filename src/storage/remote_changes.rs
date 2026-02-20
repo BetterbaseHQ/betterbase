@@ -77,13 +77,19 @@ pub fn process_remote_record(
             remote.meta.clone(),
             def.current_version,
         );
-        return Ok((RemoteDecision::Insert(tombstone), Some(RemoteAction::Deleted)));
+        return Ok((
+            RemoteDecision::Insert(tombstone),
+            Some(RemoteAction::Deleted),
+        ));
     }
 
     // Case 2: No local, remote live → insert
     if !local_exists && !remote_is_deleted {
         let result = prepare_remote_insert(def, remote, received_at)?;
-        return Ok((RemoteDecision::Insert(result.record), Some(RemoteAction::Inserted)));
+        return Ok((
+            RemoteDecision::Insert(result.record),
+            Some(RemoteAction::Inserted),
+        ));
     }
 
     let local = local.unwrap();
@@ -98,19 +104,28 @@ pub fn process_remote_record(
             remote.meta.clone(),
             def.current_version,
         );
-        return Ok((RemoteDecision::Delete(tombstone), Some(RemoteAction::Deleted)));
+        return Ok((
+            RemoteDecision::Delete(tombstone),
+            Some(RemoteAction::Deleted),
+        ));
     }
 
     // Case 4: Clean, alive + remote live → overwrite
     if !local_dirty && !local_deleted && !remote_is_deleted {
         let result = prepare_remote_insert(def, remote, received_at)?;
-        return Ok((RemoteDecision::Update(result.record), Some(RemoteAction::Updated)));
+        return Ok((
+            RemoteDecision::Update(result.record),
+            Some(RemoteAction::Updated),
+        ));
     }
 
     // Case 5: Clean, deleted + remote live → resurrect
     if !local_dirty && local_deleted && !remote_is_deleted {
         let result = prepare_remote_insert(def, remote, received_at)?;
-        return Ok((RemoteDecision::Update(result.record), Some(RemoteAction::Updated)));
+        return Ok((
+            RemoteDecision::Update(result.record),
+            Some(RemoteAction::Updated),
+        ));
     }
 
     // Case 6: Clean, deleted + remote tombstone → update sequence
@@ -123,7 +138,10 @@ pub fn process_remote_record(
             remote.meta.clone(),
             def.current_version,
         );
-        return Ok((RemoteDecision::Update(tombstone), Some(RemoteAction::Deleted)));
+        return Ok((
+            RemoteDecision::Update(tombstone),
+            Some(RemoteAction::Deleted),
+        ));
     }
 
     // Case 7: Dirty, deleted + remote tombstone → no conflict, apply remote tombstone
@@ -136,7 +154,10 @@ pub fn process_remote_record(
             remote.meta.clone(),
             def.current_version,
         );
-        return Ok((RemoteDecision::Update(tombstone), Some(RemoteAction::Deleted)));
+        return Ok((
+            RemoteDecision::Update(tombstone),
+            Some(RemoteAction::Deleted),
+        ));
     }
 
     // Case 8: Dirty, alive + remote tombstone → delete conflict
@@ -152,14 +173,20 @@ pub fn process_remote_record(
                 remote.meta.clone(),
                 def.current_version,
             );
-            return Ok((RemoteDecision::Delete(tombstone), Some(RemoteAction::Deleted)));
+            return Ok((
+                RemoteDecision::Delete(tombstone),
+                Some(RemoteAction::Deleted),
+            ));
         } else {
             // update-wins: keep local alive, update sequence
             let updated = SerializedRecord {
                 sequence: remote.sequence,
                 ..local.clone()
             };
-            return Ok((RemoteDecision::Conflict(updated), Some(RemoteAction::Conflicted)));
+            return Ok((
+                RemoteDecision::Conflict(updated),
+                Some(RemoteAction::Conflicted),
+            ));
         }
     }
 
@@ -173,11 +200,17 @@ pub fn process_remote_record(
                 sequence: remote.sequence,
                 ..local.clone()
             };
-            return Ok((RemoteDecision::Conflict(updated), Some(RemoteAction::Conflicted)));
+            return Ok((
+                RemoteDecision::Conflict(updated),
+                Some(RemoteAction::Conflicted),
+            ));
         } else {
             // update-wins: resurrect with remote
             let result = prepare_remote_insert(def, remote, received_at)?;
-            return Ok((RemoteDecision::Update(result.record), Some(RemoteAction::Updated)));
+            return Ok((
+                RemoteDecision::Update(result.record),
+                Some(RemoteAction::Updated),
+            ));
         }
     }
 
@@ -199,7 +232,10 @@ pub fn process_remote_record(
             received_at,
         )?;
 
-        return Ok((RemoteDecision::Merge(merge_result.record), Some(RemoteAction::Updated)));
+        return Ok((
+            RemoteDecision::Merge(merge_result.record),
+            Some(RemoteAction::Updated),
+        ));
     }
 
     // Should be unreachable — all 10 cases handled
@@ -242,7 +278,7 @@ pub fn apply_remote_decisions(
                         results.push(ApplyRemoteRecordResult {
                             id,
                             action,
-                            record: None, // caller can enrich this
+                            record: None,        // caller can enrich this
                             previous_data: None, // populated by adapter
                         });
                     }

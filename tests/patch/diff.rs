@@ -1,4 +1,4 @@
-use less_db::patch::diff::{diff, node_equals, DiffDepthError};
+use less_db::patch::diff::{diff, node_equals};
 use less_db::schema::node::{created_at_schema, key_schema, t, updated_at_schema, SchemaNode};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -321,12 +321,7 @@ fn node_equals_matching_arrays() {
 #[test]
 fn node_equals_different_arrays() {
     let schema = t::array(t::string());
-    assert!(!node_equals(
-        &schema,
-        &json!(["a", "b"]),
-        &json!(["a", "c"])
-    )
-    .unwrap());
+    assert!(!node_equals(&schema, &json!(["a", "b"]), &json!(["a", "c"])).unwrap());
 }
 
 #[test]
@@ -546,7 +541,11 @@ fn diff_errors_on_extremely_deep_nesting() {
         new_val = json!({"nested": new_val});
     }
 
-    let result = diff(&schema, &json!({"root": old_val}), &json!({"root": new_val}));
+    let result = diff(
+        &schema,
+        &json!({"root": old_val}),
+        &json!({"root": new_val}),
+    );
     assert!(result.is_err(), "expected DiffDepthError");
 }
 
@@ -566,7 +565,12 @@ fn diff_allows_reasonable_nesting() {
         new_val = json!({"nested": new_val});
     }
 
-    let changes = diff(&schema, &json!({"root": old_val}), &json!({"root": new_val})).unwrap();
+    let changes = diff(
+        &schema,
+        &json!({"root": old_val}),
+        &json!({"root": new_val}),
+    )
+    .unwrap();
     assert!(!changes.is_empty());
 }
 
@@ -641,13 +645,23 @@ fn node_equals_union_neither_matches_different() {
 #[test]
 fn node_equals_date_same() {
     let schema = t::date();
-    assert!(node_equals(&schema, &json!("2024-01-01T10:30:00Z"), &json!("2024-01-01T10:30:00Z")).unwrap());
+    assert!(node_equals(
+        &schema,
+        &json!("2024-01-01T10:30:00Z"),
+        &json!("2024-01-01T10:30:00Z")
+    )
+    .unwrap());
 }
 
 #[test]
 fn node_equals_date_different() {
     let schema = t::date();
-    assert!(!node_equals(&schema, &json!("2024-01-01T00:00:00Z"), &json!("2024-01-02T00:00:00Z")).unwrap());
+    assert!(!node_equals(
+        &schema,
+        &json!("2024-01-01T00:00:00Z"),
+        &json!("2024-01-02T00:00:00Z")
+    )
+    .unwrap());
 }
 
 #[test]

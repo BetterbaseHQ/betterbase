@@ -13,7 +13,9 @@ use less_db::{
         sqlite::SqliteBackend,
         traits::{StorageLifecycle, StorageRead, StorageSync, StorageWrite},
     },
-    types::{ApplyRemoteOptions, DeleteOptions, GetOptions, PatchOptions, PutOptions, RemoteRecord},
+    types::{
+        ApplyRemoteOptions, DeleteOptions, GetOptions, PatchOptions, PutOptions, RemoteRecord,
+    },
 };
 use serde_json::{json, Value};
 
@@ -47,7 +49,8 @@ fn make_adapter(def: &CollectionDef) -> ReactiveAdapter<SqliteBackend> {
     backend.initialize(&[def]).expect("backend initialize");
     let inner = Adapter::new(backend);
     let mut ra = ReactiveAdapter::new(inner);
-    ra.initialize(&[Arc::new(users_def())]).expect("reactive adapter initialize");
+    ra.initialize(&[Arc::new(users_def())])
+        .expect("reactive adapter initialize");
     ra
 }
 
@@ -66,7 +69,11 @@ fn observe_fires_callback_after_flush_with_current_record() {
     let ra = make_adapter(&def);
 
     let record = ra
-        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let calls: Arc<Mutex<Vec<Option<Value>>>> = make_log();
@@ -116,7 +123,11 @@ fn observe_fires_after_put_to_same_id() {
 
     // Create a record and observe it (fires once on registration)
     let record = ra
-        .put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Bob", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let calls: Arc<Mutex<Vec<Option<Value>>>> = make_log();
@@ -138,15 +149,26 @@ fn observe_fires_after_put_to_same_id() {
         session_id: Some(SID),
         ..Default::default()
     };
-    ra.put(&def, json!({ "name": "Bob Updated", "email": "b@x.com" }), &opts)
-        .expect("second put");
+    ra.put(
+        &def,
+        json!({ "name": "Bob Updated", "email": "b@x.com" }),
+        &opts,
+    )
+    .expect("second put");
 
     // flush is called automatically by put; wait_for_flush is a no-op here
     ra.wait_for_flush();
 
     let log = calls.lock().unwrap();
-    assert!(log.len() >= 2, "should have at least 2 calls (initial + after update)");
-    let last = log.last().unwrap().as_ref().expect("last call should be Some");
+    assert!(
+        log.len() >= 2,
+        "should have at least 2 calls (initial + after update)"
+    );
+    let last = log
+        .last()
+        .unwrap()
+        .as_ref()
+        .expect("last call should be Some");
     assert_eq!(last["name"], json!("Bob Updated"));
 }
 
@@ -156,7 +178,11 @@ fn observe_unsubscribe_stops_notifications() {
     let ra = make_adapter(&def);
 
     let record = ra
-        .put(&def, json!({ "name": "Carol", "email": "c@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Carol", "email": "c@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let calls: Arc<Mutex<Vec<Option<Value>>>> = make_log();
@@ -180,8 +206,12 @@ fn observe_unsubscribe_stops_notifications() {
         session_id: Some(SID),
         ..Default::default()
     };
-    ra.put(&def, json!({ "name": "Carol v2", "email": "c@x.com" }), &opts)
-        .expect("update");
+    ra.put(
+        &def,
+        json!({ "name": "Carol v2", "email": "c@x.com" }),
+        &opts,
+    )
+    .expect("update");
     ra.wait_for_flush();
 
     let count_after_unsub = calls.lock().unwrap().len();
@@ -203,10 +233,18 @@ fn observe_query_fires_callback_after_flush_with_current_results() {
     let def = users_def();
     let ra = make_adapter(&def);
 
-    ra.put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
-        .expect("put");
-    ra.put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
-        .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Alice", "email": "a@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Bob", "email": "b@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
 
     let calls: Arc<Mutex<Vec<ReactiveQueryResult>>> = make_log();
     let calls_clone = Arc::clone(&calls);
@@ -248,8 +286,12 @@ fn observe_query_fires_after_write_to_same_collection() {
     ra.wait_for_flush(); // initial: 0 records
 
     // Write a record — should trigger re-query
-    ra.put(&def, json!({ "name": "Dave", "email": "d@x.com" }), &put_opts())
-        .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Dave", "email": "d@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
     // flush is automatic after put
     ra.wait_for_flush();
 
@@ -283,8 +325,12 @@ fn observe_query_unsubscribe_stops_notifications() {
 
     unsub();
 
-    ra.put(&def, json!({ "name": "Eve", "email": "e@x.com" }), &put_opts())
-        .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Eve", "email": "e@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
     ra.wait_for_flush();
 
     let final_count = calls.lock().unwrap().len();
@@ -308,8 +354,12 @@ fn on_change_fires_on_put() {
 
     let _unsub = ra.on_change(move |e| events_clone.lock().unwrap().push(e.clone()));
 
-    ra.put(&def, json!({ "name": "Frank", "email": "f@x.com" }), &put_opts())
-        .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Frank", "email": "f@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
 
     let log = events.lock().unwrap();
     assert_eq!(log.len(), 1);
@@ -325,7 +375,11 @@ fn on_change_fires_on_delete() {
     let ra = make_adapter(&def);
 
     let record = ra
-        .put(&def, json!({ "name": "Grace", "email": "g@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Grace", "email": "g@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let events: Arc<Mutex<Vec<ChangeEvent>>> = make_log();
@@ -367,13 +421,21 @@ fn on_change_unsubscribe_stops_events() {
     let events_clone = Arc::clone(&events);
     let unsub = ra.on_change(move |e| events_clone.lock().unwrap().push(e.clone()));
 
-    ra.put(&def, json!({ "name": "Heidi", "email": "h@x.com" }), &put_opts())
-        .expect("first put");
+    ra.put(
+        &def,
+        json!({ "name": "Heidi", "email": "h@x.com" }),
+        &put_opts(),
+    )
+    .expect("first put");
 
     unsub();
 
-    ra.put(&def, json!({ "name": "Ivan", "email": "i@x.com" }), &put_opts())
-        .expect("second put");
+    ra.put(
+        &def,
+        json!({ "name": "Ivan", "email": "i@x.com" }),
+        &put_opts(),
+    )
+    .expect("second put");
 
     // Only one event (from first put) should be in the log
     assert_eq!(events.lock().unwrap().len(), 1);
@@ -389,7 +451,11 @@ fn get_proxies_to_inner_adapter() {
     let ra = make_adapter(&def);
 
     let record = ra
-        .put(&def, json!({ "name": "Judy", "email": "j@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Judy", "email": "j@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let fetched = ra
@@ -424,7 +490,11 @@ fn double_flush_is_safe_second_flush_is_no_op() {
     let count = calls.lock().unwrap().len();
 
     ra.flush(); // second flush — dirty set is empty, should not fire again
-    assert_eq!(calls.lock().unwrap().len(), count, "second flush should be a no-op");
+    assert_eq!(
+        calls.lock().unwrap().len(),
+        count,
+        "second flush should be a no-op"
+    );
 }
 
 #[test]
@@ -544,11 +614,18 @@ fn observe_query_before_initialize_fires_after_init() {
         None,
     );
 
-    assert!(calls.lock().unwrap().is_empty(), "should not fire before init");
+    assert!(
+        calls.lock().unwrap().is_empty(),
+        "should not fire before init"
+    );
 
     ra.initialize(&[Arc::new(users_def())]).expect("initialize");
 
-    assert_eq!(calls.lock().unwrap().len(), 1, "should fire once after init");
+    assert_eq!(
+        calls.lock().unwrap().len(),
+        1,
+        "should fire once after init"
+    );
 }
 
 // ============================================================================
@@ -575,8 +652,12 @@ fn on_change_callback_can_register_another_on_change() {
     });
 
     // This should NOT deadlock.
-    ra.put(&def, json!({ "name": "Reentrant", "email": "r@x.com" }), &put_opts())
-        .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Reentrant", "email": "r@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
 
     assert_eq!(events.lock().unwrap().len(), 1);
 }
@@ -598,7 +679,11 @@ fn panicking_on_change_does_not_prevent_flush() {
     let calls_clone = Arc::clone(&calls);
 
     let record = ra
-        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put should succeed");
 
     let _unsub2 = ra.observe(
@@ -610,7 +695,11 @@ fn panicking_on_change_does_not_prevent_flush() {
     ra.flush();
 
     // Observer should have received data despite on_change panicking
-    assert_eq!(calls.lock().unwrap().len(), 1, "flush must run even if on_change panics");
+    assert_eq!(
+        calls.lock().unwrap().len(),
+        1,
+        "flush must run even if on_change panics"
+    );
 }
 
 #[test]
@@ -805,12 +894,16 @@ fn patch_proxies_and_emits_change() {
     let ra = make_adapter(&def);
 
     let record = ra
-        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let events = make_log::<ChangeEvent>();
     let events_clone = events.clone();
-    ra.on_change(Box::new(move |event: &ChangeEvent| {
+    let _unsub = ra.on_change(Box::new(move |event: &ChangeEvent| {
         events_clone.lock().unwrap().push(event.clone());
     }));
 
@@ -837,10 +930,18 @@ fn bulk_patch_proxies_and_returns_results() {
     let ra = make_adapter(&def);
 
     let r1 = ra
-        .put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "A", "email": "a@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
     let r2 = ra
-        .put(&def, json!({ "name": "B", "email": "b@x.com" }), &put_opts())
+        .put(
+            &def,
+            json!({ "name": "B", "email": "b@x.com" }),
+            &put_opts(),
+        )
         .expect("put");
 
     let patch_opts = PatchOptions {
@@ -867,12 +968,24 @@ fn delete_many_proxies_and_emits_bulk_change() {
     let def = users_def();
     let ra = make_adapter(&def);
 
-    ra.put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
-        .expect("put");
-    ra.put(&def, json!({ "name": "Alice", "email": "a2@x.com" }), &put_opts())
-        .expect("put");
-    ra.put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
-        .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Alice", "email": "a@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Alice", "email": "a2@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Bob", "email": "b@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
 
     let result = ra
         .delete_many(&def, &json!({ "name": "Alice" }), &DeleteOptions::default())
@@ -889,12 +1002,24 @@ fn patch_many_proxies_and_returns_matched_updated_counts() {
     let def = users_def();
     let ra = make_adapter(&def);
 
-    ra.put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
-        .expect("put");
-    ra.put(&def, json!({ "name": "Alice", "email": "a2@x.com" }), &put_opts())
-        .expect("put");
-    ra.put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
-        .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Alice", "email": "a@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Alice", "email": "a2@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "Bob", "email": "b@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
 
     let patch_opts = PatchOptions {
         session_id: Some(SID),
@@ -922,10 +1047,18 @@ fn get_all_proxies_to_inner() {
     let def = users_def();
     let ra = make_adapter(&def);
 
-    ra.put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
-        .expect("put");
-    ra.put(&def, json!({ "name": "B", "email": "b@x.com" }), &put_opts())
-        .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "A", "email": "a@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "B", "email": "b@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
 
     let result = ra.get_all(&def, &Default::default()).expect("get_all");
     assert_eq!(result.records.len(), 2);
@@ -936,8 +1069,12 @@ fn count_proxies_to_inner() {
     let def = users_def();
     let ra = make_adapter(&def);
 
-    ra.put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
-        .expect("put");
+    ra.put(
+        &def,
+        json!({ "name": "A", "email": "a@x.com" }),
+        &put_opts(),
+    )
+    .expect("put");
 
     let count = ra.count(&def, None).expect("count");
     assert_eq!(count, 1);
@@ -960,7 +1097,7 @@ fn close_disposes_reactive_state() {
     let mut ra = make_adapter(&def);
     assert!(ra.is_initialized());
 
-    ra.close();
+    let _ = ra.close();
     // After close, operations should still work (close just disposes subscriptions)
     // The important thing is it doesn't panic
 }

@@ -202,6 +202,7 @@ pub enum DeleteResolution {
 // ============================================================================
 
 /// Options for put() operation
+#[derive(Default)]
 pub struct PutOptions {
     /// Override record ID instead of auto-generating
     pub id: Option<String>,
@@ -215,18 +216,6 @@ pub struct PutOptions {
     pub should_reset_sync_state: Option<Arc<dyn Fn(Option<&Value>, &Value) -> bool + Send + Sync>>,
 }
 
-impl Default for PutOptions {
-    fn default() -> Self {
-        Self {
-            id: None,
-            session_id: None,
-            skip_unique_check: false,
-            meta: None,
-            should_reset_sync_state: None,
-        }
-    }
-}
-
 impl std::fmt::Debug for PutOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PutOptions")
@@ -234,7 +223,10 @@ impl std::fmt::Debug for PutOptions {
             .field("session_id", &self.session_id)
             .field("skip_unique_check", &self.skip_unique_check)
             .field("meta", &self.meta)
-            .field("should_reset_sync_state", &self.should_reset_sync_state.as_ref().map(|_| "..."))
+            .field(
+                "should_reset_sync_state",
+                &self.should_reset_sync_state.as_ref().map(|_| "..."),
+            )
             .finish()
     }
 }
@@ -252,6 +244,7 @@ impl Clone for PutOptions {
 }
 
 /// Options for patch() operation
+#[derive(Default)]
 pub struct PatchOptions {
     pub id: String,
     pub session_id: Option<u64>,
@@ -261,18 +254,6 @@ pub struct PatchOptions {
     pub should_reset_sync_state: Option<Arc<dyn Fn(Option<&Value>, &Value) -> bool + Send + Sync>>,
 }
 
-impl Default for PatchOptions {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            session_id: None,
-            skip_unique_check: false,
-            meta: None,
-            should_reset_sync_state: None,
-        }
-    }
-}
-
 impl std::fmt::Debug for PatchOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PatchOptions")
@@ -280,7 +261,10 @@ impl std::fmt::Debug for PatchOptions {
             .field("session_id", &self.session_id)
             .field("skip_unique_check", &self.skip_unique_check)
             .field("meta", &self.meta)
-            .field("should_reset_sync_state", &self.should_reset_sync_state.as_ref().map(|_| "..."))
+            .field(
+                "should_reset_sync_state",
+                &self.should_reset_sync_state.as_ref().map(|_| "..."),
+            )
             .finish()
     }
 }

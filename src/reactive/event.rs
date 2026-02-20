@@ -7,15 +7,9 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChangeEvent {
     /// A single record was inserted or replaced.
-    Put {
-        collection: String,
-        id: String,
-    },
+    Put { collection: String, id: String },
     /// A single record was deleted (soft-deleted / tombstoned).
-    Delete {
-        collection: String,
-        id: String,
-    },
+    Delete { collection: String, id: String },
     /// Multiple records in a collection were written in bulk.
     Bulk {
         collection: String,

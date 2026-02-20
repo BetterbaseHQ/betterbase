@@ -171,7 +171,11 @@ mod tests {
     fn generate_session_id_is_unique() {
         let ids: std::collections::HashSet<u64> =
             (0..1000).map(|_| generate_session_id()).collect();
-        assert_eq!(ids.len(), 1000, "1000 generated session IDs should all be unique");
+        assert_eq!(
+            ids.len(),
+            1000,
+            "1000 generated session IDs should all be unique"
+        );
     }
 
     #[test]

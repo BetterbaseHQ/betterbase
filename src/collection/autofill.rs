@@ -198,7 +198,10 @@ fn autofill_node(
             (Some(map), SchemaNode::Object(inner_props)) => {
                 let mut result = Map::new();
                 for (k, v) in map {
-                    result.insert(k.clone(), autofill_inner(inner_props, v, opts, now, depth + 1));
+                    result.insert(
+                        k.clone(),
+                        autofill_inner(inner_props, v, opts, now, depth + 1),
+                    );
                 }
                 Value::Object(result)
             }

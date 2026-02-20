@@ -70,11 +70,7 @@ pub trait StorageBackend: Send + Sync {
 
     /// Scan records using an index. Returns `None` if the backend cannot
     /// execute this particular scan (falls back to full scan).
-    fn scan_index_raw(
-        &self,
-        collection: &str,
-        scan: &IndexScan,
-    ) -> Result<Option<RawBatchResult>>;
+    fn scan_index_raw(&self, collection: &str, scan: &IndexScan) -> Result<Option<RawBatchResult>>;
 
     /// Count records using an index scan. Returns `None` if unsupported.
     fn count_index_raw(&self, collection: &str, scan: &IndexScan) -> Result<Option<usize>>;
