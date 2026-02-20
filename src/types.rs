@@ -119,6 +119,8 @@ pub struct ApplyRemoteResult {
     pub applied: Vec<ApplyRemoteRecordResult>,
     pub errors: Vec<RecordError>,
     pub new_sequence: i64,
+    /// Number of records that required CRDT merge (dirty local + live remote)
+    pub merged_count: usize,
 }
 
 /// Individual record result from applying remote changes
@@ -127,6 +129,8 @@ pub struct ApplyRemoteRecordResult {
     pub id: String,
     pub action: RemoteAction,
     pub record: Option<StoredRecordWithMeta>,
+    /// Previous data before applying remote change (for remote delete events)
+    pub previous_data: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

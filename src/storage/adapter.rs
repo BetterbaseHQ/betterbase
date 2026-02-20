@@ -23,7 +23,7 @@ use crate::{
             migrate_and_deserialize, prepare_delete, prepare_mark_synced,
             prepare_new, prepare_patch,
         },
-        remote_changes::{apply_remote_decisions, process_remote_record},
+        remote_changes::{apply_remote_decisions, process_remote_record, RemoteDecision},
         traits::{StorageBackend, StorageLifecycle, StorageRead, StorageSync, StorageWrite},
     },
     types::{
@@ -856,6 +856,10 @@ impl<B: StorageBackend> StorageSync for Adapter<B> {
 
         let mut decisions = Vec::new();
         let mut new_sequence: i64 = 0;
+        let mut merged_count: usize = 0;
+        // Track previous data for remote delete events
+        let mut previous_data_map: std::collections::HashMap<String, Value> =
+            std::collections::HashMap::new();
 
         for remote in records {
             // Track max sequence
@@ -865,19 +869,42 @@ impl<B: StorageBackend> StorageSync for Adapter<B> {
 
             let local = self.backend.get_raw(&def.name, &remote.id)?;
 
+            // Capture previous data before applying tombstones
+            if remote.deleted {
+                if let Some(ref local_rec) = local {
+                    if !local_rec.deleted {
+                        previous_data_map
+                            .insert(remote.id.clone(), local_rec.data.clone());
+                    }
+                }
+            }
+
             let decision =
                 process_remote_record(def, local.as_ref(), remote, &strategy, received_at)?;
+
+            // Track merges (Case 10: dirty alive + remote live → CRDT merge)
+            if matches!(&decision.0, RemoteDecision::Merge(_)) {
+                merged_count += 1;
+            }
 
             decisions.push(decision);
         }
 
         let mut put_fn = |record: &SerializedRecord| self.backend.put_raw(record);
-        let (applied, errors) = apply_remote_decisions(decisions, &mut put_fn);
+        let (mut applied, errors) = apply_remote_decisions(decisions, &mut put_fn);
+
+        // Populate previous_data for delete results
+        for result in &mut applied {
+            if let Some(prev) = previous_data_map.remove(&result.id) {
+                result.previous_data = Some(prev);
+            }
+        }
 
         Ok(ApplyRemoteResult {
             applied,
             errors,
             new_sequence,
+            merged_count,
         })
     }
 

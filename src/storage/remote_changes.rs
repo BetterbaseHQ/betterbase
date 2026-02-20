@@ -243,6 +243,7 @@ pub fn apply_remote_decisions(
                             id,
                             action,
                             record: None, // caller can enrich this
+                            previous_data: None, // populated by adapter
                         });
                     }
                     Err(e) => {
