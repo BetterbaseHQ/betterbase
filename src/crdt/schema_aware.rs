@@ -151,8 +151,8 @@ fn unwrap_field_from_crdt(schema: &SchemaNode, value: &Value) -> Value {
         SchemaNode::Date | SchemaNode::CreatedAt | SchemaNode::UpdatedAt => {
             // Epoch-ms number → ISO string
             if let Some(ms) = value.as_i64() {
-                let secs = ms / 1000;
-                let nsecs = ((ms % 1000) * 1_000_000) as u32;
+                let secs = ms.div_euclid(1000);
+                let nsecs = (ms.rem_euclid(1000) * 1_000_000) as u32;
                 if let Some(dt) = chrono::DateTime::from_timestamp(secs, nsecs) {
                     return Value::String(dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
                 }
@@ -375,6 +375,12 @@ fn json_to_pack(v: &Value) -> PackValue {
 /// - Con replacement for con node mismatches (atomic fields)
 /// - Per-key ops for object changes
 /// - Positional RGA ops for array changes
+///
+/// IMPORTANT: The model must have been created with `create_model_with_schema`
+/// so that atomic string fields are con nodes (not str nodes). `diff_node`
+/// infers the operation type from the existing node type in the tree —
+/// if an atomic field were a str node, the diff would produce character-level
+/// RGA edits instead of LWW replacement, corrupting merge semantics.
 pub fn diff_model_with_schema(
     model: &Model,
     new_data: &Value,
@@ -530,6 +536,42 @@ mod tests {
     // ── Roundtrip through model creation ────────────────────────────────
 
     #[test]
+    fn deserialize_handles_negative_epoch_ms() {
+        // Pre-1970 date: 1960-01-01T00:00:00.000Z = -315619200000 ms
+        let schema = test_schema();
+        let view = json!({
+            "id": "abc",
+            "title": "Hello",
+            "body": "World",
+            "label": "tag",
+            "score": 42,
+            "createdAt": -315619200000_i64,
+            "updatedAt": -315619200000_i64
+        });
+
+        let result = deserialize_from_crdt(&schema, &view);
+        // Should be a valid ISO string, not a raw number
+        assert_eq!(
+            result["createdAt"].as_str().expect("should be ISO string"),
+            "1960-01-01T00:00:00.000Z"
+        );
+    }
+
+    #[test]
+    fn deserialize_handles_negative_epoch_ms_with_fractional() {
+        // Pre-1970 with non-zero milliseconds: -500 ms = 1969-12-31T23:59:59.500Z
+        let mut schema = BTreeMap::new();
+        schema.insert("date".to_string(), SchemaNode::Date);
+
+        let view = json!({"date": -500_i64});
+        let result = deserialize_from_crdt(&schema, &view);
+        assert_eq!(
+            result["date"].as_str().expect("should be ISO string"),
+            "1969-12-31T23:59:59.500Z"
+        );
+    }
+
+    #[test]
     fn roundtrip_through_model_creation() {
         let schema = test_schema();
         let data = json!({
@@ -661,6 +703,132 @@ mod tests {
         } else {
             panic!("root should be an object node");
         }
+    }
+
+    // ── Nested schema types ──────────────────────────────────────────────
+
+    #[test]
+    fn roundtrip_nested_object_with_dates() {
+        let mut inner = BTreeMap::new();
+        inner.insert("label".to_string(), SchemaNode::String);
+        inner.insert("due".to_string(), SchemaNode::Date);
+
+        let mut schema = BTreeMap::new();
+        schema.insert("id".to_string(), SchemaNode::Key);
+        schema.insert("task".to_string(), SchemaNode::Object(inner));
+
+        let data = json!({
+            "id": "t1",
+            "task": {
+                "label": "Buy milk",
+                "due": "2024-06-01T12:00:00.000Z"
+            }
+        });
+
+        let model = create_model_with_schema(&data, MIN_SESSION_ID, &schema)
+            .expect("create should work");
+        let view = view_model(&model);
+        let result = deserialize_from_crdt(&schema, &view);
+
+        assert_eq!(result["task"]["label"], "Buy milk");
+        assert_eq!(result["task"]["due"], "2024-06-01T12:00:00.000Z");
+    }
+
+    #[test]
+    fn roundtrip_array_of_dates() {
+        let mut schema = BTreeMap::new();
+        schema.insert("id".to_string(), SchemaNode::Key);
+        schema.insert(
+            "dates".to_string(),
+            SchemaNode::Array(Box::new(SchemaNode::Date)),
+        );
+
+        let data = json!({
+            "id": "d1",
+            "dates": ["2024-01-01T00:00:00.000Z", "2024-06-15T12:30:00.000Z"]
+        });
+
+        let model = create_model_with_schema(&data, MIN_SESSION_ID, &schema)
+            .expect("create should work");
+        let view = view_model(&model);
+        let result = deserialize_from_crdt(&schema, &view);
+
+        let dates = result["dates"].as_array().unwrap();
+        assert_eq!(dates.len(), 2);
+        assert_eq!(dates[0], "2024-01-01T00:00:00.000Z");
+        assert_eq!(dates[1], "2024-06-15T12:30:00.000Z");
+    }
+
+    #[test]
+    fn roundtrip_record_map_with_dates() {
+        let mut schema = BTreeMap::new();
+        schema.insert("id".to_string(), SchemaNode::Key);
+        schema.insert(
+            "events".to_string(),
+            SchemaNode::Record(Box::new(SchemaNode::Date)),
+        );
+
+        let data = json!({
+            "id": "e1",
+            "events": {
+                "start": "2024-01-01T09:00:00.000Z",
+                "end": "2024-01-01T17:00:00.000Z"
+            }
+        });
+
+        let model = create_model_with_schema(&data, MIN_SESSION_ID, &schema)
+            .expect("create should work");
+        let view = view_model(&model);
+        let result = deserialize_from_crdt(&schema, &view);
+
+        assert_eq!(result["events"]["start"], "2024-01-01T09:00:00.000Z");
+        assert_eq!(result["events"]["end"], "2024-01-01T17:00:00.000Z");
+    }
+
+    #[test]
+    fn roundtrip_optional_date() {
+        let mut schema = BTreeMap::new();
+        schema.insert("id".to_string(), SchemaNode::Key);
+        schema.insert(
+            "deadline".to_string(),
+            SchemaNode::Optional(Box::new(SchemaNode::Date)),
+        );
+
+        // With date
+        let data = json!({"id": "o1", "deadline": "2024-03-15T00:00:00.000Z"});
+        let model = create_model_with_schema(&data, MIN_SESSION_ID, &schema).unwrap();
+        let result = deserialize_from_crdt(&schema, &view_model(&model));
+        assert_eq!(result["deadline"], "2024-03-15T00:00:00.000Z");
+
+        // With null
+        let data = json!({"id": "o2", "deadline": null});
+        let model = create_model_with_schema(&data, MIN_SESSION_ID, &schema).unwrap();
+        let result = deserialize_from_crdt(&schema, &view_model(&model));
+        assert!(result["deadline"].is_null());
+    }
+
+    #[test]
+    fn roundtrip_bytes_field() {
+        let mut schema = BTreeMap::new();
+        schema.insert("id".to_string(), SchemaNode::Key);
+        schema.insert("data".to_string(), SchemaNode::Bytes);
+
+        let data = json!({"id": "b1", "data": "SGVsbG8gV29ybGQ="});
+        let model = create_model_with_schema(&data, MIN_SESSION_ID, &schema).unwrap();
+        let result = deserialize_from_crdt(&schema, &view_model(&model));
+        assert_eq!(result["data"], "SGVsbG8gV29ybGQ=");
+    }
+
+    #[test]
+    fn roundtrip_empty_text_field() {
+        let mut schema = BTreeMap::new();
+        schema.insert("id".to_string(), SchemaNode::Key);
+        schema.insert("body".to_string(), SchemaNode::Text);
+
+        let data = json!({"id": "t1", "body": ""});
+        let model = create_model_with_schema(&data, MIN_SESSION_ID, &schema).unwrap();
+        let result = deserialize_from_crdt(&schema, &view_model(&model));
+        assert_eq!(result["body"], "");
     }
 
     // ── Schema-aware diff ───────────────────────────────────────────────

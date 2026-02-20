@@ -310,7 +310,7 @@ fn records_equal(
 // Union variant matching
 // ============================================================================
 
-fn matches_variant(schema: &SchemaNode, value: &Value) -> bool {
+pub(crate) fn matches_variant(schema: &SchemaNode, value: &Value) -> bool {
     match schema {
         SchemaNode::String | SchemaNode::Text | SchemaNode::Key => matches!(value, Value::String(_)),
         SchemaNode::Number => matches!(value, Value::Number(_)),

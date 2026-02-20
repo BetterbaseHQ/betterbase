@@ -402,6 +402,114 @@ fn handles_typical_document_schema() {
 }
 
 // ============================================================================
+// Extra fields stripped (matching JS behavior)
+// ============================================================================
+
+#[test]
+fn strips_extra_fields_not_in_schema() {
+    let s = schema(&[
+        ("id", key_schema()),
+        ("name", t::string()),
+    ]);
+    let result = autofill(
+        &s,
+        &json!({ "name": "John", "extra_field": "should be stripped", "another": 42 }),
+        &AutofillOptions::default(),
+    );
+
+    assert_eq!(result["name"], "John");
+    assert!(result["id"].as_str().is_some_and(|s| !s.is_empty()));
+    assert!(result.get("extra_field").is_none());
+    assert!(result.get("another").is_none());
+}
+
+#[test]
+fn strips_extra_fields_in_nested_objects() {
+    let mut inner_props = BTreeMap::new();
+    inner_props.insert("name".to_string(), t::string());
+
+    let s = schema(&[
+        ("nested", t::object(inner_props)),
+    ]);
+    let result = autofill(
+        &s,
+        &json!({ "nested": { "name": "John", "extra": "gone" } }),
+        &AutofillOptions::default(),
+    );
+
+    assert_eq!(result["nested"]["name"], "John");
+    assert!(result["nested"].get("extra").is_none());
+}
+
+// ============================================================================
+// Union variant matching with discriminated unions
+// ============================================================================
+
+#[test]
+fn autofills_first_matching_variant_in_union() {
+    // Both variants are objects, so matchesVariant matches the first one
+    // for any object value (same as JS behavior)
+    let mut user_props = BTreeMap::new();
+    user_props.insert("type".to_string(), t::literal_str("user"));
+    user_props.insert("id".to_string(), key_schema());
+    user_props.insert("name".to_string(), t::string());
+
+    let mut group_props = BTreeMap::new();
+    group_props.insert("type".to_string(), t::literal_str("group"));
+    group_props.insert("id".to_string(), key_schema());
+    group_props.insert("title".to_string(), t::string());
+
+    let s = schema(&[(
+        "item",
+        t::union(vec![t::object(user_props), t::object(group_props)]),
+    )]);
+
+    // With a user-typed object: matches first variant, fills user schema
+    let result = autofill(
+        &s,
+        &json!({ "item": { "type": "user", "name": "John" } }),
+        &AutofillOptions::default(),
+    );
+    let id = result["item"]["id"].as_str().unwrap();
+    assert!(!id.is_empty());
+    assert_eq!(result["item"]["type"], "user");
+    assert_eq!(result["item"]["name"], "John");
+}
+
+#[test]
+fn union_with_scalar_variants_passes_through() {
+    let s = schema(&[(
+        "value",
+        t::union(vec![t::string(), t::number()]),
+    )]);
+
+    let result = autofill(
+        &s,
+        &json!({ "value": 42 }),
+        &opts_with_now("2024-01-01T00:00:00Z"),
+    );
+    assert_eq!(result["value"], 42);
+
+    let result = autofill(
+        &s,
+        &json!({ "value": "hello" }),
+        &opts_with_now("2024-01-01T00:00:00Z"),
+    );
+    assert_eq!(result["value"], "hello");
+}
+
+// ============================================================================
+// Non-object data
+// ============================================================================
+
+#[test]
+fn non_object_data_returns_as_is() {
+    let s = schema(&[("name", t::string())]);
+    let result = autofill(&s, &json!("just a string"), &AutofillOptions::default());
+    assert_eq!(result, json!("just a string"));
+}
+
+// ============================================================================
 // Depth Limits
 // ============================================================================
 

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
+use crate::patch::diff::matches_variant;
 use crate::schema::node::SchemaNode;
 
 // ============================================================================
@@ -63,7 +64,11 @@ pub fn autofill(
     data: &Value,
     opts: &AutofillOptions,
 ) -> Value {
-    autofill_inner(schema, data, opts, 0)
+    let now = opts
+        .now
+        .clone()
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    autofill_inner(schema, data, opts, &now, 0)
 }
 
 /// Auto-fill for updates: preserves createdAt (if present), always updates updatedAt.
@@ -73,12 +78,16 @@ pub fn autofill_for_update(
     data: &Value,
     opts: &AutofillOptions,
 ) -> Value {
+    let now = opts
+        .now
+        .clone()
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     let update_opts = AutofillOptions {
-        now: opts.now.clone(),
+        now: None, // not read; now passed separately to autofill_inner
         is_new: false,
         generate_key: opts.generate_key.clone(), // Arc clones are cheap
     };
-    autofill_inner(schema, data, &update_opts, 0)
+    autofill_inner(schema, data, &update_opts, &now, 0)
 }
 
 // ============================================================================
@@ -91,16 +100,12 @@ fn autofill_inner(
     schema: &BTreeMap<String, SchemaNode>,
     data: &Value,
     opts: &AutofillOptions,
+    now: &str,
     depth: usize,
 ) -> Value {
     if depth > MAX_DEPTH {
         panic!("Maximum autofill depth exceeded");
     }
-
-    let now = opts
-        .now
-        .clone()
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
     let data_obj = match data.as_object() {
         Some(o) => o,
@@ -109,17 +114,10 @@ fn autofill_inner(
 
     let mut result = Map::new();
 
-    // Preserve fields from data that are not in schema
-    for (k, v) in data_obj {
-        if !schema.contains_key(k) {
-            result.insert(k.clone(), v.clone());
-        }
-    }
-
-    // Walk schema fields and autofill
+    // Walk schema fields and autofill (matching JS: only schema fields are included)
     for (field, node) in schema {
         let current_value = data_obj.get(field).unwrap_or(&Value::Null);
-        let filled = autofill_node(node, current_value, opts, &now, depth);
+        let filled = autofill_node(node, current_value, opts, now, depth);
         result.insert(field.clone(), filled);
     }
 
@@ -169,7 +167,7 @@ fn autofill_node(
 
         SchemaNode::Object(props) => {
             if value.is_object() {
-                autofill_inner(props, value, opts, depth + 1)
+                autofill_inner(props, value, opts, now, depth + 1)
             } else {
                 value.clone()
             }
@@ -180,7 +178,7 @@ fn autofill_node(
                 (Some(arr), SchemaNode::Object(inner_props)) => {
                     let filled: Vec<Value> = arr
                         .iter()
-                        .map(|item| autofill_inner(inner_props, item, opts, depth + 1))
+                        .map(|item| autofill_inner(inner_props, item, opts, now, depth + 1))
                         .collect();
                     Value::Array(filled)
                 }
@@ -200,7 +198,7 @@ fn autofill_node(
             (Some(map), SchemaNode::Object(inner_props)) => {
                 let mut result = Map::new();
                 for (k, v) in map {
-                    result.insert(k.clone(), autofill_inner(inner_props, v, opts, depth + 1));
+                    result.insert(k.clone(), autofill_inner(inner_props, v, opts, now, depth + 1));
                 }
                 Value::Object(result)
             }
@@ -224,20 +222,13 @@ fn autofill_node(
         }
 
         SchemaNode::Union(variants) => {
-            // Try each Object variant; use the first that structurally matches
+            // Use matches_variant to find the correct variant (matches JS behavior)
             for variant in variants {
-                if let SchemaNode::Object(props) = variant {
-                    if value.is_object() {
-                        return autofill_inner(props, value, opts, depth + 1);
-                    }
-                }
-            }
-            // No matching Object variant — try non-Object variants
-            for variant in variants {
-                if !matches!(variant, SchemaNode::Object(_)) {
+                if matches_variant(variant, value) {
                     return autofill_node(variant, value, opts, now, depth + 1);
                 }
             }
+            // No match found — return as-is
             value.clone()
         }
 
