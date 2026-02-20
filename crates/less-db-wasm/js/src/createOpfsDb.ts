@@ -55,9 +55,9 @@ export async function createOpfsDb(
   const rpc = new WorkerRpc(options.worker);
 
   // Worker self-initializes when it calls initOpfsWorker() from user's entry point.
-  // We send "open" with the dbName to trigger the actual DB setup.
+  // We send "open" with the dbName to trigger WASM load + SQLite init.
+  // The response signals the worker is ready for subsequent RPC calls.
   await rpc.call("open", [dbName]);
-  await rpc.waitReady();
 
   return new OpfsDb(rpc, collections);
 }

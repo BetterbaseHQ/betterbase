@@ -6,7 +6,9 @@
 //! SQLite runs entirely inside the Rust WASM module via sqlite-wasm-rs.
 //! Zero Rust↔JS boundary crossings for storage operations.
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -53,6 +55,8 @@ impl WasmDb {
     /// After this, all storage operations are synchronous with zero JS↔WASM
     /// boundary crossings.
     pub async fn create(db_name: &str) -> Result<WasmDb, JsValue> {
+        console_error_panic_hook::set_once();
+
         use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfg};
 
         // Install the OPFS SAH Pool VFS (async — needs OPFS access handles)
@@ -313,9 +317,7 @@ impl WasmDb {
             None,
         );
 
-        let unsub_fn = Closure::once_into_js(move || {
-            unsub();
-        });
+        let unsub_fn = idempotent_unsub(unsub);
         Ok(unsub_fn)
     }
 
@@ -348,9 +350,7 @@ impl WasmDb {
             None,
         );
 
-        let unsub_fn = Closure::once_into_js(move || {
-            unsub();
-        });
+        let unsub_fn = idempotent_unsub(unsub);
         Ok(unsub_fn)
     }
 
@@ -362,9 +362,7 @@ impl WasmDb {
             call_change_callback(&cb, event);
         });
 
-        Closure::once_into_js(move || {
-            unsub();
-        })
+        idempotent_unsub(unsub)
     }
 
     // ========================================================================
@@ -455,6 +453,24 @@ impl WasmDb {
             ))
         })
     }
+}
+
+/// Wrap an unsubscribe closure so that calling it multiple times is safe.
+/// `Closure::once_into_js` would trap on the second call; this uses
+/// `Closure::wrap` with an idempotency guard instead.
+fn idempotent_unsub(unsub: Box<dyn FnOnce()>) -> JsValue {
+    let called = Rc::new(Cell::new(false));
+    // Move the FnOnce into an Option so we can take() it exactly once.
+    let unsub = Rc::new(RefCell::new(Some(unsub)));
+    let closure = Closure::wrap(Box::new(move || {
+        if !called.get() {
+            called.set(true);
+            if let Some(f) = unsub.borrow_mut().take() {
+                f();
+            }
+        }
+    }) as Box<dyn FnMut()>);
+    closure.into_js_value()
 }
 
 /// Send+Sync wrapper for JS callbacks in single-threaded WASM.

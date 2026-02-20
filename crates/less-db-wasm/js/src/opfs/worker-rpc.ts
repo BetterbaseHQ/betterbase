@@ -68,6 +68,12 @@ export class WorkerRpc {
       this.readyReject(error);
       this.rejectAll(error);
     };
+
+    this.worker.onmessageerror = () => {
+      const error = new Error("Worker message serialization failed (structured clone error)");
+      this.readyReject(error);
+      this.rejectAll(error);
+    };
   }
 
   /** Wait for the worker to signal it's ready. */

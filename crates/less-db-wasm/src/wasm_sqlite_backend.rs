@@ -224,32 +224,25 @@ impl WasmSqliteBackend {
     ///
     /// Accepts `&RawStatement` so it works with both `Statement` (dynamic SQL)
     /// and `CachedStatement` (cached SQL) via their `.raw()` accessor.
-    ///
-    /// # Safety invariant
-    ///
-    /// `column_text` borrows from SQLite's internal buffer and is valid only
-    /// until the next step/reset/column call on this statement. Each
-    /// `serde_json::from_str` call below consumes the borrowed `&str` into an
-    /// owned `Value` before any subsequent column access.
     fn read_record(stmt: &RawStatement<'_>) -> less_db::error::Result<SerializedRecord> {
-        let data: Value = serde_json::from_str(stmt.column_text(3))
+        let data: Value = serde_json::from_str(&stmt.column_text(3))
             .map_err(|e| LessDbError::Internal(format!("Failed to parse record data: {e}")))?;
         let meta: Option<Value> =
             match stmt.column_type(10) {
                 ColumnType::Null => None,
-                _ => Some(serde_json::from_str(stmt.column_text(10)).map_err(|e| {
+                _ => Some(serde_json::from_str(&stmt.column_text(10)).map_err(|e| {
                     LessDbError::Internal(format!("Failed to parse record meta: {e}"))
                 })?),
             };
         let computed: Option<Value> = match stmt.column_type(11) {
             ColumnType::Null => None,
-            _ => Some(serde_json::from_str(stmt.column_text(11)).map_err(|e| {
+            _ => Some(serde_json::from_str(&stmt.column_text(11)).map_err(|e| {
                 LessDbError::Internal(format!("Failed to parse record computed: {e}"))
             })?),
         };
 
-        let id = stmt.column_string(0);
-        let collection = stmt.column_string(1);
+        let id = stmt.column_text(0);
+        let collection = stmt.column_text(1);
         let version = stmt.column_int64(2) as u32;
         let crdt = stmt.column_blob(4);
         let pending_patches = stmt.column_blob(5);
@@ -258,7 +251,7 @@ impl WasmSqliteBackend {
         let deleted = stmt.column_int64(8) != 0;
         let deleted_at = match stmt.column_type(9) {
             ColumnType::Null => None,
-            _ => Some(stmt.column_string(9)),
+            _ => Some(stmt.column_text(9)),
         };
 
         Ok(SerializedRecord {
@@ -595,6 +588,9 @@ impl StorageBackend for WasmSqliteBackend {
 
         let mut params: Vec<SqlParam> = vec![SqlParam::Text(collection.to_string())];
 
+        // Deterministic ordering for pagination with LIMIT/OFFSET.
+        sql.push_str(" ORDER BY id");
+
         if let Some(limit) = options.limit {
             sql.push_str(" LIMIT ?");
             params.push(SqlParam::Int64(limit as i64));
@@ -706,7 +702,7 @@ impl StorageBackend for WasmSqliteBackend {
         stmt.bind_text(1, key).map_err(storage_err)?;
 
         match stmt.step().map_err(storage_err)? {
-            StepResult::Row => Ok(Some(stmt.column_string(0))),
+            StepResult::Row => Ok(Some(stmt.column_text(0))),
             StepResult::Done => Ok(None),
         }
     }
@@ -814,7 +810,7 @@ impl StorageBackend for WasmSqliteBackend {
 
         let mut entries = Vec::new();
         while let StepResult::Row = stmt.step().map_err(storage_err)? {
-            entries.push((stmt.column_string(0), stmt.column_string(1)));
+            entries.push((stmt.column_text(0), stmt.column_text(1)));
         }
         Ok(entries)
     }
@@ -871,7 +867,7 @@ impl StorageBackend for WasmSqliteBackend {
                 }
 
                 if let StepResult::Row = stmt.raw_mut().step().map_err(storage_err)? {
-                    let eid = stmt.raw().column_string(0);
+                    let eid = stmt.raw().column_text(0);
                     let conflict_value = if fi.fields.len() == 1 {
                         obj.and_then(|o| o.get(&fi.fields[0].field))
                             .cloned()
@@ -946,7 +942,7 @@ impl StorageBackend for WasmSqliteBackend {
                 }
 
                 if let StepResult::Row = stmt.raw_mut().step().map_err(storage_err)? {
-                    let eid = stmt.raw().column_string(0);
+                    let eid = stmt.raw().column_text(0);
                     let conflict_value = field_val.cloned().unwrap_or(Value::Null);
                     return Err(StorageError::UniqueConstraint {
                         collection: collection.to_string(),

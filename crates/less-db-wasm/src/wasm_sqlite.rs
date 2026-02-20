@@ -10,7 +10,7 @@
 //! `!Send + !Sync` — callers that need `StorageBackend`'s `Send + Sync`
 //! bound should wrap it (see `WasmSqliteBackend`).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::marker::PhantomData;
@@ -131,28 +131,20 @@ impl<'conn> RawStatement<'conn> {
         }
     }
 
-    /// Get a text column as a borrowed `&str`. `idx` is 0-based.
+    /// Get a text column as an owned `String`. `idx` is 0-based.
     ///
-    /// # Safety invariant
-    ///
-    /// The returned `&str` borrows from SQLite's internal buffer. Per SQLite docs,
-    /// the pointer is valid only until the next `sqlite3_step`, `sqlite3_reset`,
-    /// or `sqlite3_column_*` call on this statement. The Rust lifetime ties it to
-    /// `&self` which is a weaker guarantee — callers MUST consume the result
-    /// immediately before calling any other method on this statement.
-    pub(crate) fn column_text(&self, idx: c_int) -> &str {
+    /// Returns an owned copy to avoid lifetime unsoundness — SQLite's internal
+    /// buffer is invalidated by subsequent `sqlite3_step`, `sqlite3_reset`, or
+    /// `sqlite3_column_*` calls, which Rust lifetimes cannot enforce.
+    pub(crate) fn column_text(&self, idx: c_int) -> String {
         unsafe {
             let ptr = ffi::sqlite3_column_text(self.raw, idx);
             if ptr.is_null() {
-                return "";
+                return String::new();
             }
             let c_str = CStr::from_ptr(ptr as *const c_char);
-            c_str.to_str().unwrap_or("")
+            c_str.to_str().unwrap_or("").to_string()
         }
-    }
-
-    pub(crate) fn column_string(&self, idx: c_int) -> String {
-        self.column_text(idx).to_string()
     }
 
     pub(crate) fn column_int64(&self, idx: c_int) -> i64 {
@@ -218,6 +210,8 @@ pub struct Connection {
     /// Cached compiled statements keyed by SQL string.
     /// Avoids re-running sqlite3_prepare_v2 for repeated queries.
     stmt_cache: RefCell<HashMap<String, *mut ffi::sqlite3_stmt>>,
+    /// Set to true after `close()` to prevent `Drop` from double-closing.
+    closed: Cell<bool>,
     /// Prevent Send + Sync (sqlite-wasm-rs is single-threaded).
     _marker: PhantomData<*mut ()>,
 }
@@ -259,6 +253,7 @@ impl Connection {
         Ok(Connection {
             raw: db,
             stmt_cache: RefCell::new(HashMap::new()),
+            closed: Cell::new(false),
             _marker: PhantomData,
         })
     }
@@ -399,21 +394,30 @@ impl Connection {
     }
 
     /// Close the connection. Consumes self.
+    ///
+    /// Finalizes all cached statements and closes the SQLite handle.
+    /// `Drop` will run afterward but is a no-op once `closed` is set.
     pub fn close(self) -> Result<()> {
-        // Drain and finalize all cached statements before closing.
-        // Using borrow_mut().drain() instead of borrow().iter() ensures the
-        // HashMap allocation is freed before mem::forget leaks `self`.
-        {
-            let mut cache = self.stmt_cache.borrow_mut();
-            for (_, stmt) in cache.drain() {
-                if !stmt.is_null() {
-                    unsafe { ffi::sqlite3_finalize(stmt) };
-                }
+        self.finalize_and_close()
+    }
+
+    /// Shared close logic used by both `close()` and `Drop`.
+    fn finalize_and_close(&self) -> Result<()> {
+        if self.closed.get() {
+            return Ok(());
+        }
+        self.closed.set(true);
+
+        // Finalize all cached statements before closing.
+        let mut cache = self.stmt_cache.borrow_mut();
+        for (_, stmt) in cache.drain() {
+            if !stmt.is_null() {
+                unsafe { ffi::sqlite3_finalize(stmt) };
             }
         }
+        drop(cache);
+
         let rc = unsafe { ffi::sqlite3_close(self.raw) };
-        // Prevent Drop from double-closing
-        std::mem::forget(self);
         if rc != ffi::SQLITE_OK {
             return Err(SqliteError {
                 code: rc,
@@ -426,15 +430,8 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        // Finalize all cached statements before closing the connection
-        for (_, stmt) in self.stmt_cache.borrow().iter() {
-            if !stmt.is_null() {
-                unsafe { ffi::sqlite3_finalize(*stmt) };
-            }
-        }
-        if !self.raw.is_null() {
-            unsafe { ffi::sqlite3_close(self.raw) };
-        }
+        // No-op if close() was already called.
+        let _ = self.finalize_and_close();
     }
 }
 
@@ -472,8 +469,8 @@ impl<'conn> Statement<'conn> {
     pub fn step(&mut self) -> Result<StepResult> {
         self.0.step()
     }
-    pub fn column_string(&self, idx: c_int) -> String {
-        self.0.column_string(idx)
+    pub fn column_text(&self, idx: c_int) -> String {
+        self.0.column_text(idx)
     }
     pub fn column_int64(&self, idx: c_int) -> i64 {
         self.0.column_int64(idx)
@@ -541,8 +538,8 @@ impl<'conn> CachedStatement<'conn> {
     pub fn step(&mut self) -> Result<StepResult> {
         self.0.step()
     }
-    pub fn column_string(&self, idx: c_int) -> String {
-        self.0.column_string(idx)
+    pub fn column_text(&self, idx: c_int) -> String {
+        self.0.column_text(idx)
     }
     pub fn column_int64(&self, idx: c_int) -> i64 {
         self.0.column_int64(idx)

@@ -18,7 +18,7 @@
 
 import type { CollectionDefHandle, CollectionBlueprint } from "../types.js";
 import { BLUEPRINT } from "../types.js";
-import type { MainToWorkerMessage, WorkerReady, WorkerResponse } from "./types.js";
+import type { MainToWorkerMessage, WorkerResponse } from "./types.js";
 import { OpfsWorkerHost } from "./OpfsWorkerHost.js";
 
 export function initOpfsWorker(collections: CollectionDefHandle[]): void {
@@ -80,13 +80,11 @@ export function initOpfsWorker(collections: CollectionDefHandle[]): void {
       // Switch to the OpfsWorkerHost for all subsequent messages.
       new OpfsWorkerHost(wasm);
 
-      // Respond to the open request
+      // Respond to the open request — this also signals ready.
+      // (No separate "ready" message needed; the open response resolves the
+      // main thread's createOpfsDb promise.)
       const response: WorkerResponse = { type: "response", id: requestId, result: true };
       self.postMessage(response);
-
-      // Signal ready
-      const ready: WorkerReady = { type: "ready" };
-      self.postMessage(ready);
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
       const response: WorkerResponse = { type: "response", id: requestId, error };
