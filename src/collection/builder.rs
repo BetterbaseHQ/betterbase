@@ -31,7 +31,7 @@ fn name_regex() -> &'static regex::Regex {
 }
 
 /// Reserved auto-field names that users cannot define.
-const AUTO_FIELDS: &[&str] = &["id", "createdAt", "updatedAt"];
+pub(crate) const AUTO_FIELDS: &[&str] = &["id", "createdAt", "updatedAt"];
 
 // ============================================================================
 // Public Types
@@ -52,6 +52,16 @@ pub struct VersionDef {
     pub migrate: Option<Box<MigrateFn>>,
 }
 
+impl std::fmt::Debug for VersionDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VersionDef")
+            .field("version", &self.version)
+            .field("schema", &self.schema)
+            .field("migrate", &self.migrate.as_ref().map(|_| "<fn>"))
+            .finish()
+    }
+}
+
 /// Complete collection definition produced by `build()`.
 pub struct CollectionDef {
     pub name: String,
@@ -60,6 +70,18 @@ pub struct CollectionDef {
     pub current_version: u32,
     /// Full schema including auto-fields (id, createdAt, updatedAt).
     pub current_schema: BTreeMap<String, SchemaNode>,
+}
+
+impl std::fmt::Debug for CollectionDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CollectionDef")
+            .field("name", &self.name)
+            .field("versions", &self.versions)
+            .field("indexes", &self.indexes)
+            .field("current_version", &self.current_version)
+            .field("current_schema", &self.current_schema)
+            .finish()
+    }
 }
 
 // ============================================================================

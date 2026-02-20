@@ -35,6 +35,16 @@ use crate::{
 };
 
 // ============================================================================
+// Metadata Keys
+// ============================================================================
+
+/// Key for the session ID in the metadata store.
+const META_SESSION_ID: &str = "session_id";
+
+/// Prefix for per-collection sync sequence cursors (formatted as `"seq:{collection}"`).
+const META_SEQ_PREFIX: &str = "seq:";
+
+// ============================================================================
 // Adapter Struct
 // ============================================================================
 
@@ -72,7 +82,7 @@ impl<B: StorageBackend> Adapter<B> {
         }
 
         // Try loading from meta store
-        if let Some(stored) = self.backend.get_meta("session_id")? {
+        if let Some(stored) = self.backend.get_meta(META_SESSION_ID)? {
             let sid: u64 = stored
                 .parse()
                 .map_err(|_| LessDbError::Internal("Invalid session_id stored in meta".into()))?;
@@ -82,7 +92,7 @@ impl<B: StorageBackend> Adapter<B> {
 
         // Generate and persist a new session ID
         let sid = crdt::generate_session_id();
-        self.backend.set_meta("session_id", &sid.to_string())?;
+        self.backend.set_meta(META_SESSION_ID, &sid.to_string())?;
         *guard = Some(sid);
         Ok(sid)
     }
@@ -255,7 +265,6 @@ impl<B: StorageBackend> Adapter<B> {
         };
 
         // Migrate and deserialize, collecting errors
-        let mut data_records: Vec<Value> = Vec::new();
         let mut migrated_records: Vec<SerializedRecord> = Vec::new();
         let mut errors: Vec<Value> = Vec::new();
 
@@ -266,11 +275,11 @@ impl<B: StorageBackend> Adapter<B> {
             }
             let id = raw.id.clone();
             let collection = raw.collection.clone();
+            // Extract computed before passing raw to process_record (avoids cloning raw)
+            let computed = raw.computed.clone();
 
-            match self.process_record(raw.clone(), true) {
+            match self.process_record(raw, true) {
                 Ok(stored) => {
-                    data_records.push(stored.data.clone());
-                    // Build a SerializedRecord from the migrated result
                     migrated_records.push(SerializedRecord {
                         id: stored.id,
                         collection: stored.collection,
@@ -283,7 +292,7 @@ impl<B: StorageBackend> Adapter<B> {
                         deleted: stored.deleted,
                         deleted_at: stored.deleted_at,
                         meta: stored.meta,
-                        computed: raw.computed,
+                        computed,
                     });
                 }
                 Err(e) => {
@@ -296,37 +305,34 @@ impl<B: StorageBackend> Adapter<B> {
             }
         }
 
-        // Apply filter to data values, keeping parallel vecs in sync via index
-        let (filtered_data, filtered_records): (Vec<Value>, Vec<SerializedRecord>) = {
+        // Apply filter using record.data directly (avoids parallel data vec + clone)
+        let filtered_records: Vec<SerializedRecord> = {
             let needs_filter =
                 plan.post_filter.is_some() || (plan.scan.is_none() && query.filter.is_some());
 
             if needs_filter {
                 let filter = plan.post_filter.as_ref().or(query.filter.as_ref()).unwrap();
 
-                let mut fd = Vec::new();
                 let mut fr = Vec::new();
-                for (d, r) in data_records.into_iter().zip(migrated_records.into_iter()) {
-                    if matches_filter(&d, filter)? {
-                        fd.push(d);
+                for r in migrated_records {
+                    if matches_filter(&r.data, filter)? {
                         fr.push(r);
                     }
                 }
-                (fd, fr)
+                fr
             } else {
-                (data_records, migrated_records)
+                migrated_records
             }
         };
 
-        let total = filtered_data.len();
+        let total = filtered_records.len();
 
-        // Sort and paginate both parallel vecs together using an index permutation.
-        // This avoids value-equality lookups that are O(n²) and wrong for duplicate data.
-        let mut indices: Vec<usize> = (0..filtered_data.len()).collect();
+        // Sort and paginate using an index permutation over record.data.
+        let mut indices: Vec<usize> = (0..filtered_records.len()).collect();
         if let Some(ref sort) = sort_entries {
             indices.sort_by(|&i, &j| {
-                let a = &filtered_data[i];
-                let b = &filtered_data[j];
+                let a = &filtered_records[i].data;
+                let b = &filtered_records[j].data;
                 for entry in sort {
                     let va = get_field_value(a, &entry.field).unwrap_or(&Value::Null);
                     let vb = get_field_value(b, &entry.field).unwrap_or(&Value::Null);
@@ -1012,7 +1018,7 @@ impl<B: StorageBackend> StorageSync for Adapter<B> {
     }
 
     fn get_last_sequence(&self, collection: &str) -> Result<i64> {
-        let key = format!("seq:{collection}");
+        let key = format!("{META_SEQ_PREFIX}{collection}");
         match self.backend.get_meta(&key)? {
             Some(s) => s.parse::<i64>().map_err(|_| {
                 LessDbError::Internal(format!("Invalid sequence stored for {collection}"))
@@ -1022,7 +1028,7 @@ impl<B: StorageBackend> StorageSync for Adapter<B> {
     }
 
     fn set_last_sequence(&self, collection: &str, sequence: i64) -> Result<()> {
-        let key = format!("seq:{collection}");
+        let key = format!("{META_SEQ_PREFIX}{collection}");
         self.backend.set_meta(&key, &sequence.to_string())
     }
 }

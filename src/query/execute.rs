@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::error::Result;
 
 use super::operators::{compare_values, filter_records, get_field_value};
-use super::types::{normalize_sort, Query, QueryResult, SortDirection, SortEntry};
+use super::types::{normalize_sort, ExecuteQueryResult, Query, SortDirection, SortEntry};
 
 // ============================================================================
 // Sorting
@@ -70,7 +70,7 @@ pub fn paginate_records(
 /// 2. Capture total count (after filter, before pagination).
 /// 3. Sort (using normalized sort input).
 /// 4. Paginate (offset then limit).
-pub fn execute_query(records: Vec<Value>, query: &Query) -> Result<QueryResult> {
+pub fn execute_query(records: Vec<Value>, query: &Query) -> Result<ExecuteQueryResult> {
     // 1. Filter
     let filtered = if let Some(filter) = &query.filter {
         filter_records(&records, filter)?
@@ -92,7 +92,7 @@ pub fn execute_query(records: Vec<Value>, query: &Query) -> Result<QueryResult> 
     // 4. Paginate
     let paginated = paginate_records(sorted, query.offset, query.limit);
 
-    Ok(QueryResult {
+    Ok(ExecuteQueryResult {
         records: paginated,
         total,
         errors: vec![],

@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::{
     collection::{
         autofill::{autofill, autofill_for_update, AutofillOptions},
-        builder::CollectionDef,
+        builder::{CollectionDef, AUTO_FIELDS},
         migrate::needs_migration,
     },
     crdt::{
@@ -397,7 +397,7 @@ pub fn prepare_patch(
     // Overlay patch fields (skip auto-fields)
     if let Some(patch_obj) = patch_data.as_object() {
         for (k, v) in patch_obj {
-            if k == "id" || k == "createdAt" || k == "updatedAt" {
+            if AUTO_FIELDS.contains(&k.as_str()) {
                 continue;
             }
             if v.is_null() {
@@ -677,8 +677,7 @@ pub fn merge_records(
     let merged_crdt = crdt::model_to_binary(&remote_model);
 
     // Check if local still has changes beyond what the remote already contains
-    let had_local_changes =
-        !local_patches.is_empty() && !views_equal(&raw_merged_view, &remote_only_view);
+    let had_local_changes = !local_patches.is_empty() && raw_merged_view != remote_only_view;
 
     let record = SerializedRecord {
         id: local.id.clone(),
@@ -1031,34 +1030,4 @@ fn diff_user_fields(
             }
         })
         .collect())
-}
-
-/// Deep equality for CRDT model views (property-order-insensitive).
-fn views_equal(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Null, Value::Null) => true,
-        (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Number(a), Value::Number(b)) => a == b,
-        (Value::String(a), Value::String(b)) => a == b,
-        (Value::Array(a), Value::Array(b)) => {
-            a.len() == b.len() && a.iter().zip(b.iter()).all(|(av, bv)| views_equal(av, bv))
-        }
-        (Value::Object(a), Value::Object(b)) => {
-            if a.len() != b.len() {
-                return false;
-            }
-            for (k, av) in a {
-                match b.get(k) {
-                    None => return false,
-                    Some(bv) => {
-                        if !views_equal(av, bv) {
-                            return false;
-                        }
-                    }
-                }
-            }
-            true
-        }
-        _ => false,
-    }
 }

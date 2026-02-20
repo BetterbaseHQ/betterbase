@@ -64,9 +64,9 @@ pub struct Query {
 // Query Result
 // ============================================================================
 
-/// Result of executing a query.
+/// Result of executing a query (internal to query engine).
 #[derive(Debug, Clone)]
-pub struct QueryResult {
+pub struct ExecuteQueryResult {
     /// Matching records (after filter, sort, and pagination).
     pub records: Vec<Value>,
     /// Total count of matched records before pagination.

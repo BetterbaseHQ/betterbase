@@ -51,198 +51,173 @@ pub fn process_remote_record(
     strategy: &DeleteConflictStrategy,
     received_at: Option<&str>,
 ) -> Result<(RemoteDecision, Option<RemoteAction>)> {
-    let remote_is_deleted = remote.deleted;
-    let local_exists = local.is_some();
-    let local_deleted = local.map(|r| r.deleted).unwrap_or(false);
-    let local_dirty = local.map(|r| r.dirty).unwrap_or(false);
-
     // Skip stale remote records for dirty locals. With pull-first sync, the
     // pull cursor lags the push cursor — a pull can return records we already
     // pushed. If the local is dirty and its sequence >= the remote's, skip to
     // avoid false conflicts.
-    if local_exists && local_dirty {
-        let local_seq = local.unwrap().sequence;
-        if local_seq > 0 && local_seq >= remote.sequence {
+    if let Some(local_rec) = local {
+        if local_rec.dirty && local_rec.sequence > 0 && local_rec.sequence >= remote.sequence {
             return Ok((RemoteDecision::Skip, None));
         }
     }
 
-    // Case 1: No local, remote tombstone → insert tombstone
-    if !local_exists && remote_is_deleted {
-        let tombstone = prepare_remote_tombstone(
-            &remote.id,
-            remote.sequence,
-            &def.name,
-            received_at,
-            remote.meta.clone(),
-            def.current_version,
-        );
-        return Ok((
-            RemoteDecision::Insert(tombstone),
-            Some(RemoteAction::Deleted),
-        ));
-    }
+    // Exhaustive match on (local state, remote deleted) ensures all cases are
+    // covered at compile time. Local state is encoded as:
+    //   None           → no local record
+    //   Some(_, dirty, deleted) → local exists with those flags
+    let local_state = local.map(|r| (r.dirty, r.deleted));
 
-    // Case 2: No local, remote live → insert
-    if !local_exists && !remote_is_deleted {
-        let result = prepare_remote_insert(def, remote, received_at)?;
-        return Ok((
-            RemoteDecision::Insert(result.record),
-            Some(RemoteAction::Inserted),
-        ));
-    }
+    use crate::types::DeleteResolution;
 
-    let local = local.unwrap();
+    match (local_state, remote.deleted) {
+        // No local record
+        (None, true) => {
+            // Case 1: No local + remote tombstone → insert tombstone
+            let tombstone = make_tombstone(def, remote, received_at);
+            Ok((
+                RemoteDecision::Insert(tombstone),
+                Some(RemoteAction::Deleted),
+            ))
+        }
+        (None, false) => {
+            // Case 2: No local + remote live → insert
+            let result = prepare_remote_insert(def, remote, received_at)?;
+            Ok((
+                RemoteDecision::Insert(result.record),
+                Some(RemoteAction::Inserted),
+            ))
+        }
 
-    // Case 3: Clean, alive + remote tombstone → overwrite with tombstone
-    if !local_dirty && !local_deleted && remote_is_deleted {
-        let tombstone = prepare_remote_tombstone(
-            &remote.id,
-            remote.sequence,
-            &def.name,
-            received_at,
-            remote.meta.clone(),
-            def.current_version,
-        );
-        return Ok((
-            RemoteDecision::Delete(tombstone),
-            Some(RemoteAction::Deleted),
-        ));
-    }
-
-    // Case 4: Clean, alive + remote live → overwrite
-    if !local_dirty && !local_deleted && !remote_is_deleted {
-        let result = prepare_remote_insert(def, remote, received_at)?;
-        return Ok((
-            RemoteDecision::Update(result.record),
-            Some(RemoteAction::Updated),
-        ));
-    }
-
-    // Case 5: Clean, deleted + remote live → resurrect
-    if !local_dirty && local_deleted && !remote_is_deleted {
-        let result = prepare_remote_insert(def, remote, received_at)?;
-        return Ok((
-            RemoteDecision::Update(result.record),
-            Some(RemoteAction::Updated),
-        ));
-    }
-
-    // Case 6: Clean, deleted + remote tombstone → update sequence
-    if !local_dirty && local_deleted && remote_is_deleted {
-        let tombstone = prepare_remote_tombstone(
-            &remote.id,
-            remote.sequence,
-            &def.name,
-            received_at,
-            remote.meta.clone(),
-            def.current_version,
-        );
-        return Ok((
-            RemoteDecision::Update(tombstone),
-            Some(RemoteAction::Deleted),
-        ));
-    }
-
-    // Case 7: Dirty, deleted + remote tombstone → no conflict, apply remote tombstone
-    if local_dirty && local_deleted && remote_is_deleted {
-        let tombstone = prepare_remote_tombstone(
-            &remote.id,
-            remote.sequence,
-            &def.name,
-            received_at,
-            remote.meta.clone(),
-            def.current_version,
-        );
-        return Ok((
-            RemoteDecision::Update(tombstone),
-            Some(RemoteAction::Deleted),
-        ));
-    }
-
-    // Case 8: Dirty, alive + remote tombstone → delete conflict
-    if local_dirty && !local_deleted && remote_is_deleted {
-        let resolution = resolve_delete_conflict(strategy, local, remote);
-        use crate::types::DeleteResolution;
-        if resolution == DeleteResolution::Delete {
-            let tombstone = prepare_remote_tombstone(
-                &remote.id,
-                remote.sequence,
-                &def.name,
-                received_at,
-                remote.meta.clone(),
-                def.current_version,
-            );
-            return Ok((
+        // Clean local (not dirty)
+        (Some((false, false)), true) => {
+            // Case 3: Clean alive + remote tombstone → delete
+            let tombstone = make_tombstone(def, remote, received_at);
+            Ok((
                 RemoteDecision::Delete(tombstone),
                 Some(RemoteAction::Deleted),
-            ));
-        } else {
-            // update-wins: keep local alive, update sequence
-            let updated = SerializedRecord {
-                sequence: remote.sequence,
-                ..local.clone()
-            };
-            return Ok((
-                RemoteDecision::Conflict(updated),
-                Some(RemoteAction::Conflicted),
-            ));
+            ))
         }
-    }
-
-    // Case 9: Dirty, deleted + remote live → delete conflict
-    if local_dirty && local_deleted && !remote_is_deleted {
-        let resolution = resolve_delete_conflict(strategy, local, remote);
-        use crate::types::DeleteResolution;
-        if resolution == DeleteResolution::Delete {
-            // Keep local tombstone, update sequence
-            let updated = SerializedRecord {
-                sequence: remote.sequence,
-                ..local.clone()
-            };
-            return Ok((
-                RemoteDecision::Conflict(updated),
-                Some(RemoteAction::Conflicted),
-            ));
-        } else {
-            // update-wins: resurrect with remote
+        (Some((false, false)), false) => {
+            // Case 4: Clean alive + remote live → overwrite
             let result = prepare_remote_insert(def, remote, received_at)?;
-            return Ok((
+            Ok((
                 RemoteDecision::Update(result.record),
                 Some(RemoteAction::Updated),
-            ));
+            ))
+        }
+        (Some((false, true)), false) => {
+            // Case 5: Clean deleted + remote live → resurrect
+            let result = prepare_remote_insert(def, remote, received_at)?;
+            Ok((
+                RemoteDecision::Update(result.record),
+                Some(RemoteAction::Updated),
+            ))
+        }
+        (Some((false, true)), true) => {
+            // Case 6: Clean deleted + remote tombstone → update sequence
+            let tombstone = make_tombstone(def, remote, received_at);
+            Ok((
+                RemoteDecision::Update(tombstone),
+                Some(RemoteAction::Deleted),
+            ))
+        }
+
+        // Dirty local
+        (Some((true, true)), true) => {
+            // Case 7: Dirty deleted + remote tombstone → no conflict
+            let tombstone = make_tombstone(def, remote, received_at);
+            Ok((
+                RemoteDecision::Update(tombstone),
+                Some(RemoteAction::Deleted),
+            ))
+        }
+        (Some((true, false)), true) => {
+            // Case 8: Dirty alive + remote tombstone → delete conflict
+            let local = local.unwrap();
+            let resolution = resolve_delete_conflict(strategy, local, remote);
+            if resolution == DeleteResolution::Delete {
+                let tombstone = make_tombstone(def, remote, received_at);
+                Ok((
+                    RemoteDecision::Delete(tombstone),
+                    Some(RemoteAction::Deleted),
+                ))
+            } else {
+                let updated = SerializedRecord {
+                    sequence: remote.sequence,
+                    ..local.clone()
+                };
+                Ok((
+                    RemoteDecision::Conflict(updated),
+                    Some(RemoteAction::Conflicted),
+                ))
+            }
+        }
+        (Some((true, true)), false) => {
+            // Case 9: Dirty deleted + remote live → delete conflict
+            let local = local.unwrap();
+            let resolution = resolve_delete_conflict(strategy, local, remote);
+            if resolution == DeleteResolution::Delete {
+                let updated = SerializedRecord {
+                    sequence: remote.sequence,
+                    ..local.clone()
+                };
+                Ok((
+                    RemoteDecision::Conflict(updated),
+                    Some(RemoteAction::Conflicted),
+                ))
+            } else {
+                let result = prepare_remote_insert(def, remote, received_at)?;
+                Ok((
+                    RemoteDecision::Update(result.record),
+                    Some(RemoteAction::Updated),
+                ))
+            }
+        }
+        (Some((true, false)), false) => {
+            // Case 10: Dirty alive + remote live → CRDT merge
+            let local = local.unwrap();
+            let crdt_bytes = remote.crdt.as_ref().ok_or_else(|| {
+                LessDbError::Internal(format!(
+                    "Remote record {} missing CRDT binary for merge",
+                    remote.id
+                ))
+            })?;
+
+            let merge_result = merge_records(
+                def,
+                local,
+                crdt_bytes,
+                remote.sequence,
+                remote.version,
+                received_at,
+            )?;
+
+            Ok((
+                RemoteDecision::Merge(merge_result.record),
+                Some(RemoteAction::Updated),
+            ))
         }
     }
+}
 
-    // Case 10: Dirty, alive + remote live → CRDT merge
-    if local_dirty && !local_deleted && !remote_is_deleted {
-        let crdt_bytes = remote.crdt.as_ref().ok_or_else(|| {
-            LessDbError::Internal(format!(
-                "Remote record {} missing CRDT binary for merge",
-                remote.id
-            ))
-        })?;
+// ============================================================================
+// Helpers
+// ============================================================================
 
-        let merge_result = merge_records(
-            def,
-            local,
-            crdt_bytes,
-            remote.sequence,
-            remote.version,
-            received_at,
-        )?;
-
-        return Ok((
-            RemoteDecision::Merge(merge_result.record),
-            Some(RemoteAction::Updated),
-        ));
-    }
-
-    // Should be unreachable — all 10 cases handled
-    Err(LessDbError::Internal(format!(
-        "Unhandled remote record case: exists={}, dirty={}, deleted={}, remote_deleted={}",
-        local_exists, local_dirty, local_deleted, remote_is_deleted
-    )))
+/// Build a tombstone from a remote record.
+fn make_tombstone(
+    def: &CollectionDef,
+    remote: &RemoteRecord,
+    received_at: Option<&str>,
+) -> SerializedRecord {
+    prepare_remote_tombstone(
+        &remote.id,
+        remote.sequence,
+        &def.name,
+        received_at,
+        remote.meta.clone(),
+        def.current_version,
+    )
 }
 
 // ============================================================================
