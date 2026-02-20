@@ -89,3 +89,19 @@ This file documents intentional differences between the Rust port and the origin
 - **JS**: `diff()` and `equals()` throw an `Error` when `MAX_DIFF_DEPTH` is exceeded.
 - **Rust**: `diff()` returns `Result<Changeset, DiffDepthError>` and `node_equals()` returns `Result<bool, DiffDepthError>`. Callers must handle the error.
 - **Why**: Panicking in a library function is not idiomatic Rust. Returning `Result` lets callers decide how to handle depth overflow (propagate, log, etc.) instead of crashing the thread.
+
+---
+
+## Divergence: `on_remote_delete` callback only fires when previous data exists
+
+- **JS**: `fire_remote_tombstones` invokes the callback for all deleted records regardless of whether `previousData` is null/undefined.
+- **Rust**: The callback is only invoked when `previous_data.is_some()`. If the local record was already a tombstone, the callback is suppressed.
+- **Why**: Firing the callback when no live data was lost is misleading. The Rust behavior is arguably more correct — the callback signals "a record you had was deleted remotely," not "a tombstone was re-tombstoned."
+
+---
+
+## Divergence: `serialize` / `deserialize` return `Result` instead of panicking
+
+- **JS**: `serialize()` and `deserialize()` throw `Error` on depth exceeded or unmatched union variant.
+- **Rust**: Both return `Result<Value, SchemaError>`. Depth exceeded and unmatched union variant produce `Err(SchemaError::Serialization(...))`.
+- **Why**: Panicking in a library function is not idiomatic Rust. Returning `Result` lets callers decide how to handle these edge cases instead of crashing the thread.

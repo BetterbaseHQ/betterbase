@@ -136,11 +136,12 @@ impl SyncManager {
     /// Clear quarantine for all records in a collection, allowing retry.
     pub fn retry_quarantined(&self, collection: &str) {
         let prefix = format!("{collection}:");
-        let mut quarantined = self.quarantined.lock();
-        quarantined.retain(|key| !key.starts_with(&prefix));
-
+        // Lock order: failure_counts → quarantined (matches track_failure/reset_failure)
         let mut counts = self.failure_counts.lock();
         counts.retain(|key, _| !key.starts_with(&prefix));
+
+        let mut quarantined = self.quarantined.lock();
+        quarantined.retain(|key| !key.starts_with(&prefix));
     }
 
     // -----------------------------------------------------------------------

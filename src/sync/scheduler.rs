@@ -274,9 +274,10 @@ impl SyncScheduler {
 
                 // If new waiters arrived during the follow-up, loop for another cooldown cycle
                 if during_run_senders.is_empty() {
-                    // No waiters during run — still need one more cooldown pass
-                    // to check for late arrivals
-                    prev_senders = Vec::new();
+                    // No waiters during run — clear cooldown and exit (matches JS behavior)
+                    let mut slot = slot_clone.lock();
+                    slot.cooldown_active = false;
+                    break;
                 } else {
                     prev_senders = during_run_senders;
                 }

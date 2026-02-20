@@ -231,7 +231,7 @@ pub struct SyncManagerOptions {
     pub collections: Vec<Arc<CollectionDef>>,
     /// Delete conflict resolution strategy (default: RemoteWins)
     pub delete_strategy: Option<DeleteConflictStrategyName>,
-    /// Push batch size (default: 50, `None` = unlimited)
+    /// Push batch size (`None` = default 50)
     pub push_batch_size: Option<usize>,
     /// Consecutive permanent failures before quarantine (default: 3)
     pub quarantine_threshold: Option<usize>,

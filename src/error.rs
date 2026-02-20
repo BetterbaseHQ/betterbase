@@ -53,6 +53,9 @@ impl std::error::Error for ValidationErrors {}
 pub enum SchemaError {
     #[error(transparent)]
     Validation(#[from] ValidationErrors),
+
+    #[error("Serialization error: {0}")]
+    Serialization(String),
 }
 
 // ---------------------------------------------------------------------------
