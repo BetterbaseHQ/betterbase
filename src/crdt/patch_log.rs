@@ -38,7 +38,12 @@ pub fn serialize_patches(patches: &[Patch]) -> Vec<u8> {
     result.push(PATCH_LOG_VERSION);
 
     for bin in &binaries {
-        let len = bin.len() as u32;
+        let len: u32 = bin.len().try_into().unwrap_or_else(|_| {
+            panic!(
+                "patch binary size {} exceeds u32::MAX — cannot serialize",
+                bin.len()
+            )
+        });
         result.extend_from_slice(&len.to_be_bytes());
         result.extend_from_slice(bin);
     }
@@ -117,7 +122,12 @@ pub fn deserialize_patches(data: &[u8]) -> Result<Vec<Patch>> {
 /// If `existing` is empty, a new log with a version header is created.
 pub fn append_patch(existing: &[u8], patch: &Patch) -> Vec<u8> {
     let patch_bin = patch_binary::encode(patch);
-    let len = patch_bin.len() as u32;
+    let len: u32 = patch_bin.len().try_into().unwrap_or_else(|_| {
+        panic!(
+            "patch binary size {} exceeds u32::MAX — cannot append",
+            patch_bin.len()
+        )
+    });
 
     if existing.is_empty() {
         // New log: version byte + length header + patch bytes.
@@ -127,6 +137,12 @@ pub fn append_patch(existing: &[u8], patch: &Patch) -> Vec<u8> {
         result.extend_from_slice(&patch_bin);
         result
     } else {
+        // Validate version byte before appending.
+        debug_assert_eq!(
+            existing[0], PATCH_LOG_VERSION,
+            "append_patch: existing log has unexpected version byte {}",
+            existing[0]
+        );
         // Append to the existing log (which already has a version byte).
         let mut result = Vec::with_capacity(existing.len() + 4 + patch_bin.len());
         result.extend_from_slice(existing);

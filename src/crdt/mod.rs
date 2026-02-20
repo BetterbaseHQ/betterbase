@@ -39,6 +39,10 @@ pub fn is_valid_session_id(sid: u64) -> bool {
 /// The model is created with the given session ID and the provided data
 /// is set as the root value via `ModelApi`.
 pub fn create_model(data: &Value, session_id: u64) -> Result<Model> {
+    debug_assert!(
+        is_valid_session_id(session_id),
+        "create_model: session ID {session_id} is below minimum {MIN_SESSION_ID}"
+    );
     let mut model = Model::new(session_id);
     {
         let mut api = ModelApi::new(&mut model);
@@ -53,6 +57,10 @@ pub fn create_model(data: &Value, session_id: u64) -> Result<Model> {
 ///
 /// Returns `Some(patch)` if there are changes, or `None` if the model's
 /// view already matches `new_data`.
+///
+/// **Important:** The returned patch uses timestamps starting at the model's
+/// current clock time. You must call [`apply_patch`] with the returned patch
+/// before calling `diff_model` again, or timestamps will collide.
 pub fn diff_model(model: &Model, new_data: &Value) -> Option<Patch> {
     // If the root has never been set, there is nothing to diff against.
     let root_node = model.index.get(&TsKey::from(model.root.val))?;
@@ -81,10 +89,8 @@ pub fn view_model(model: &Model) -> Value {
 /// under the new session ID. The new session's clock starts at the current
 /// logical time so it will never issue timestamps that conflict with the
 /// original session.
-pub fn fork_model(model: &Model, session_id: u64) -> Result<Model> {
-    let bytes = binary::encode(model);
-    let mut forked =
-        binary::decode(&bytes).map_err(|e| LessDbError::Crdt(format!("fork decode: {:?}", e)))?;
+pub fn fork_model(model: &Model, session_id: u64) -> Model {
+    let mut forked = model.clone();
 
     // Re-assign the session ID and update the clock so the fork issues
     // timestamps that are distinct from the original session.
@@ -95,7 +101,7 @@ pub fn fork_model(model: &Model, session_id: u64) -> Result<Model> {
         forked.clock.time = old_time;
     }
 
-    Ok(forked)
+    forked
 }
 
 /// Serialize a model to binary.
@@ -276,6 +282,27 @@ mod tests {
     }
 
     #[test]
+    fn binary_round_trip_after_mutations_preserves_view() {
+        let data = json!({"name": "Alice", "scores": [1, 2, 3]});
+        let mut model = create_model(&data, MIN_SESSION_ID).expect("create");
+
+        // Apply several mutations to build up CRDT history
+        let v2 = json!({"name": "Bob", "scores": [1, 2, 3, 4]});
+        if let Some(patch) = diff_model(&model, &v2) {
+            apply_patch(&mut model, &patch);
+        }
+        let v3 = json!({"name": "Bob", "scores": [10, 2, 3, 4]});
+        if let Some(patch) = diff_model(&model, &v3) {
+            apply_patch(&mut model, &patch);
+        }
+
+        let expected_view = view_model(&model);
+        let bytes = model_to_binary(&model);
+        let restored = model_from_binary(&bytes).expect("restore");
+        assert_eq!(view_model(&restored), expected_view);
+    }
+
+    #[test]
     fn model_from_binary_rejects_oversized_input() {
         // Create a buffer that exceeds the size limit.
         let oversized = vec![0u8; MAX_CRDT_BINARY_SIZE + 1];
@@ -332,7 +359,7 @@ mod tests {
         let original = create_model(&data, MIN_SESSION_ID).expect("create_model should succeed");
 
         let fork_sid = MIN_SESSION_ID + 500;
-        let mut forked = fork_model(&original, fork_sid).expect("fork_model should succeed");
+        let mut forked = fork_model(&original, fork_sid);
 
         // Original view is unchanged.
         assert_eq!(view_model(&original), json!({"x": 1}));
@@ -354,7 +381,7 @@ mod tests {
         let original = create_model(&data, MIN_SESSION_ID).expect("create_model should succeed");
 
         let fork_sid = MIN_SESSION_ID + 9999;
-        let forked = fork_model(&original, fork_sid).expect("fork_model should succeed");
+        let forked = fork_model(&original, fork_sid);
         assert_eq!(forked.clock.sid, fork_sid);
     }
 
@@ -399,5 +426,58 @@ mod tests {
         let view_before = view_model(&model);
         merge_with_pending_patches(&mut model, &[]);
         assert_eq!(view_model(&model), view_before);
+    }
+
+    // ── Clock monotonicity ──────────────────────────────────────────────────
+
+    #[test]
+    fn fork_model_preserves_clock_monotonicity() {
+        // Create a model and advance its clock by applying many patches
+        let data = json!({"x": 0});
+        let mut model = create_model(&data, MIN_SESSION_ID).expect("create");
+        for i in 1..=50 {
+            let updated = json!({"x": i});
+            if let Some(p) = diff_model(&model, &updated) {
+                apply_patch(&mut model, &p);
+            }
+        }
+        let time_before = model.clock.time;
+        assert!(time_before > 0, "clock should have advanced");
+
+        // Fork with a different session ID — the fork's clock must be
+        // at least as far as the original to prevent timestamp conflicts.
+        let fork_sid = MIN_SESSION_ID + 1;
+        let forked = fork_model(&model, fork_sid);
+        assert!(
+            forked.clock.time >= time_before,
+            "forked clock time {} should be >= original {}",
+            forked.clock.time,
+            time_before
+        );
+    }
+
+    #[test]
+    fn model_load_preserves_clock_monotonicity() {
+        // Same as above but for model_load path
+        let data = json!({"x": 0});
+        let mut model = create_model(&data, MIN_SESSION_ID).expect("create");
+        for i in 1..=50 {
+            let updated = json!({"x": i});
+            if let Some(p) = diff_model(&model, &updated) {
+                apply_patch(&mut model, &p);
+            }
+        }
+        let time_before = model.clock.time;
+        let bytes = model_to_binary(&model);
+
+        // Load with a different session ID
+        let new_sid = MIN_SESSION_ID + 1;
+        let loaded = model_load(&bytes, new_sid).expect("load");
+        assert!(
+            loaded.clock.time >= time_before,
+            "loaded clock time {} should be >= original {}",
+            loaded.clock.time,
+            time_before
+        );
     }
 }
