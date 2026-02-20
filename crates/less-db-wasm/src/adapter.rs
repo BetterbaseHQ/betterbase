@@ -203,10 +203,11 @@ impl WasmDb {
         let q = parse_query(&query)?;
         let result = self.adapter.query(&def, &q).into_js()?;
 
-        let records: Vec<Value> = result.records.iter().map(|r| r.data.clone()).collect();
+        let total = result.total;
+        let records: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
         let mut out = serde_json::Map::new();
         out.insert("records".to_string(), Value::Array(records));
-        if let Some(total) = result.total {
+        if let Some(total) = total {
             out.insert(
                 "total".to_string(),
                 Value::Number(serde_json::Number::from(total)),
@@ -233,7 +234,7 @@ impl WasmDb {
         let def = self.get_def(collection)?;
         let opts = parse_list_options(&options)?;
         let result = self.adapter.get_all(&def, &opts).into_js()?;
-        let records: Vec<Value> = result.records.iter().map(|r| r.data.clone()).collect();
+        let records: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
         value_to_js(&Value::Array(records))
     }
 
@@ -255,7 +256,7 @@ impl WasmDb {
         let opts = parse_put_options(&options)?;
         let result = self.adapter.bulk_put(&def, records_val, &opts).into_js()?;
 
-        let data: Vec<Value> = result.records.iter().map(|r| r.data.clone()).collect();
+        let data: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
         let mut out = serde_json::Map::new();
         out.insert("records".to_string(), Value::Array(data));
         let errors: Vec<Value> = result
@@ -375,7 +376,7 @@ impl WasmDb {
     pub fn get_dirty(&self, collection: &str) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
         let result = self.adapter.get_dirty(&def).into_js()?;
-        let records: Vec<Value> = result.records.iter().map(|r| r.data.clone()).collect();
+        let records: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
         value_to_js(&Value::Array(records))
     }
 

@@ -21,7 +21,7 @@ use less_db::index::types::{
 use less_db::storage::traits::StorageBackend;
 use less_db::types::{PurgeTombstonesOptions, RawBatchResult, ScanOptions, SerializedRecord};
 
-use crate::wasm_sqlite::{ColumnType, Connection, StepResult};
+use crate::wasm_sqlite::{ColumnType, Connection, RawStatement, StepResult};
 
 // ============================================================================
 // Helpers
@@ -77,13 +77,9 @@ const SELECT_COLS: &str = "id, collection, version, data, crdt, pending_patches,
 /// interpolated into SQL strings (e.g., json_extract paths, index names).
 /// This validation prevents SQL injection via malicious schema definitions.
 fn validate_sql_identifier(name: &str, context: &str) -> less_db::error::Result<()> {
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
-    {
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         return Err(LessDbError::Internal(format!(
-            "Invalid {context}: \"{name}\". Only alphanumeric, underscore, and dot characters are allowed."
+            "Invalid {context}: \"{name}\". Only alphanumeric and underscore characters are allowed."
         )));
     }
     Ok(())
@@ -135,10 +131,14 @@ impl WasmSqliteBackend {
         // support the shared-memory primitives required by WAL mode.
         conn.execute_batch(
             "PRAGMA journal_mode=DELETE;
-             PRAGMA synchronous=NORMAL;",
+             PRAGMA synchronous=NORMAL;
+             PRAGMA cache_size=-4000;
+             PRAGMA temp_store=MEMORY;",
         )
         .map_err(storage_err)?;
 
+        // Note: PK (collection, id) already provides an index on `collection`,
+        // so no separate idx_records_collection is needed.
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS records (
                 id              TEXT NOT NULL,
@@ -155,8 +155,6 @@ impl WasmSqliteBackend {
                 computed        TEXT,
                 PRIMARY KEY (collection, id)
             );
-            CREATE INDEX IF NOT EXISTS idx_records_collection
-                ON records(collection);
             CREATE INDEX IF NOT EXISTS idx_records_dirty
                 ON records(collection, dirty);
             CREATE TABLE IF NOT EXISTS meta (
@@ -222,13 +220,37 @@ impl WasmSqliteBackend {
     // Row parsing
     // -----------------------------------------------------------------------
 
-    fn read_record(
-        stmt: &crate::wasm_sqlite::Statement<'_>,
-    ) -> less_db::error::Result<SerializedRecord> {
+    /// Parse a single row from a stepped statement into a `SerializedRecord`.
+    ///
+    /// Accepts `&RawStatement` so it works with both `Statement` (dynamic SQL)
+    /// and `CachedStatement` (cached SQL) via their `.raw()` accessor.
+    ///
+    /// # Safety invariant
+    ///
+    /// `column_text` borrows from SQLite's internal buffer and is valid only
+    /// until the next step/reset/column call on this statement. Each
+    /// `serde_json::from_str` call below consumes the borrowed `&str` into an
+    /// owned `Value` before any subsequent column access.
+    fn read_record(stmt: &RawStatement<'_>) -> less_db::error::Result<SerializedRecord> {
+        let data: Value = serde_json::from_str(stmt.column_text(3))
+            .map_err(|e| LessDbError::Internal(format!("Failed to parse record data: {e}")))?;
+        let meta: Option<Value> =
+            match stmt.column_type(10) {
+                ColumnType::Null => None,
+                _ => Some(serde_json::from_str(stmt.column_text(10)).map_err(|e| {
+                    LessDbError::Internal(format!("Failed to parse record meta: {e}"))
+                })?),
+            };
+        let computed: Option<Value> = match stmt.column_type(11) {
+            ColumnType::Null => None,
+            _ => Some(serde_json::from_str(stmt.column_text(11)).map_err(|e| {
+                LessDbError::Internal(format!("Failed to parse record computed: {e}"))
+            })?),
+        };
+
         let id = stmt.column_string(0);
         let collection = stmt.column_string(1);
         let version = stmt.column_int64(2) as u32;
-        let data_str = stmt.column_string(3);
         let crdt = stmt.column_blob(4);
         let pending_patches = stmt.column_blob(5);
         let sequence = stmt.column_int64(6);
@@ -238,25 +260,6 @@ impl WasmSqliteBackend {
             ColumnType::Null => None,
             _ => Some(stmt.column_string(9)),
         };
-        let meta_str = match stmt.column_type(10) {
-            ColumnType::Null => None,
-            _ => Some(stmt.column_string(10)),
-        };
-        let computed_str = match stmt.column_type(11) {
-            ColumnType::Null => None,
-            _ => Some(stmt.column_string(11)),
-        };
-
-        let data: Value = serde_json::from_str(&data_str)
-            .map_err(|e| LessDbError::Internal(format!("Failed to parse record data: {e}")))?;
-        let meta: Option<Value> = meta_str
-            .map(|s| serde_json::from_str(&s))
-            .transpose()
-            .map_err(|e| LessDbError::Internal(format!("Failed to parse record meta: {e}")))?;
-        let computed: Option<Value> = computed_str
-            .map(|s| serde_json::from_str(&s))
-            .transpose()
-            .map_err(|e| LessDbError::Internal(format!("Failed to parse record computed: {e}")))?;
 
         Ok(SerializedRecord {
             id,
@@ -278,7 +281,16 @@ impl WasmSqliteBackend {
     // Record writing helper
     // -----------------------------------------------------------------------
 
-    fn execute_put_inner(&self, record: &SerializedRecord) -> less_db::error::Result<()> {
+    const PUT_SQL: &str = "INSERT OR REPLACE INTO records \
+        (id, collection, version, data, crdt, pending_patches, sequence, dirty, \
+         deleted, deleted_at, meta, computed) \
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+
+    /// Bind a record's fields to an INSERT statement and step it.
+    fn bind_and_step_put(
+        stmt: &mut RawStatement<'_>,
+        record: &SerializedRecord,
+    ) -> less_db::error::Result<()> {
         let data_str = serde_json::to_string(&record.data)
             .map_err(|e| LessDbError::Internal(format!("serialize data: {e}")))?;
         let meta_str = record
@@ -293,16 +305,6 @@ impl WasmSqliteBackend {
             .map(serde_json::to_string)
             .transpose()
             .map_err(|e| LessDbError::Internal(format!("serialize computed: {e}")))?;
-
-        let conn = self.borrow_conn()?;
-        let mut stmt = conn
-            .prepare(
-                "INSERT OR REPLACE INTO records \
-                 (id, collection, version, data, crdt, pending_patches, sequence, dirty, \
-                  deleted, deleted_at, meta, computed) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            )
-            .map_err(storage_err)?;
 
         stmt.bind_text(1, &record.id).map_err(storage_err)?;
         stmt.bind_text(2, &record.collection).map_err(storage_err)?;
@@ -334,12 +336,18 @@ impl WasmSqliteBackend {
         Ok(())
     }
 
+    fn execute_put_inner(&self, record: &SerializedRecord) -> less_db::error::Result<()> {
+        let conn = self.borrow_conn()?;
+        let mut stmt = conn.prepare_cached(Self::PUT_SQL).map_err(storage_err)?;
+        Self::bind_and_step_put(stmt.raw_mut(), record)
+    }
+
     // -----------------------------------------------------------------------
     // Bind a SqlParam to a statement at position idx
     // -----------------------------------------------------------------------
 
     fn bind_param(
-        stmt: &mut crate::wasm_sqlite::Statement<'_>,
+        stmt: &mut RawStatement<'_>,
         idx: i32,
         param: &SqlParam,
     ) -> less_db::error::Result<()> {
@@ -355,20 +363,31 @@ impl WasmSqliteBackend {
     // Index scan builder (ported from sqlite.rs)
     // -----------------------------------------------------------------------
 
+    /// Build SQL for an index scan. Returns `None` if the scan can't be satisfied.
+    ///
+    /// Field names from the index definition are interpolated into SQL via
+    /// `json_extract(data, '$.field')`. These names come from schema definitions
+    /// (already validated by the collection builder), but we re-validate here as
+    /// defense-in-depth against SQL injection.
     fn build_index_scan_sql(
         collection: &str,
         scan: &IndexScan,
         index_provides_sort: bool,
-    ) -> Option<(String, Vec<SqlParam>)> {
+    ) -> less_db::error::Result<Option<(String, Vec<SqlParam>)>> {
         let mut conditions: Vec<String> =
             vec!["collection = ?".to_string(), "deleted = 0".to_string()];
         let mut params: Vec<SqlParam> = vec![SqlParam::Text(collection.to_string())];
 
         match &scan.index {
             IndexDefinition::Field(fi) => {
+                for f in &fi.fields {
+                    validate_sql_identifier(&f.field, "index field name")?;
+                }
                 if let Some(eq_vals) = &scan.equality_values {
                     for (i, val) in eq_vals.iter().enumerate() {
-                        let field = fi.fields.get(i)?.field.as_str();
+                        let Some(field) = fi.fields.get(i).map(|f| f.field.as_str()) else {
+                            return Ok(None);
+                        };
                         match val {
                             IndexableValue::Null => {
                                 conditions
@@ -401,7 +420,9 @@ impl WasmSqliteBackend {
                 if let Some(in_vals) = &scan.in_values {
                     if !in_vals.is_empty() {
                         let in_idx = scan.equality_values.as_ref().map_or(0, |v| v.len());
-                        let in_field = fi.fields.get(in_idx).map(|f| f.field.as_str())?;
+                        let Some(in_field) = fi.fields.get(in_idx).map(|f| f.field.as_str()) else {
+                            return Ok(None);
+                        };
                         let placeholders =
                             in_vals.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
                         conditions.push(format!(
@@ -435,10 +456,11 @@ impl WasmSqliteBackend {
                     sql.push_str(&format!(" ORDER BY {}", order_by.join(", ")));
                 }
 
-                Some((sql, params))
+                Ok(Some((sql, params)))
             }
 
             IndexDefinition::Computed(ci) => {
+                validate_sql_identifier(&ci.name, "computed field name")?;
                 let computed_path = format!("json_extract(computed, '$.{}')", ci.name);
 
                 if let Some(eq_vals) = &scan.equality_values {
@@ -483,12 +505,16 @@ impl WasmSqliteBackend {
                     conditions.join(" AND ")
                 );
 
-                Some((sql, params))
+                Ok(Some((sql, params)))
             }
         }
     }
 
-    /// Execute a prepared statement with params and collect all rows as records.
+    /// Execute a statement with params and collect all rows as records.
+    ///
+    /// Uses uncached `prepare()` because callers (scan_raw, index scans) may
+    /// generate varying SQL strings (e.g. different IN-list sizes) that would
+    /// pollute the statement cache unboundedly.
     fn query_records(
         &self,
         sql: &str,
@@ -497,12 +523,12 @@ impl WasmSqliteBackend {
         let conn = self.borrow_conn()?;
         let mut stmt = conn.prepare(sql).map_err(storage_err)?;
         for (i, param) in params.iter().enumerate() {
-            Self::bind_param(&mut stmt, (i + 1) as i32, param)?;
+            Self::bind_param(stmt.raw_mut(), (i + 1) as i32, param)?;
         }
 
         let mut records = Vec::new();
-        while let StepResult::Row = stmt.step().map_err(storage_err)? {
-            records.push(Self::read_record(&stmt)?);
+        while let StepResult::Row = stmt.raw_mut().step().map_err(storage_err)? {
+            records.push(Self::read_record(stmt.raw())?);
         }
         Ok(records)
     }
@@ -514,7 +540,8 @@ impl WasmSqliteBackend {
         scan: &IndexScan,
         index_provides_sort: bool,
     ) -> less_db::error::Result<Option<Vec<SerializedRecord>>> {
-        let Some((sql, params)) = Self::build_index_scan_sql(collection, scan, index_provides_sort)
+        let Some((sql, params)) =
+            Self::build_index_scan_sql(collection, scan, index_provides_sort)?
         else {
             return Ok(None);
         };
@@ -533,18 +560,17 @@ impl StorageBackend for WasmSqliteBackend {
         id: &str,
     ) -> less_db::error::Result<Option<SerializedRecord>> {
         let conn = self.borrow_conn()?;
-        let mut stmt = conn
-            .prepare(&format!(
-                "SELECT {} FROM records WHERE collection = ?1 AND id = ?2",
-                SELECT_COLS
-            ))
-            .map_err(storage_err)?;
+        let sql = format!(
+            "SELECT {} FROM records WHERE collection = ?1 AND id = ?2",
+            SELECT_COLS
+        );
+        let mut stmt = conn.prepare_cached(&sql).map_err(storage_err)?;
 
         stmt.bind_text(1, collection).map_err(storage_err)?;
         stmt.bind_text(2, id).map_err(storage_err)?;
 
         match stmt.step().map_err(storage_err)? {
-            StepResult::Row => Ok(Some(Self::read_record(&stmt)?)),
+            StepResult::Row => Ok(Some(Self::read_record(stmt.raw())?)),
             StepResult::Done => Ok(None),
         }
     }
@@ -598,7 +624,7 @@ impl StorageBackend for WasmSqliteBackend {
     fn count_raw(&self, collection: &str) -> less_db::error::Result<usize> {
         let conn = self.borrow_conn()?;
         let mut stmt = conn
-            .prepare("SELECT COUNT(*) FROM records WHERE collection = ?1 AND deleted = 0")
+            .prepare_cached("SELECT COUNT(*) FROM records WHERE collection = ?1 AND deleted = 0")
             .map_err(storage_err)?;
         stmt.bind_text(1, collection).map_err(storage_err)?;
         stmt.step().map_err(storage_err)?;
@@ -607,8 +633,12 @@ impl StorageBackend for WasmSqliteBackend {
 
     fn batch_put_raw(&self, records: &[SerializedRecord]) -> less_db::error::Result<()> {
         self.transaction(|this| {
+            let conn = this.borrow_conn()?;
+            let mut stmt = conn.prepare_cached(Self::PUT_SQL).map_err(storage_err)?;
             for record in records {
-                this.execute_put_inner(record)?;
+                Self::bind_and_step_put(stmt.raw_mut(), record)?;
+                stmt.reset().map_err(storage_err)?;
+                stmt.clear_bindings().map_err(storage_err)?;
             }
             Ok(())
         })
@@ -637,7 +667,7 @@ impl StorageBackend for WasmSqliteBackend {
                 )
             };
 
-            let mut stmt = conn.prepare(&sql).map_err(storage_err)?;
+            let mut stmt = conn.prepare_cached(&sql).map_err(storage_err)?;
             stmt.bind_text(1, collection).map_err(storage_err)?;
             if let Some(ref modifier) = bind_modifier {
                 stmt.bind_text(2, modifier).map_err(storage_err)?;
@@ -648,7 +678,7 @@ impl StorageBackend for WasmSqliteBackend {
 
         if let Some(secs) = options.older_than_seconds {
             let mut stmt = conn
-                .prepare(
+                .prepare_cached(
                     "DELETE FROM records WHERE collection = ?1 AND deleted = 1 \
                      AND deleted_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?2)",
                 )
@@ -659,7 +689,7 @@ impl StorageBackend for WasmSqliteBackend {
             stmt.step().map_err(storage_err)?;
         } else {
             let mut stmt = conn
-                .prepare("DELETE FROM records WHERE collection = ?1 AND deleted = 1")
+                .prepare_cached("DELETE FROM records WHERE collection = ?1 AND deleted = 1")
                 .map_err(storage_err)?;
             stmt.bind_text(1, collection).map_err(storage_err)?;
             stmt.step().map_err(storage_err)?;
@@ -671,7 +701,7 @@ impl StorageBackend for WasmSqliteBackend {
     fn get_meta(&self, key: &str) -> less_db::error::Result<Option<String>> {
         let conn = self.borrow_conn()?;
         let mut stmt = conn
-            .prepare("SELECT value FROM meta WHERE key = ?1")
+            .prepare_cached("SELECT value FROM meta WHERE key = ?1")
             .map_err(storage_err)?;
         stmt.bind_text(1, key).map_err(storage_err)?;
 
@@ -684,7 +714,7 @@ impl StorageBackend for WasmSqliteBackend {
     fn set_meta(&self, key: &str, value: &str) -> less_db::error::Result<()> {
         let conn = self.borrow_conn()?;
         let mut stmt = conn
-            .prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)")
+            .prepare_cached("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)")
             .map_err(storage_err)?;
         stmt.bind_text(1, key).map_err(storage_err)?;
         stmt.bind_text(2, value).map_err(storage_err)?;
@@ -752,7 +782,7 @@ impl StorageBackend for WasmSqliteBackend {
         collection: &str,
         scan: &IndexScan,
     ) -> less_db::error::Result<Option<usize>> {
-        let Some((data_sql, params)) = Self::build_index_scan_sql(collection, scan, false) else {
+        let Some((data_sql, params)) = Self::build_index_scan_sql(collection, scan, false)? else {
             return Ok(None);
         };
 
@@ -761,13 +791,14 @@ impl StorageBackend for WasmSqliteBackend {
             .expect("build_index_scan_sql always produces a FROM clause");
         let count_sql = format!("SELECT COUNT(*){}", &data_sql[from_idx..]);
 
+        // Use uncached prepare() — the SQL varies with IN-list sizes.
         let conn = self.borrow_conn()?;
         let mut stmt = conn.prepare(&count_sql).map_err(storage_err)?;
         for (i, param) in params.iter().enumerate() {
-            Self::bind_param(&mut stmt, (i + 1) as i32, param)?;
+            Self::bind_param(stmt.raw_mut(), (i + 1) as i32, param)?;
         }
-        stmt.step().map_err(storage_err)?;
-        Ok(Some(stmt.column_int64(0) as usize))
+        stmt.raw_mut().step().map_err(storage_err)?;
+        Ok(Some(stmt.raw().column_int64(0) as usize))
     }
 
     fn scan_all_raw(&self) -> less_db::error::Result<Vec<SerializedRecord>> {
@@ -778,7 +809,7 @@ impl StorageBackend for WasmSqliteBackend {
     fn scan_all_meta(&self) -> less_db::error::Result<Vec<(String, String)>> {
         let conn = self.borrow_conn()?;
         let mut stmt = conn
-            .prepare("SELECT key, value FROM meta")
+            .prepare_cached("SELECT key, value FROM meta")
             .map_err(storage_err)?;
 
         let mut entries = Vec::new();
@@ -805,6 +836,7 @@ impl StorageBackend for WasmSqliteBackend {
                 let obj = data.as_object();
 
                 for field in &fi.fields {
+                    validate_sql_identifier(&field.field, "unique index field name")?;
                     let val = obj.and_then(|o| o.get(&field.field));
                     match val {
                         None | Some(Value::Null) => {
@@ -831,14 +863,15 @@ impl StorageBackend for WasmSqliteBackend {
                     conditions.join(" AND ")
                 );
 
+                // Use uncached prepare() — the SQL varies with field count.
                 let conn = self.borrow_conn()?;
                 let mut stmt = conn.prepare(&sql).map_err(storage_err)?;
                 for (i, param) in params.iter().enumerate() {
-                    Self::bind_param(&mut stmt, (i + 1) as i32, param)?;
+                    Self::bind_param(stmt.raw_mut(), (i + 1) as i32, param)?;
                 }
 
-                if let StepResult::Row = stmt.step().map_err(storage_err)? {
-                    let eid = stmt.column_string(0);
+                if let StepResult::Row = stmt.raw_mut().step().map_err(storage_err)? {
+                    let eid = stmt.raw().column_string(0);
                     let conflict_value = if fi.fields.len() == 1 {
                         obj.and_then(|o| o.get(&fi.fields[0].field))
                             .cloned()
@@ -868,6 +901,8 @@ impl StorageBackend for WasmSqliteBackend {
             }
 
             IndexDefinition::Computed(ci) => {
+                validate_sql_identifier(&ci.name, "unique computed field name")?;
+
                 let Some(computed_val) = computed else {
                     return Ok(());
                 };
@@ -903,14 +938,15 @@ impl StorageBackend for WasmSqliteBackend {
                     conditions.join(" AND ")
                 );
 
+                // Use uncached prepare() — the SQL varies with field presence.
                 let conn = self.borrow_conn()?;
                 let mut stmt = conn.prepare(&sql).map_err(storage_err)?;
                 for (i, param) in params.iter().enumerate() {
-                    Self::bind_param(&mut stmt, (i + 1) as i32, param)?;
+                    Self::bind_param(stmt.raw_mut(), (i + 1) as i32, param)?;
                 }
 
-                if let StepResult::Row = stmt.step().map_err(storage_err)? {
-                    let eid = stmt.column_string(0);
+                if let StepResult::Row = stmt.raw_mut().step().map_err(storage_err)? {
+                    let eid = stmt.raw().column_string(0);
                     let conflict_value = field_val.cloned().unwrap_or(Value::Null);
                     return Err(StorageError::UniqueConstraint {
                         collection: collection.to_string(),
