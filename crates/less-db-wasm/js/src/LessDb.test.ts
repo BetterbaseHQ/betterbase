@@ -4,7 +4,7 @@ import { t } from "./schema.js";
 import { setWasmForTesting } from "./wasm-init.js";
 import type { WasmModule } from "./wasm-init.js";
 import { BLUEPRINT } from "./types.js";
-import type { SchemaShape, CollectionDefHandle, StorageBackend, CollectionBlueprint } from "./types.js";
+import type { SchemaShape, CollectionDefHandle, StorageBackend, DurableBackend, PersistenceError, CollectionBlueprint } from "./types.js";
 
 // ============================================================================
 // Mock WASM module
@@ -30,6 +30,8 @@ function createMockWasm() {
     applyRemoteChanges: vi.fn(),
     getLastSequence: vi.fn(),
     setLastSequence: vi.fn(),
+    flushPersistence: vi.fn(),
+    hasPendingPersistence: vi.fn().mockReturnValue(false),
   };
 
   const builderCalls: Array<{ method: string; args: unknown[] }> = [];
@@ -672,6 +674,148 @@ describe("LessDb", () => {
 
       db.setLastSequence("users", 100);
       expect(dbMock.setLastSequence).toHaveBeenCalledWith("users", 100);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Durability
+  // --------------------------------------------------------------------------
+
+  describe("durability", () => {
+    it("flush() resolves immediately for non-durable backend", async () => {
+      // dummyBackend has no flush method
+      await db.flush(); // should not hang or throw
+    });
+
+    it("hasPendingWrites is false for non-durable backend", () => {
+      expect(db.hasPendingWrites).toBe(false);
+    });
+
+    it("close() resolves immediately for non-durable backend", async () => {
+      await db.close(); // should not hang or throw
+    });
+
+    it("onPersistenceError returns no-op unsub for non-durable backend", () => {
+      const unsub = db.onPersistenceError(() => {});
+      expect(typeof unsub).toBe("function");
+      unsub(); // should not throw
+    });
+
+    it("flush() delegates to durable backend", async () => {
+      const flushFn = vi.fn().mockResolvedValue(undefined);
+      const durableBackend = {
+        ...dummyBackend,
+        hasPendingWrites: true,
+        flush: flushFn,
+        close: vi.fn().mockResolvedValue(undefined),
+        onPersistenceError: vi.fn().mockReturnValue(() => {}),
+      } as unknown as StorageBackend & DurableBackend;
+
+      const durableDb = new LessDb(durableBackend);
+      await durableDb.flush();
+      expect(flushFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("hasPendingWrites delegates to durable backend", () => {
+      const durableBackend = {
+        ...dummyBackend,
+        get hasPendingWrites() { return true; },
+        flush: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+        onPersistenceError: vi.fn().mockReturnValue(() => {}),
+      } as unknown as StorageBackend & DurableBackend;
+
+      const durableDb = new LessDb(durableBackend);
+      expect(durableDb.hasPendingWrites).toBe(true);
+    });
+
+    it("onPersistenceError delegates to durable backend", () => {
+      const unsub = vi.fn();
+      const onPersistenceError = vi.fn().mockReturnValue(unsub);
+      const durableBackend = {
+        ...dummyBackend,
+        hasPendingWrites: false,
+        flush: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+        onPersistenceError,
+      } as unknown as StorageBackend & DurableBackend;
+
+      const durableDb = new LessDb(durableBackend);
+      const cb = (_err: PersistenceError) => {};
+      const returned = durableDb.onPersistenceError(cb);
+
+      expect(onPersistenceError).toHaveBeenCalledWith(cb);
+      // Returns a wrapper that calls backend unsub + removes from internal listeners
+      expect(typeof returned).toBe("function");
+      returned();
+      expect(unsub).toHaveBeenCalled();
+    });
+
+    it("put with { durability: 'flush' } returns Promise", async () => {
+      const flushFn = vi.fn().mockResolvedValue(undefined);
+      const durableBackend = {
+        ...dummyBackend,
+        hasPendingWrites: false,
+        flush: flushFn,
+        close: vi.fn().mockResolvedValue(undefined),
+        onPersistenceError: vi.fn().mockReturnValue(() => {}),
+      } as unknown as StorageBackend & DurableBackend;
+
+      const durableDb = new LessDb(durableBackend);
+      durableDb.initialize([usersDef]);
+      dbMock.put.mockReturnValue({ id: "1", name: "A", email: "a@t.com" });
+
+      const result = durableDb.put(usersDef, { name: "A", email: "a@t.com" } as never, { durability: "flush" });
+      expect(result).toBeInstanceOf(Promise);
+
+      const resolved = await result;
+      expect(resolved.id).toBe("1");
+      expect(flushFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("put without durability returns synchronously", () => {
+      db.initialize([usersDef]);
+      dbMock.put.mockReturnValue({ id: "1", name: "A", email: "a@t.com" });
+
+      const result = db.put(usersDef, { name: "A", email: "a@t.com" } as never);
+      // Should be a plain object, not a Promise
+      expect(result).not.toBeInstanceOf(Promise);
+      expect(result.id).toBe("1");
+    });
+
+    it("bulkPut with { durability: 'flush' } returns Promise", async () => {
+      const flushFn = vi.fn().mockResolvedValue(undefined);
+      const durableBackend = {
+        ...dummyBackend,
+        hasPendingWrites: false,
+        flush: flushFn,
+        close: vi.fn().mockResolvedValue(undefined),
+        onPersistenceError: vi.fn().mockReturnValue(() => {}),
+      } as unknown as StorageBackend & DurableBackend;
+
+      const durableDb = new LessDb(durableBackend);
+      durableDb.initialize([usersDef]);
+      dbMock.bulkPut.mockReturnValue({ records: [{ id: "1", name: "A", email: "a@t.com" }], errors: [] });
+
+      // bulkPut with durability: flush returns a Promise at runtime (typed as any escape)
+      const result = durableDb.bulkPut(
+        usersDef,
+        [{ name: "A", email: "a@t.com" }] as never,
+        { durability: "flush" },
+      ) as unknown;
+      expect(result).toBeInstanceOf(Promise);
+
+      const resolved = await (result as Promise<{ records: unknown[] }>);
+      expect(resolved.records).toHaveLength(1);
+      expect(flushFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("bulkPut without durability returns synchronously", () => {
+      db.initialize([usersDef]);
+      dbMock.bulkPut.mockReturnValue({ records: [], errors: [] });
+
+      const result = db.bulkPut(usersDef, [] as never);
+      expect(result).not.toBeInstanceOf(Promise);
     });
   });
 });

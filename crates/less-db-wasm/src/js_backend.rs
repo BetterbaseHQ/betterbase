@@ -85,6 +85,12 @@ extern "C" {
 
     #[wasm_bindgen(method, catch, js_name = "rollback")]
     fn rollback(this: &JsBackend) -> Result<(), JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = "scanAllRaw")]
+    fn scan_all_raw(this: &JsBackend) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = "scanAllMeta")]
+    fn scan_all_meta(this: &JsBackend) -> Result<JsValue, JsValue>;
 }
 
 // ============================================================================
@@ -294,6 +300,52 @@ impl StorageBackend for JsStorageBackend {
         let n: f64 = serde_wasm_bindgen::from_value(result)
             .map_err(|e| LessDbError::Internal(format!("Failed to deserialize count: {e}")))?;
         Ok(Some(n as usize))
+    }
+
+    fn scan_all_raw(&self) -> less_db::error::Result<Vec<SerializedRecord>> {
+        let result = self.inner.scan_all_raw().map_err(js_err)?;
+        if result.is_null() || result.is_undefined() {
+            return Ok(vec![]);
+        }
+        let batch = js_to_batch(&result)?;
+        Ok(batch.records)
+    }
+
+    fn scan_all_meta(&self) -> less_db::error::Result<Vec<(String, String)>> {
+        let result = self.inner.scan_all_meta().map_err(js_err)?;
+        if result.is_null() || result.is_undefined() {
+            return Ok(vec![]);
+        }
+        let val: Value =
+            serde_wasm_bindgen::from_value(result).map_err(|e| StorageError::Transaction {
+                message: format!("Failed to deserialize meta scan: {e}"),
+                source: None,
+            })?;
+        let arr = val.as_array().ok_or_else(|| StorageError::Transaction {
+            message: "scanAllMeta must return an array".to_string(),
+            source: None,
+        })?;
+        let mut entries = Vec::new();
+        for item in arr {
+            let key = item
+                .get("key")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| StorageError::Transaction {
+                    message: format!("scanAllMeta: item missing string 'key': {item}"),
+                    source: None,
+                })?
+                .to_string();
+            let value = item
+                .get("value")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| StorageError::Transaction {
+                    message: format!("scanAllMeta: item missing string 'value': {item}"),
+                    source: None,
+                })?
+                .to_string();
+            entries.push((key, value));
+        }
+        Ok(entries)
     }
 
     fn check_unique(

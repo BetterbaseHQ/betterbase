@@ -8,6 +8,8 @@
 
 import type {
   StorageBackend,
+  DurableBackend,
+  PersistenceError,
   SchemaShape,
   CollectionDefHandle,
   CollectionRead,
@@ -31,12 +33,51 @@ import { serializeForRust, deserializeFromRust } from "./conversions.js";
 import { ensureWasm } from "./wasm-init.js";
 import type { WasmDbInstance } from "./wasm-init.js";
 
+function isDurableBackend(b: StorageBackend): b is StorageBackend & DurableBackend {
+  return typeof (b as unknown as DurableBackend).flush === "function";
+}
+
+/** Strip the `durability` key before passing options to WASM. Returns null if no other keys remain. */
+function stripDurability(options: PutOptions): Omit<PutOptions, "durability"> | null {
+  const { durability: _, ...rest } = options;
+  return Object.keys(rest).length > 0 ? rest : null;
+}
+
 export class LessDb {
   private _wasm: WasmDbInstance;
+  private _durable: DurableBackend | null;
+  private _autoFlushScheduled = false;
+  private _persistenceErrorListeners: Array<(err: PersistenceError) => void> = [];
 
   constructor(backend: StorageBackend) {
     const { WasmDb } = ensureWasm();
     this._wasm = new WasmDb(backend);
+    this._durable = isDurableBackend(backend) ? backend : null;
+  }
+
+  /**
+   * Schedule a microtask to flush WASM pending ops to the JS backend.
+   * Called after every write operation so data eventually reaches IDB.
+   */
+  private _scheduleAutoFlush(): void {
+    if (this._autoFlushScheduled) return;
+    this._autoFlushScheduled = true;
+    queueMicrotask(() => {
+      this._autoFlushScheduled = false;
+      if (this._wasm.hasPendingPersistence()) {
+        try {
+          this._wasm.flushPersistence();
+        } catch (err) {
+          // Route to persistence error listeners so the app can react
+          if (this._durable) {
+            const persistErr = { error: err, failedOps: 0 };
+            for (const listener of this._persistenceErrorListeners) {
+              try { listener(persistErr); } catch { /* listener errors must not break flush */ }
+            }
+          }
+        }
+      }
+    });
   }
 
   /** Initialize the database with collection definitions. */
@@ -76,15 +117,26 @@ export class LessDb {
   // CRUD
   // ========================================================================
 
-  /** Insert or replace a record. */
-  put<S extends SchemaShape>(
-    def: CollectionDefHandle<string, S>,
-    data: CollectionWrite<S>,
-    options?: PutOptions,
-  ): CollectionRead<S> {
+  /**
+   * Insert or replace a record.
+   *
+   * With `{ durability: 'flush' }`, returns a Promise that resolves after
+   * the write is persisted to IndexedDB.
+   */
+  put<S extends SchemaShape>(def: CollectionDefHandle<string, S>, data: CollectionWrite<S>, options: PutOptions & { durability: "flush" }): Promise<CollectionRead<S>>;
+  put<S extends SchemaShape>(def: CollectionDefHandle<string, S>, data: CollectionWrite<S>, options?: PutOptions): CollectionRead<S>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  put(def: CollectionDefHandle<string, any>, data: any, options?: PutOptions): any {
+    const durability = options?.durability;
+    const wasmOptions = options ? stripDurability(options) : null;
     const serialized = serializeForRust(data as Record<string, unknown>);
-    const result = this._wasm.put(def.name, serialized, options ?? null) as Record<string, unknown>;
-    return deserializeFromRust(result, def.schema) as CollectionRead<S>;
+    const result = this._wasm.put(def.name, serialized, wasmOptions) as Record<string, unknown>;
+    const record = deserializeFromRust(result, def.schema);
+    if (durability === "flush") {
+      return this.flush().then(() => record);
+    }
+    this._scheduleAutoFlush();
+    return record;
   }
 
   /** Get a record by id. Returns null if not found. */
@@ -111,6 +163,7 @@ export class LessDb {
       serialized,
       { ...options, id },
     ) as Record<string, unknown>;
+    this._scheduleAutoFlush();
     return deserializeFromRust(result, def.schema) as CollectionRead<S>;
   }
 
@@ -120,7 +173,9 @@ export class LessDb {
     id: string,
     options?: DeleteOptions,
   ): boolean {
-    return this._wasm.delete(def.name, id, options ?? null);
+    const result = this._wasm.delete(def.name, id, options ?? null);
+    this._scheduleAutoFlush();
+    return result;
   }
 
   // ========================================================================
@@ -168,20 +223,28 @@ export class LessDb {
   // Bulk operations
   // ========================================================================
 
-  /** Bulk insert records. */
+  /** Bulk insert records. With `{ durability: 'flush' }`, returns a Promise that resolves after persistence. */
   bulkPut<S extends SchemaShape>(
     def: CollectionDefHandle<string, S>,
     records: CollectionWrite<S>[],
     options?: PutOptions,
   ): BatchResult<CollectionRead<S>> {
+    const durability = options?.durability;
+    const wasmOptions = options ? stripDurability(options) : null;
     const serialized = records.map((r) => serializeForRust(r as Record<string, unknown>));
-    const result = this._wasm.bulkPut(def.name, serialized, options ?? null);
-    return {
+    const result = this._wasm.bulkPut(def.name, serialized, wasmOptions);
+    const batchResult: BatchResult<CollectionRead<S>> = {
       records: (result.records as Record<string, unknown>[]).map(
         (r) => deserializeFromRust(r, def.schema) as CollectionRead<S>,
       ),
       errors: result.errors,
     };
+    if (durability === "flush") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return this.flush().then(() => batchResult) as any;
+    }
+    this._scheduleAutoFlush();
+    return batchResult;
   }
 
   /** Bulk delete records by ids. */
@@ -190,7 +253,9 @@ export class LessDb {
     ids: string[],
     options?: DeleteOptions,
   ): BulkDeleteResult {
-    return this._wasm.bulkDelete(def.name, ids, options ?? null);
+    const result = this._wasm.bulkDelete(def.name, ids, options ?? null);
+    this._scheduleAutoFlush();
+    return result;
   }
 
   // ========================================================================
@@ -261,6 +326,7 @@ export class LessDb {
     snapshot?: PushSnapshot,
   ): void {
     this._wasm.markSynced(def.name, id, sequence, snapshot ?? null);
+    this._scheduleAutoFlush();
   }
 
   /** Apply remote changes. */
@@ -270,6 +336,7 @@ export class LessDb {
     options?: ApplyRemoteOptions,
   ): void {
     this._wasm.applyRemoteChanges(def.name, records, options ?? {});
+    this._scheduleAutoFlush();
   }
 
   /** Get the last sync sequence for a collection. */
@@ -280,5 +347,50 @@ export class LessDb {
   /** Set the last sync sequence for a collection. */
   setLastSequence(collection: string, sequence: number): void {
     this._wasm.setLastSequence(collection, sequence);
+    this._scheduleAutoFlush();
+  }
+
+  // ========================================================================
+  // Durability
+  // ========================================================================
+
+  /** Whether the backend has writes not yet persisted. Always false for non-durable backends. */
+  get hasPendingWrites(): boolean {
+    // Check both WASM-side pending ops and backend-side pending writes
+    return this._wasm.hasPendingPersistence() || (this._durable?.hasPendingWrites ?? false);
+  }
+
+  /**
+   * Wait for all pending writes to be persisted.
+   *
+   * 1. Flush WASM MemoryMapped → inner JS backend (batch_put_raw)
+   * 2. Flush JS backend → IndexedDB (async IDB transaction)
+   */
+  flush(): Promise<void> {
+    // Step 1: push memory changes to the JS backend synchronously
+    this._wasm.flushPersistence();
+    // Step 2: wait for the JS backend to persist to IDB
+    return this._durable?.flush() ?? Promise.resolve();
+  }
+
+  /** Close the underlying backend. Flushes all pending writes first. */
+  async close(): Promise<void> {
+    try {
+      // Flush WASM memory → JS backend → IDB before closing
+      await this.flush();
+    } finally {
+      await (this._durable?.close() ?? Promise.resolve());
+    }
+  }
+
+  /** Register a persistence error callback. Returns unsubscribe. No-op unsub for non-durable backends. */
+  onPersistenceError(cb: (err: PersistenceError) => void): () => void {
+    this._persistenceErrorListeners.push(cb);
+    const durableUnsub = this._durable?.onPersistenceError(cb) ?? (() => {});
+    return () => {
+      const idx = this._persistenceErrorListeners.indexOf(cb);
+      if (idx >= 0) this._persistenceErrorListeners.splice(idx, 1);
+      durableUnsub();
+    };
   }
 }

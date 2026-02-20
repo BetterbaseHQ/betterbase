@@ -30,6 +30,8 @@ function createMockWasm() {
     applyRemoteChanges: vi.fn(),
     getLastSequence: vi.fn(),
     setLastSequence: vi.fn(),
+    flushPersistence: vi.fn(),
+    hasPendingPersistence: vi.fn().mockReturnValue(false),
   };
 
   const builderCalls: Array<{ method: string; args: unknown[] }> = [];

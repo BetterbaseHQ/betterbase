@@ -757,6 +757,38 @@ impl StorageBackend for SqliteBackend {
         Ok(Some(count as usize))
     }
 
+    fn scan_all_raw(&self) -> Result<Vec<SerializedRecord>> {
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT id, collection, version, data, crdt, pending_patches, \
+                 sequence, dirty, deleted, deleted_at, meta, computed \
+                 FROM records",
+            )
+            .map_err(storage_err)?;
+        let rows = stmt
+            .query_map([], Self::row_to_record)
+            .map_err(storage_err)?;
+        let records: rusqlite::Result<Vec<_>> = rows.collect();
+        records.map_err(storage_err)
+    }
+
+    fn scan_all_meta(&self) -> Result<Vec<(String, String)>> {
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
+        let mut stmt = conn
+            .prepare_cached("SELECT key, value FROM meta")
+            .map_err(storage_err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(storage_err)?;
+        let entries: rusqlite::Result<Vec<_>> = rows.collect();
+        entries.map_err(storage_err)
+    }
+
     fn check_unique(
         &self,
         collection: &str,

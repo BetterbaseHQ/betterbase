@@ -32,6 +32,8 @@ export interface WasmDbInstance {
   applyRemoteChanges(collection: string, records: unknown[], options: unknown): unknown;
   getLastSequence(collection: string): number;
   setLastSequence(collection: string, sequence: number): void;
+  flushPersistence(): void;
+  hasPendingPersistence(): boolean;
 }
 
 /** @internal */

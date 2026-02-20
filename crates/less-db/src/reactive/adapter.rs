@@ -213,6 +213,16 @@ impl<B: StorageBackend> ReactiveAdapter<B> {
         }
     }
 
+    /// Execute a closure with a reference to the underlying storage backend.
+    /// Useful for operations like flushing a MemoryMapped backend.
+    pub fn with_backend<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce(&B) -> T,
+    {
+        let guard = self.inner.lock();
+        f(&guard.backend)
+    }
+
     // -----------------------------------------------------------------------
     // Subscriptions
     // -----------------------------------------------------------------------

@@ -1,5 +1,7 @@
 import type {
   StorageBackend,
+  DurableBackend,
+  PersistenceError,
   SerializedRecord,
   ScanOptions,
   PurgeTombstonesOptions,
@@ -16,6 +18,7 @@ import type {
 const IDB_VERSION = 1;
 const STORE_RECORDS = "records";
 const STORE_META = "meta";
+const MAX_FLUSH_RETRIES = 3;
 
 /** A pending write operation for the async flush queue. */
 type FlushOp =
@@ -37,7 +40,7 @@ type FlushOp =
  * const db = createDb(backend);
  * ```
  */
-export class IndexedDbBackend implements StorageBackend {
+export class IndexedDbBackend implements StorageBackend, DurableBackend {
   private db: IDBDatabase;
   private records: Map<string, Map<string, SerializedRecord>> = new Map();
   private meta: Map<string, string> = new Map();
@@ -51,6 +54,10 @@ export class IndexedDbBackend implements StorageBackend {
   private flushScheduled = false;
   private flushPromise: Promise<void> | null = null;
   private flushResolvers: Array<{ resolve: () => void; reject: (err: unknown) => void }> = [];
+  private flushRetries = 0;
+
+  // Persistence error listeners
+  private persistenceErrorListeners: Array<(err: PersistenceError) => void> = [];
 
   private constructor(db: IDBDatabase) {
     this.db = db;
@@ -70,11 +77,16 @@ export class IndexedDbBackend implements StorageBackend {
     return backend;
   }
 
+  /** Whether there are writes not yet persisted to IndexedDB. */
+  get hasPendingWrites(): boolean {
+    return this.pendingOps.length > 0 || this.flushPromise !== null;
+  }
+
   /**
    * Wait for all pending writes to be flushed to IndexedDB.
-   * Useful for tests and graceful shutdown.
+   * Useful for tests, graceful shutdown, and explicit durability guarantees.
    */
-  flushComplete(): Promise<void> {
+  flush(): Promise<void> {
     if (this.pendingOps.length === 0 && !this.flushPromise) {
       return Promise.resolve();
     }
@@ -89,8 +101,20 @@ export class IndexedDbBackend implements StorageBackend {
 
   /** Close the IDB connection. Waits for pending flushes to complete. */
   async close(): Promise<void> {
-    await this.flushComplete();
+    await this.flush();
     this.db.close();
+  }
+
+  /**
+   * Register a callback for persistence errors (fired after retries are exhausted).
+   * Returns an unsubscribe function.
+   */
+  onPersistenceError(cb: (err: PersistenceError) => void): () => void {
+    this.persistenceErrorListeners.push(cb);
+    return () => {
+      const idx = this.persistenceErrorListeners.indexOf(cb);
+      if (idx >= 0) this.persistenceErrorListeners.splice(idx, 1);
+    };
   }
 
   /** Delete an entire IndexedDB database. */
@@ -231,6 +255,28 @@ export class IndexedDbBackend implements StorageBackend {
       this.meta.set(key, value);
       this.enqueue({ type: "meta", key, value });
     }
+  }
+
+  // ==========================================================================
+  // StorageBackend — bulk load (for MemoryMapped init)
+  // ==========================================================================
+
+  scanAllRaw(): RawBatchResult {
+    const records: SerializedRecord[] = [];
+    for (const colMap of this.records.values()) {
+      for (const record of colMap.values()) {
+        records.push(record);
+      }
+    }
+    return { records };
+  }
+
+  scanAllMeta(): Array<{ key: string; value: string }> {
+    const entries: Array<{ key: string; value: string }> = [];
+    for (const [key, value] of this.meta) {
+      entries.push({ key, value });
+    }
+    return entries;
   }
 
   // ==========================================================================
@@ -434,10 +480,10 @@ export class IndexedDbBackend implements StorageBackend {
   private scheduleFlush(): void {
     if (this.flushScheduled) return;
     this.flushScheduled = true;
-    queueMicrotask(() => this.flush());
+    queueMicrotask(() => this.doFlush());
   }
 
-  private flush(): void {
+  private doFlush(): void {
     this.flushScheduled = false;
     const ops = this.pendingOps;
     this.pendingOps = [];
@@ -473,18 +519,32 @@ export class IndexedDbBackend implements StorageBackend {
     this.flushPromise = promise
       .then(() => {
         this.flushPromise = null;
+        this.flushRetries = 0;
         this.settleFlush(null);
       })
       .catch((err) => {
         this.flushPromise = null;
-        console.error("[IndexedDbBackend] flush error:", err);
-        this.settleFlush(err);
+        this.flushRetries++;
+
+        if (this.flushRetries < MAX_FLUSH_RETRIES) {
+          // Prepend failed ops back for retry
+          this.pendingOps = [...ops, ...this.pendingOps];
+          this.scheduleFlush();
+        } else {
+          // Retries exhausted — emit persistence error, discard ops, settle with error
+          this.flushRetries = 0;
+          const persistErr: PersistenceError = { error: err, failedOps: ops.length };
+          for (const listener of this.persistenceErrorListeners) {
+            try { listener(persistErr); } catch { /* listener errors must not break flush */ }
+          }
+          this.settleFlush(err);
+        }
       });
   }
 
   private settleFlush(error: unknown): void {
-    // If new ops were enqueued during the flush, keep resolvers registered
-    // and kick off the next flush cycle
+    // If there are pending ops (from new enqueues or retried ops), keep
+    // resolvers registered and kick off the next flush cycle
     if (this.pendingOps.length > 0) {
       this.scheduleFlush();
       return;

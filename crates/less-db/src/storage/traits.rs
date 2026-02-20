@@ -88,6 +88,18 @@ pub trait StorageBackend: Send + Sync {
         computed: Option<&Value>,
         exclude_id: Option<&str>,
     ) -> Result<()>;
+
+    /// Load all records across all collections (for memory-mapped init).
+    /// Default: returns empty vec (backends that don't support bulk load).
+    fn scan_all_raw(&self) -> Result<Vec<SerializedRecord>> {
+        Ok(vec![])
+    }
+
+    /// Load all metadata key-value pairs.
+    /// Default: returns empty vec.
+    fn scan_all_meta(&self) -> Result<Vec<(String, String)>> {
+        Ok(vec![])
+    }
 }
 
 // ============================================================================

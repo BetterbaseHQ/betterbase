@@ -81,6 +81,9 @@ export type {
   PushAck,
   PullResult,
   PullFailure,
+  // Durability
+  DurableBackend,
+  PersistenceError,
 } from "./types.js";
 
 // Re-export conversions for advanced use

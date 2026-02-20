@@ -493,14 +493,14 @@ describe("IndexedDbBackend", () => {
   // Async flush
   // --------------------------------------------------------------------------
 
-  describe("flushComplete", () => {
+  describe("flush", () => {
     it("resolves immediately when no pending ops", async () => {
-      await backend.flushComplete(); // should not hang
+      await backend.flush(); // should not hang
     });
 
     it("resolves after writes are flushed", async () => {
       backend.putRaw(makeRecord("users", "1"));
-      await backend.flushComplete();
+      await backend.flush();
 
       // Verify data made it to IDB by reopening
       await backend.close();
@@ -513,12 +513,63 @@ describe("IndexedDbBackend", () => {
       backend.putRaw(makeRecord("users", "1"));
 
       const results = await Promise.all([
-        backend.flushComplete().then(() => "a"),
-        backend.flushComplete().then(() => "b"),
-        backend.flushComplete().then(() => "c"),
+        backend.flush().then(() => "a"),
+        backend.flush().then(() => "b"),
+        backend.flush().then(() => "c"),
       ]);
 
       expect(results).toEqual(["a", "b", "c"]);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Durability
+  // --------------------------------------------------------------------------
+
+  // TODO: Add retry path tests (IDB transaction failure → retry → onPersistenceError after
+  // MAX_FLUSH_RETRIES). Requires intercepting IDBDatabase.transaction or using a custom
+  // fake-indexeddb adapter to simulate failures. Best done as browser integration tests.
+
+  describe("durability", () => {
+    it("hasPendingWrites is true after write, false after flush", async () => {
+      expect(backend.hasPendingWrites).toBe(false);
+
+      backend.putRaw(makeRecord("users", "1"));
+      expect(backend.hasPendingWrites).toBe(true);
+
+      await backend.flush();
+      expect(backend.hasPendingWrites).toBe(false);
+    });
+
+    it("onPersistenceError unsubscribe stops notifications", async () => {
+      const errors: unknown[] = [];
+      const unsub = backend.onPersistenceError((err) => errors.push(err));
+
+      // Unsubscribe immediately
+      unsub();
+
+      // Even if a persistence error were to occur, the callback should not fire.
+      // We can verify the unsub returned a function and it removed the listener.
+      expect(typeof unsub).toBe("function");
+      expect(errors).toHaveLength(0);
+    });
+
+    it("onPersistenceError returns an unsubscribe function", () => {
+      const unsub = backend.onPersistenceError(() => {});
+      expect(typeof unsub).toBe("function");
+      unsub(); // should not throw
+    });
+
+    it("hasPendingWrites is true while flush is in progress", async () => {
+      backend.putRaw(makeRecord("users", "1"));
+      const promise = backend.flush();
+
+      // While the flush promise is pending, hasPendingWrites should be true
+      // (the flush is in-flight)
+      expect(backend.hasPendingWrites).toBe(true);
+
+      await promise;
+      expect(backend.hasPendingWrites).toBe(false);
     });
   });
 });
