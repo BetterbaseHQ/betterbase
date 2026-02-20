@@ -305,8 +305,9 @@ impl WasmDb {
     pub fn get_dirty(&self, collection: &str) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
         let result = self.adapter.get_dirty(&def).into_js()?;
-        let data: Vec<Value> = result.records.iter().map(|r| r.data.clone()).collect();
-        value_to_js(&Value::Array(data))
+        let val = serde_json::to_value(&result.records)
+            .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))?;
+        value_to_js(&val)
     }
 
     /// Mark a record as synced with the given server sequence.

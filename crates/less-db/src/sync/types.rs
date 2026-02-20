@@ -24,7 +24,8 @@ use crate::{
 ///
 /// Mirrors JS `SyncTransport`. Implementations handle network communication
 /// (HTTP, WebSocket, etc.) with the sync server.
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait SyncTransport: Send + Sync {
     /// Push dirty records to the server. Returns acks for successfully
     /// persisted records. Unacked records stay dirty for next push.
