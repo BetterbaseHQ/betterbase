@@ -248,10 +248,16 @@ impl<B: StorageBackend> Adapter<B> {
         let sort_entries = normalize_sort(query.sort.clone());
         let plan = plan_query(query.filter.as_ref(), sort_entries.as_deref(), &def.indexes);
 
-        // Fetch raw records — try index scan first, fall back to full scan
+        // Fetch raw records — try index scan first, fall back to full scan.
+        // Track whether the index scan was actually used so we know if
+        // post-filtering is needed even when the planner produced a scan.
+        let mut index_scan_used = false;
         let raw_records = if let Some(ref scan) = plan.scan {
             match self.backend.scan_index_raw(&def.name, scan)? {
-                Some(result) => result.records,
+                Some(result) => {
+                    index_scan_used = true;
+                    result.records
+                }
                 None => {
                     self.backend
                         .scan_raw(&def.name, &ScanOptions::default())?
@@ -305,13 +311,25 @@ impl<B: StorageBackend> Adapter<B> {
             }
         }
 
-        // Apply filter using record.data directly (avoids parallel data vec + clone)
+        // Apply filter using record.data directly (avoids parallel data vec + clone).
+        // When the index scan was planned but the backend returned None (doesn't
+        // support index scans), we fell back to a full scan and must apply the
+        // full original filter (not just the residual post_filter).
+        let fell_back_to_full_scan = plan.scan.is_some() && !index_scan_used;
         let filtered_records: Vec<SerializedRecord> = {
-            let needs_filter =
-                plan.post_filter.is_some() || (plan.scan.is_none() && query.filter.is_some());
+            let needs_filter = plan.post_filter.is_some()
+                || (plan.scan.is_none() && query.filter.is_some())
+                || (fell_back_to_full_scan && query.filter.is_some());
 
             if needs_filter {
-                let filter = plan.post_filter.as_ref().or(query.filter.as_ref()).unwrap();
+                // When we fell back to a full scan, use the complete original
+                // filter — the residual post_filter only covers conditions the
+                // index wouldn't have handled.
+                let filter = if fell_back_to_full_scan {
+                    query.filter.as_ref().unwrap()
+                } else {
+                    plan.post_filter.as_ref().or(query.filter.as_ref()).unwrap()
+                };
 
                 let mut fr = Vec::new();
                 for r in migrated_records {

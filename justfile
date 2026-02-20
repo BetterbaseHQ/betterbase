@@ -2,8 +2,8 @@
 default:
     @just --list
 
-# Run all checks (format, lint, test, TypeScript)
-check: fmt lint test test-js
+# Run all checks (format, lint, test, TypeScript, browser)
+check: fmt lint test test-js test-browser
 
 # Format code
 fmt:
@@ -32,6 +32,10 @@ test-js: typecheck-js
 # Run Rust benchmarks
 bench *args:
     cargo bench --workspace {{args}}
+
+# Run browser integration tests (real WASM + real IndexedDB)
+test-browser:
+    cd crates/less-db-wasm/js && npx vitest run --config vitest.browser.config.ts
 
 # Run browser benchmarks (WASM vs JS vs Dexie)
 bench-browser:
