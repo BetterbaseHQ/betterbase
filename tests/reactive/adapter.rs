@@ -13,7 +13,7 @@ use less_db::{
         sqlite::SqliteBackend,
         traits::{StorageLifecycle, StorageRead, StorageSync, StorageWrite},
     },
-    types::{ApplyRemoteOptions, DeleteOptions, GetOptions, PutOptions, RemoteRecord},
+    types::{ApplyRemoteOptions, DeleteOptions, GetOptions, PatchOptions, PutOptions, RemoteRecord},
 };
 use serde_json::{json, Value};
 
@@ -793,4 +793,174 @@ fn apply_remote_changes_emits_remote_change_event() {
         assert_eq!(collection, "users");
         assert_eq!(ids, &vec!["r1".to_string()]);
     }
+}
+
+// ============================================================================
+// Proxy method coverage: patch, bulk_patch, delete_many, patch_many
+// ============================================================================
+
+#[test]
+fn patch_proxies_and_emits_change() {
+    let def = users_def();
+    let ra = make_adapter(&def);
+
+    let record = ra
+        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+
+    let events = make_log::<ChangeEvent>();
+    let events_clone = events.clone();
+    ra.on_change(Box::new(move |event: &ChangeEvent| {
+        events_clone.lock().unwrap().push(event.clone());
+    }));
+
+    let patch_opts = PatchOptions {
+        id: record.id.clone(),
+        session_id: Some(SID),
+        ..Default::default()
+    };
+    let patched = ra
+        .patch(&def, json!({ "name": "Alice Updated" }), &patch_opts)
+        .expect("patch");
+
+    assert_eq!(patched.data["name"], json!("Alice Updated"));
+
+    ra.flush();
+
+    let events = events.lock().unwrap();
+    assert!(!events.is_empty(), "patch should emit a change event");
+}
+
+#[test]
+fn bulk_patch_proxies_and_returns_results() {
+    let def = users_def();
+    let ra = make_adapter(&def);
+
+    let r1 = ra
+        .put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+    let r2 = ra
+        .put(&def, json!({ "name": "B", "email": "b@x.com" }), &put_opts())
+        .expect("put");
+
+    let patch_opts = PatchOptions {
+        session_id: Some(SID),
+        ..Default::default()
+    };
+    let result = ra
+        .bulk_patch(
+            &def,
+            vec![
+                json!({ "id": r1.id, "name": "A Updated" }),
+                json!({ "id": r2.id, "name": "B Updated" }),
+            ],
+            &patch_opts,
+        )
+        .expect("bulk_patch");
+
+    assert_eq!(result.records.len(), 2);
+    assert!(result.errors.is_empty());
+}
+
+#[test]
+fn delete_many_proxies_and_emits_bulk_change() {
+    let def = users_def();
+    let ra = make_adapter(&def);
+
+    ra.put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+    ra.put(&def, json!({ "name": "Alice", "email": "a2@x.com" }), &put_opts())
+        .expect("put");
+    ra.put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
+        .expect("put");
+
+    let result = ra
+        .delete_many(&def, &json!({ "name": "Alice" }), &DeleteOptions::default())
+        .expect("delete_many");
+
+    assert_eq!(result.deleted_ids.len(), 2);
+
+    let count = ra.count(&def, None).expect("count");
+    assert_eq!(count, 1, "only Bob should remain");
+}
+
+#[test]
+fn patch_many_proxies_and_returns_matched_updated_counts() {
+    let def = users_def();
+    let ra = make_adapter(&def);
+
+    ra.put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+    ra.put(&def, json!({ "name": "Alice", "email": "a2@x.com" }), &put_opts())
+        .expect("put");
+    ra.put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
+        .expect("put");
+
+    let patch_opts = PatchOptions {
+        session_id: Some(SID),
+        ..Default::default()
+    };
+    let result = ra
+        .patch_many(
+            &def,
+            &json!({ "name": "Alice" }),
+            &json!({ "name": "Alice Updated" }),
+            &patch_opts,
+        )
+        .expect("patch_many");
+
+    assert_eq!(result.matched_count, 2);
+    assert_eq!(result.updated_count, 2);
+}
+
+// ============================================================================
+// Proxy read methods: get_all, count, explain_query
+// ============================================================================
+
+#[test]
+fn get_all_proxies_to_inner() {
+    let def = users_def();
+    let ra = make_adapter(&def);
+
+    ra.put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+    ra.put(&def, json!({ "name": "B", "email": "b@x.com" }), &put_opts())
+        .expect("put");
+
+    let result = ra.get_all(&def, &Default::default()).expect("get_all");
+    assert_eq!(result.records.len(), 2);
+}
+
+#[test]
+fn count_proxies_to_inner() {
+    let def = users_def();
+    let ra = make_adapter(&def);
+
+    ra.put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+
+    let count = ra.count(&def, None).expect("count");
+    assert_eq!(count, 1);
+}
+
+// ============================================================================
+// Lifecycle: close, is_initialized
+// ============================================================================
+
+#[test]
+fn is_initialized_returns_true_after_init() {
+    let def = users_def();
+    let ra = make_adapter(&def);
+    assert!(ra.is_initialized());
+}
+
+#[test]
+fn close_disposes_reactive_state() {
+    let def = users_def();
+    let mut ra = make_adapter(&def);
+    assert!(ra.is_initialized());
+
+    ra.close();
+    // After close, operations should still work (close just disposes subscriptions)
+    // The important thing is it doesn't panic
 }

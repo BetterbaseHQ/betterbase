@@ -1009,6 +1009,236 @@ fn unique_constraint_allows_self_patch() {
 }
 
 // ============================================================================
+// bulk_put — error handling
+// ============================================================================
+
+#[test]
+fn bulk_put_collects_errors_for_invalid_records() {
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    let result = adapter
+        .bulk_put(
+            &def,
+            vec![
+                json!({ "name": "Valid", "email": "v@x.com" }),
+                json!({ "email": "missing-name@x.com" }), // missing required "name"
+                json!({ "name": "Also Valid", "email": "av@x.com" }),
+            ],
+            &put_opts(),
+        )
+        .expect("bulk_put should return Ok with errors collected");
+
+    assert_eq!(result.records.len(), 2, "two valid records");
+    assert_eq!(result.errors.len(), 1, "one error for invalid record");
+}
+
+// ============================================================================
+// bulk_patch
+// ============================================================================
+
+#[test]
+fn bulk_patch_patches_multiple_records() {
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    let r1 = adapter
+        .put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+    let r2 = adapter
+        .put(&def, json!({ "name": "B", "email": "b@x.com" }), &put_opts())
+        .expect("put");
+
+    let patch_opts = PatchOptions {
+        session_id: Some(SID),
+        ..Default::default()
+    };
+
+    let result = adapter
+        .bulk_patch(
+            &def,
+            vec![
+                json!({ "id": r1.id, "name": "A Updated" }),
+                json!({ "id": r2.id, "name": "B Updated" }),
+            ],
+            &patch_opts,
+        )
+        .expect("bulk_patch");
+
+    assert_eq!(result.records.len(), 2);
+    assert!(result.errors.is_empty());
+    assert_eq!(result.records[0].data["name"], json!("A Updated"));
+    assert_eq!(result.records[1].data["name"], json!("B Updated"));
+}
+
+#[test]
+fn bulk_patch_missing_id_collects_error() {
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    let patch_opts = PatchOptions {
+        session_id: Some(SID),
+        ..Default::default()
+    };
+
+    let result = adapter
+        .bulk_patch(
+            &def,
+            vec![
+                json!({ "name": "No ID" }), // missing id
+            ],
+            &patch_opts,
+        )
+        .expect("bulk_patch");
+
+    assert_eq!(result.records.len(), 0);
+    assert_eq!(result.errors.len(), 1);
+    assert!(result.errors[0].error.contains("id"), "error: {}", result.errors[0].error);
+}
+
+// ============================================================================
+// delete_many
+// ============================================================================
+
+#[test]
+fn delete_many_deletes_matching_records() {
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    adapter
+        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+    adapter
+        .put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
+        .expect("put");
+    adapter
+        .put(&def, json!({ "name": "Alice", "email": "a2@x.com" }), &put_opts())
+        .expect("put");
+
+    let result = adapter
+        .delete_many(&def, &json!({ "name": "Alice" }), &DeleteOptions::default())
+        .expect("delete_many");
+
+    assert_eq!(result.deleted_ids.len(), 2, "should delete both Alices");
+    assert!(result.errors.is_empty());
+
+    let count = adapter.count(&def, None).expect("count");
+    assert_eq!(count, 1, "only Bob should remain");
+}
+
+#[test]
+fn delete_many_no_matches_returns_empty() {
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    adapter
+        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+
+    let result = adapter
+        .delete_many(&def, &json!({ "name": "Nobody" }), &DeleteOptions::default())
+        .expect("delete_many");
+
+    assert!(result.deleted_ids.is_empty());
+    assert!(result.errors.is_empty());
+}
+
+// ============================================================================
+// patch_many
+// ============================================================================
+
+#[test]
+fn patch_many_patches_matching_records() {
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    adapter
+        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+    adapter
+        .put(&def, json!({ "name": "Bob", "email": "b@x.com" }), &put_opts())
+        .expect("put");
+    adapter
+        .put(&def, json!({ "name": "Alice", "email": "a2@x.com" }), &put_opts())
+        .expect("put");
+
+    let patch_opts = PatchOptions {
+        session_id: Some(SID),
+        ..Default::default()
+    };
+
+    let result = adapter
+        .patch_many(
+            &def,
+            &json!({ "name": "Alice" }),
+            &json!({ "name": "Alice Updated" }),
+            &patch_opts,
+        )
+        .expect("patch_many");
+
+    assert_eq!(result.matched_count, 2, "should match both Alices");
+    assert_eq!(result.updated_count, 2, "should update both Alices");
+    assert!(result.errors.is_empty());
+    for r in &result.records {
+        assert_eq!(r.data["name"], json!("Alice Updated"));
+    }
+}
+
+#[test]
+fn patch_many_no_matches_returns_zero() {
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    adapter
+        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+
+    let patch_opts = PatchOptions {
+        session_id: Some(SID),
+        ..Default::default()
+    };
+
+    let result = adapter
+        .patch_many(
+            &def,
+            &json!({ "name": "Nobody" }),
+            &json!({ "name": "Updated" }),
+            &patch_opts,
+        )
+        .expect("patch_many");
+
+    assert_eq!(result.matched_count, 0);
+    assert_eq!(result.updated_count, 0);
+    assert!(result.records.is_empty());
+}
+
+// ============================================================================
+// bulk_delete — nonexistent records are silently skipped
+// ============================================================================
+
+#[test]
+fn bulk_delete_nonexistent_records_skipped() {
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    let r1 = adapter
+        .put(&def, json!({ "name": "A", "email": "a@x.com" }), &put_opts())
+        .expect("put");
+
+    let result = adapter
+        .bulk_delete(
+            &def,
+            &[r1.id.as_str(), "nonexistent-id"],
+            &DeleteOptions::default(),
+        )
+        .expect("bulk_delete");
+
+    // Only r1 was actually deleted; nonexistent-id is silently skipped
+    assert_eq!(result.deleted_ids.len(), 1);
+    assert!(result.errors.is_empty());
+}
+
+// ============================================================================
 // Not-initialized guard
 // ============================================================================
 

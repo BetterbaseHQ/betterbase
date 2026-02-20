@@ -604,6 +604,357 @@ fn scan_index_raw_does_not_return_deleted_records() {
 }
 
 // ============================================================================
+// scan_index_raw — range scans
+// ============================================================================
+
+#[test]
+fn scan_index_raw_range_lower_inclusive() {
+    let backend = make_backend();
+    for score in [10, 20, 30, 40, 50] {
+        let mut r = make_record(&format!("r{score}"), "col");
+        r.data = json!({ "score": score });
+        r.computed = Some(json!({ "idx_score": score }));
+        backend.put_raw(&r).unwrap();
+    }
+
+    let index = field_index_single("idx_score", "score", false);
+    let scan = IndexScan {
+        scan_type: IndexScanType::Range,
+        index,
+        equality_values: None,
+        range_lower: Some(RangeBound {
+            value: IndexableValue::Number(30.0),
+            inclusive: true,
+        }),
+        range_upper: None,
+        in_values: None,
+        direction: IndexSortOrder::Asc,
+    };
+
+    let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
+    let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
+    assert!(ids.contains(&"r30"), "inclusive lower bound should include 30");
+    assert!(ids.contains(&"r40"));
+    assert!(ids.contains(&"r50"));
+    assert_eq!(result.records.len(), 3);
+}
+
+#[test]
+fn scan_index_raw_range_lower_exclusive() {
+    let backend = make_backend();
+    for score in [10, 20, 30, 40, 50] {
+        let mut r = make_record(&format!("r{score}"), "col");
+        r.data = json!({ "score": score });
+        r.computed = Some(json!({ "idx_score": score }));
+        backend.put_raw(&r).unwrap();
+    }
+
+    let index = field_index_single("idx_score", "score", false);
+    let scan = IndexScan {
+        scan_type: IndexScanType::Range,
+        index,
+        equality_values: None,
+        range_lower: Some(RangeBound {
+            value: IndexableValue::Number(30.0),
+            inclusive: false,
+        }),
+        range_upper: None,
+        in_values: None,
+        direction: IndexSortOrder::Asc,
+    };
+
+    let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
+    let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
+    assert!(!ids.contains(&"r30"), "exclusive lower bound should not include 30");
+    assert!(ids.contains(&"r40"));
+    assert!(ids.contains(&"r50"));
+    assert_eq!(result.records.len(), 2);
+}
+
+#[test]
+fn scan_index_raw_range_upper_only_inclusive() {
+    let backend = make_backend();
+    for score in [10, 20, 30, 40, 50] {
+        let mut r = make_record(&format!("r{score}"), "col");
+        r.data = json!({ "score": score });
+        r.computed = Some(json!({ "idx_score": score }));
+        backend.put_raw(&r).unwrap();
+    }
+
+    let index = field_index_single("idx_score", "score", false);
+    let scan = IndexScan {
+        scan_type: IndexScanType::Range,
+        index,
+        equality_values: None,
+        range_lower: None,
+        range_upper: Some(RangeBound {
+            value: IndexableValue::Number(30.0),
+            inclusive: true,
+        }),
+        in_values: None,
+        direction: IndexSortOrder::Asc,
+    };
+
+    let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
+    let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
+    assert!(ids.contains(&"r10"));
+    assert!(ids.contains(&"r20"));
+    assert!(ids.contains(&"r30"), "inclusive upper bound should include 30");
+    assert_eq!(result.records.len(), 3);
+}
+
+#[test]
+fn scan_index_raw_range_upper_only_exclusive() {
+    let backend = make_backend();
+    for score in [10, 20, 30, 40, 50] {
+        let mut r = make_record(&format!("r{score}"), "col");
+        r.data = json!({ "score": score });
+        r.computed = Some(json!({ "idx_score": score }));
+        backend.put_raw(&r).unwrap();
+    }
+
+    let index = field_index_single("idx_score", "score", false);
+    let scan = IndexScan {
+        scan_type: IndexScanType::Range,
+        index,
+        equality_values: None,
+        range_lower: None,
+        range_upper: Some(RangeBound {
+            value: IndexableValue::Number(30.0),
+            inclusive: false,
+        }),
+        in_values: None,
+        direction: IndexSortOrder::Asc,
+    };
+
+    let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
+    let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
+    assert!(ids.contains(&"r10"));
+    assert!(ids.contains(&"r20"));
+    assert!(!ids.contains(&"r30"), "exclusive upper bound should not include 30");
+    assert_eq!(result.records.len(), 2);
+}
+
+#[test]
+fn scan_index_raw_range_both_bounds() {
+    let backend = make_backend();
+    for score in [10, 20, 30, 40, 50] {
+        let mut r = make_record(&format!("r{score}"), "col");
+        r.data = json!({ "score": score });
+        r.computed = Some(json!({ "idx_score": score }));
+        backend.put_raw(&r).unwrap();
+    }
+
+    let index = field_index_single("idx_score", "score", false);
+    let scan = IndexScan {
+        scan_type: IndexScanType::Range,
+        index,
+        equality_values: None,
+        range_lower: Some(RangeBound {
+            value: IndexableValue::Number(20.0),
+            inclusive: true,
+        }),
+        range_upper: Some(RangeBound {
+            value: IndexableValue::Number(40.0),
+            inclusive: false,
+        }),
+        in_values: None,
+        direction: IndexSortOrder::Asc,
+    };
+
+    let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
+    let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
+    assert!(ids.contains(&"r20"), "inclusive lower 20");
+    assert!(ids.contains(&"r30"));
+    assert!(!ids.contains(&"r40"), "exclusive upper 40");
+    assert_eq!(result.records.len(), 2);
+}
+
+// ============================================================================
+// scan_index_raw — $in values
+// ============================================================================
+
+#[test]
+fn scan_index_raw_in_values() {
+    let backend = make_backend();
+    for name in ["Alice", "Bob", "Charlie", "Diana"] {
+        let mut r = make_record(name, "col");
+        r.data = json!({ "name": name });
+        r.computed = Some(json!({ "idx_name": name }));
+        backend.put_raw(&r).unwrap();
+    }
+
+    let index = field_index_single("idx_name", "name", false);
+    let scan = IndexScan {
+        scan_type: IndexScanType::Range,
+        index,
+        equality_values: None,
+        range_lower: None,
+        range_upper: None,
+        in_values: Some(vec![
+            IndexableValue::String("Alice".to_string()),
+            IndexableValue::String("Charlie".to_string()),
+        ]),
+        direction: IndexSortOrder::Asc,
+    };
+
+    let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
+    assert_eq!(result.records.len(), 2);
+    let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
+    assert!(ids.contains(&"Alice"));
+    assert!(ids.contains(&"Charlie"));
+}
+
+// ============================================================================
+// scan_index_raw — index provides sort (ORDER BY)
+// ============================================================================
+
+#[test]
+fn scan_index_raw_full_scan_with_sort_asc() {
+    let backend = make_backend();
+    for score in [50, 10, 30, 20, 40] {
+        let mut r = make_record(&format!("r{score}"), "col");
+        r.data = json!({ "score": score });
+        r.computed = Some(json!({ "idx_score": score }));
+        backend.put_raw(&r).unwrap();
+    }
+
+    let index = field_index_single("idx_score", "score", false);
+    let scan = IndexScan {
+        scan_type: IndexScanType::Full,
+        index,
+        equality_values: None,
+        range_lower: None,
+        range_upper: None,
+        in_values: None,
+        direction: IndexSortOrder::Asc,
+    };
+
+    let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
+    assert_eq!(result.records.len(), 5);
+    let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec!["r10", "r20", "r30", "r40", "r50"]);
+}
+
+#[test]
+fn scan_index_raw_full_scan_with_sort_desc() {
+    let backend = make_backend();
+    for score in [50, 10, 30, 20, 40] {
+        let mut r = make_record(&format!("r{score}"), "col");
+        r.data = json!({ "score": score });
+        r.computed = Some(json!({ "idx_score": score }));
+        backend.put_raw(&r).unwrap();
+    }
+
+    // Define the index with DESC order to get DESC sorting
+    let index = IndexDefinition::Field(FieldIndex {
+        name: "idx_score".to_string(),
+        fields: vec![IndexField {
+            field: "score".to_string(),
+            order: IndexSortOrder::Desc,
+        }],
+        unique: false,
+        sparse: false,
+    });
+    let scan = IndexScan {
+        scan_type: IndexScanType::Full,
+        index,
+        equality_values: None,
+        range_lower: None,
+        range_upper: None,
+        in_values: None,
+        direction: IndexSortOrder::Desc,
+    };
+
+    let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
+    assert_eq!(result.records.len(), 5);
+    let ids: Vec<&str> = result.records.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec!["r50", "r40", "r30", "r20", "r10"]);
+}
+
+// ============================================================================
+// check_unique — sparse index with null value
+// ============================================================================
+
+#[test]
+fn check_unique_sparse_field_index_allows_null() {
+    let backend = make_backend();
+
+    // Insert a record with a null nickname
+    let mut r = make_record("r1", "col");
+    r.data = json!({ "name": "Alice", "nickname": null });
+    r.computed = Some(json!({ "idx_nickname": null }));
+    backend.put_raw(&r).unwrap();
+
+    let index = IndexDefinition::Field(FieldIndex {
+        name: "idx_nickname".to_string(),
+        fields: vec![IndexField {
+            field: "nickname".to_string(),
+            order: IndexSortOrder::Asc,
+        }],
+        unique: true,
+        sparse: true,
+    });
+
+    // Should pass even though there's a record with null — sparse skips nulls
+    let result = backend.check_unique("col", &index, &json!({ "nickname": null }), None, None);
+    assert!(result.is_ok(), "sparse index should allow null values");
+}
+
+#[test]
+fn check_unique_sparse_computed_index_allows_null() {
+    let backend = make_backend();
+
+    let mut r = make_record("r1", "col");
+    r.data = json!({ "name": "Alice" });
+    backend.put_raw(&r).unwrap();
+
+    let index = IndexDefinition::Computed(ComputedIndex {
+        name: "comp_idx".to_string(),
+        compute: Arc::new(|_| None), // always null
+        unique: true,
+        sparse: true,
+    });
+
+    let result = backend.check_unique("col", &index, &json!({}), None, None);
+    assert!(result.is_ok(), "sparse computed index should allow null values");
+}
+
+// ============================================================================
+// check_unique — compound index conflict value format
+// ============================================================================
+
+#[test]
+fn check_unique_compound_index_detects_conflict() {
+    let backend = make_backend();
+
+    let mut r = make_record("r1", "col");
+    r.data = json!({ "a": "foo", "b": "bar" });
+    r.computed = Some(json!({ "idx_ab": ["foo", "bar"] }));
+    backend.put_raw(&r).unwrap();
+
+    let index = IndexDefinition::Field(FieldIndex {
+        name: "idx_ab".to_string(),
+        fields: vec![
+            IndexField {
+                field: "a".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "b".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+        ],
+        unique: true,
+        sparse: false,
+    });
+
+    let data = json!({ "a": "foo", "b": "bar" });
+    let result = backend.check_unique("col", &index, &data, Some(&json!({ "idx_ab": ["foo", "bar"] })), None);
+    assert!(result.is_err(), "should detect compound unique conflict");
+}
+
+// ============================================================================
 // count_index_raw
 // ============================================================================
 

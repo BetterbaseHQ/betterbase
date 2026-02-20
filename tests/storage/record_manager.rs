@@ -693,3 +693,221 @@ fn merge_records_clears_dirty_when_remote_already_has_changes() {
     assert!(!result.had_local_changes);
     assert_eq!(result.record.sequence, 5);
 }
+
+// ============================================================================
+// merge_records — cross-version merge
+// ============================================================================
+
+#[test]
+fn merge_records_cross_version_migrates_remote_and_preserves_local_edits() {
+    use less_db::storage::record_manager::merge_records;
+
+    let def = versioned_def(); // v1 → v2 (adds body field)
+
+    // Create a v1 remote CRDT (only has title)
+    let v1_data = json!({
+        "id": "doc-1",
+        "title": "Original",
+        "createdAt": "2024-01-01T00:00:00Z",
+        "updatedAt": "2024-01-01T00:00:00Z",
+    });
+    let remote_model = crdt::create_model(&v1_data, SID).expect("create model");
+    let remote_crdt = crdt::model_to_binary(&remote_model);
+
+    // Create a local record at v2 (already migrated, with body)
+    let v2_data = json!({
+        "id": "doc-1",
+        "title": "Original",
+        "body": "Local edit body",
+        "createdAt": "2024-01-01T00:00:00Z",
+        "updatedAt": "2024-01-02T00:00:00Z",
+    });
+    let local_model = crdt::create_model(&v2_data, SID + 1).expect("model");
+    let local_crdt = crdt::model_to_binary(&local_model);
+    let local = SerializedRecord {
+        id: "doc-1".to_string(),
+        collection: "docs".to_string(),
+        version: 2,
+        data: v2_data,
+        crdt: local_crdt.clone(),
+        pending_patches: vec![], // empty for simplicity
+        sequence: 0,
+        dirty: true,
+        deleted: false,
+        deleted_at: None,
+        meta: None,
+        computed: None,
+    };
+
+    // Merge: remote is v1, local is v2 → triggers cross-version merge
+    let result = merge_records(&def, &local, &remote_crdt, 10, 1, None)
+        .expect("merge_records should succeed");
+
+    // Merged record should be at current version
+    assert_eq!(result.record.version, 2);
+    // Should have the title from remote
+    assert_eq!(result.record.data["title"], json!("Original"));
+    // Body should exist (added by migration)
+    assert!(
+        result.record.data.get("body").is_some(),
+        "body field should exist after migration"
+    );
+    assert_eq!(result.record.sequence, 10);
+}
+
+#[test]
+fn merge_records_cross_version_with_local_title_change() {
+    use less_db::storage::record_manager::merge_records;
+
+    let def = versioned_def();
+
+    // Remote at v1 with original title
+    let v1_remote = json!({
+        "id": "doc-1",
+        "title": "Remote Title",
+        "createdAt": "2024-01-01T00:00:00Z",
+        "updatedAt": "2024-01-01T00:00:00Z",
+    });
+    let remote_model = crdt::create_model(&v1_remote, SID).expect("model");
+    let remote_crdt = crdt::model_to_binary(&remote_model);
+
+    // Local at v2 with edited title and body
+    let v2_local = json!({
+        "id": "doc-1",
+        "title": "Local Title",
+        "body": "My body text",
+        "createdAt": "2024-01-01T00:00:00Z",
+        "updatedAt": "2024-01-02T00:00:00Z",
+    });
+    let local_model =
+        crdt::create_model(&v2_local, SID + 1).expect("model");
+    let local_crdt = crdt::model_to_binary(&local_model);
+
+    let local = SerializedRecord {
+        id: "doc-1".to_string(),
+        collection: "docs".to_string(),
+        version: 2,
+        data: v2_local,
+        crdt: local_crdt,
+        pending_patches: vec![],
+        sequence: 0,
+        dirty: true,
+        deleted: false,
+        deleted_at: None,
+        meta: None,
+        computed: None,
+    };
+
+    let result = merge_records(&def, &local, &remote_crdt, 5, 1, None)
+        .expect("cross-version merge failed");
+
+    // Local title change should be reapplied on top of migrated remote
+    assert_eq!(result.record.data["title"], json!("Local Title"));
+    assert_eq!(result.record.version, 2);
+    assert!(result.had_local_changes);
+    assert!(result.record.dirty);
+}
+
+// ============================================================================
+// prepare_remote_insert — migration and future version
+// ============================================================================
+
+#[test]
+fn prepare_remote_insert_migrates_older_version() {
+    let def = versioned_def();
+
+    // Remote record at v1
+    let v1_data = json!({
+        "id": "doc-remote",
+        "title": "Remote Doc",
+        "createdAt": "2024-01-01T00:00:00Z",
+        "updatedAt": "2024-01-01T00:00:00Z",
+    });
+    let model = crdt::create_model(&v1_data, SID).expect("create model");
+    let crdt_bytes = crdt::model_to_binary(&model);
+
+    let remote = RemoteRecord {
+        id: "doc-remote".to_string(),
+        version: 1, // older than def.current_version (2)
+        crdt: Some(crdt_bytes),
+        deleted: false,
+        sequence: 50,
+        meta: None,
+    };
+
+    let result = prepare_remote_insert(&def, &remote, None)
+        .expect("prepare_remote_insert should migrate v1 → v2");
+
+    assert_eq!(result.record.version, 2, "should be upgraded to current version");
+    assert_eq!(result.record.data["title"], json!("Remote Doc"));
+    // Migration adds body field with empty string
+    assert_eq!(result.record.data["body"], json!(""));
+    assert_eq!(result.record.sequence, 50);
+    assert!(!result.record.dirty, "remote inserts should not be dirty");
+    // CRDT should be rebuilt with schema-aware types
+    assert!(!result.record.crdt.is_empty());
+}
+
+#[test]
+fn prepare_remote_insert_rejects_future_version() {
+    let def = users_def(); // current version = 1
+
+    let remote_data = json!({
+        "id": "future-1",
+        "name": "Future",
+        "email": "f@example.com",
+        "createdAt": "2024-01-01T00:00:00Z",
+        "updatedAt": "2024-01-01T00:00:00Z",
+    });
+    let model = crdt::create_model(&remote_data, SID).expect("model");
+    let crdt_bytes = crdt::model_to_binary(&model);
+
+    let remote = RemoteRecord {
+        id: "future-1".to_string(),
+        version: 99, // far in the future
+        crdt: Some(crdt_bytes),
+        deleted: false,
+        sequence: 1,
+        meta: None,
+    };
+
+    let result = prepare_remote_insert(&def, &remote, None);
+    assert!(result.is_err(), "future version should be rejected");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("future version") || err.contains("Unknown future version"),
+        "error should mention future version, got: {err}"
+    );
+}
+
+#[test]
+fn prepare_remote_insert_preserves_meta() {
+    let def = users_def();
+
+    let remote_data = json!({
+        "id": "remote-meta",
+        "name": "Alice",
+        "email": "a@b.com",
+        "createdAt": "2024-01-01T00:00:00Z",
+        "updatedAt": "2024-01-01T00:00:00Z",
+    });
+    let model = crdt::create_model(&remote_data, SID).expect("model");
+    let crdt_bytes = crdt::model_to_binary(&model);
+
+    let remote = RemoteRecord {
+        id: "remote-meta".to_string(),
+        version: 1,
+        crdt: Some(crdt_bytes),
+        deleted: false,
+        sequence: 10,
+        meta: Some(json!({"spaceId": "workspace-1"})),
+    };
+
+    let result = prepare_remote_insert(&def, &remote, None)
+        .expect("prepare_remote_insert failed");
+    assert_eq!(
+        result.record.meta,
+        Some(json!({"spaceId": "workspace-1"})),
+        "meta should be preserved from remote"
+    );
+}

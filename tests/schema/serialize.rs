@@ -480,3 +480,130 @@ fn round_trip_nested_array_of_objects() {
     // null optional was skipped in serialize
     assert!(deserialized[1].get("count").is_none());
 }
+
+// ============================================================================
+// Type mismatch — passthrough behavior
+// ============================================================================
+
+#[test]
+fn serialize_object_schema_with_non_object_value_passes_through() {
+    let mut props = BTreeMap::new();
+    props.insert("name".to_string(), t::string());
+    let schema = t::object(props);
+    // Passing a number to an Object schema → passthrough
+    let result = serialize(&schema, &json!(42)).unwrap();
+    assert_eq!(result, json!(42));
+}
+
+#[test]
+fn serialize_record_schema_with_non_object_value_passes_through() {
+    let schema = t::record(t::number());
+    let result = serialize(&schema, &json!("not-an-object")).unwrap();
+    assert_eq!(result, json!("not-an-object"));
+}
+
+#[test]
+fn serialize_array_schema_with_non_array_value_passes_through() {
+    let schema = t::array(t::number());
+    let result = serialize(&schema, &json!("not-an-array")).unwrap();
+    assert_eq!(result, json!("not-an-array"));
+}
+
+#[test]
+fn deserialize_object_schema_with_non_object_value_passes_through() {
+    let mut props = BTreeMap::new();
+    props.insert("name".to_string(), t::string());
+    let schema = t::object(props);
+    let result = deserialize(&schema, &json!(true)).unwrap();
+    assert_eq!(result, json!(true));
+}
+
+#[test]
+fn deserialize_record_schema_with_non_object_value_passes_through() {
+    let schema = t::record(t::number());
+    let result = deserialize(&schema, &json!(null)).unwrap();
+    assert_eq!(result, json!(null));
+}
+
+#[test]
+fn deserialize_array_schema_with_non_array_value_passes_through() {
+    let schema = t::array(t::number());
+    let result = deserialize(&schema, &json!(42)).unwrap();
+    assert_eq!(result, json!(42));
+}
+
+// ============================================================================
+// Union with Object/Array variants
+// ============================================================================
+
+#[test]
+fn serialize_union_with_object_variant() {
+    let mut props = BTreeMap::new();
+    props.insert("name".to_string(), t::string());
+    let schema = t::union(vec![t::object(props), t::number()]);
+
+    // Object matches the object variant
+    let result = serialize(&schema, &json!({"name": "Alice"})).unwrap();
+    assert_eq!(result["name"], json!("Alice"));
+
+    // Number matches the number variant
+    let result = serialize(&schema, &json!(42)).unwrap();
+    assert_eq!(result, json!(42));
+}
+
+#[test]
+fn serialize_union_with_array_variant() {
+    let schema = t::union(vec![t::array(t::number()), t::string()]);
+
+    let result = serialize(&schema, &json!([1, 2, 3])).unwrap();
+    assert_eq!(result, json!([1, 2, 3]));
+
+    let result = serialize(&schema, &json!("hello")).unwrap();
+    assert_eq!(result, json!("hello"));
+}
+
+// ============================================================================
+// Deserialize — null optional field present vs absent
+// ============================================================================
+
+#[test]
+fn deserialize_object_null_optional_present_preserved() {
+    let mut props = BTreeMap::new();
+    props.insert("required".to_string(), t::string());
+    props.insert("optional".to_string(), t::optional(t::string()));
+    let schema = t::object(props);
+
+    // Null optional explicitly present in input → preserved in output
+    let value = json!({"required": "hello", "optional": null});
+    let result = deserialize(&schema, &value).unwrap();
+    assert_eq!(result["required"], json!("hello"));
+    // Unlike serialize (which skips null optionals), deserialize preserves them
+    assert_eq!(result["optional"], json!(null));
+}
+
+// ============================================================================
+// Nested union in union
+// ============================================================================
+
+#[test]
+fn deserialize_nested_union() {
+    let inner_union = t::union(vec![t::number(), t::boolean()]);
+    let outer_union = t::union(vec![t::string(), inner_union]);
+
+    // String matches outer first variant
+    assert_eq!(deserialize(&outer_union, &json!("hello")).unwrap(), json!("hello"));
+    // Number matches inner union (number variant)
+    assert_eq!(deserialize(&outer_union, &json!(42)).unwrap(), json!(42));
+    // Boolean matches inner union (boolean variant)
+    assert_eq!(deserialize(&outer_union, &json!(true)).unwrap(), json!(true));
+}
+
+#[test]
+fn serialize_nested_union() {
+    let inner_union = t::union(vec![t::number(), t::boolean()]);
+    let outer_union = t::union(vec![t::string(), inner_union]);
+
+    assert_eq!(serialize(&outer_union, &json!("hello")).unwrap(), json!("hello"));
+    assert_eq!(serialize(&outer_union, &json!(42)).unwrap(), json!(42));
+    assert_eq!(serialize(&outer_union, &json!(true)).unwrap(), json!(true));
+}

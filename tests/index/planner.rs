@@ -570,3 +570,149 @@ fn explain_shows_index_provides_sort_yes() {
         "output: {output}"
     );
 }
+
+// ============================================================================
+// $in edge cases
+// ============================================================================
+
+#[test]
+fn extract_in_over_limit_goes_to_residual() {
+    // $in with 21 values exceeds MAX_IN_VALUES (20) → residual
+    let values: Vec<serde_json::Value> = (0..21).map(|i| json!(format!("v{i}"))).collect();
+    let filter = json!({"status": {"$in": values}});
+    let conds = extract_conditions(Some(&filter));
+    assert!(
+        conds.ins.is_empty(),
+        "over-limit $in should not be extracted"
+    );
+    assert!(
+        conds.residual.is_some(),
+        "over-limit $in should go to residual"
+    );
+}
+
+#[test]
+fn extract_in_with_non_indexable_element_goes_to_residual() {
+    // $in with an array element (non-indexable) → whole list to residual
+    let filter = json!({"status": {"$in": ["active", [1, 2]]}});
+    let conds = extract_conditions(Some(&filter));
+    assert!(
+        conds.ins.is_empty(),
+        "non-indexable element should drop entire $in"
+    );
+    assert!(conds.residual.is_some());
+}
+
+#[test]
+fn extract_in_empty_array_goes_to_residual() {
+    let filter = json!({"status": {"$in": []}});
+    let conds = extract_conditions(Some(&filter));
+    assert!(
+        conds.ins.is_empty(),
+        "empty $in should not be extracted"
+    );
+}
+
+// ============================================================================
+// $lte (inclusive upper bound) and $lt-only
+// ============================================================================
+
+#[test]
+fn extract_lte_condition() {
+    let filter = json!({"age": {"$lte": 50}});
+    let conds = extract_conditions(Some(&filter));
+    let range = conds.ranges.get("age").expect("age range should exist");
+    let upper = range.1.as_ref().expect("upper bound should exist");
+    assert!(upper.inclusive, "$lte should be inclusive");
+    assert!(range.0.is_none(), "no lower bound");
+}
+
+#[test]
+fn extract_lt_only_condition() {
+    let filter = json!({"age": {"$lt": 100}});
+    let conds = extract_conditions(Some(&filter));
+    let range = conds.ranges.get("age").expect("age range should exist");
+    let upper = range.1.as_ref().expect("upper bound should exist");
+    assert!(!upper.inclusive, "$lt should be exclusive");
+    assert!(range.0.is_none(), "no lower bound");
+}
+
+// ============================================================================
+// Sort direction mismatch
+// ============================================================================
+
+#[test]
+fn plan_no_index_for_sort_when_direction_mismatches() {
+    // Index is ASC, query asks DESC → index cannot provide sort
+    let indexes = vec![field_index("status", &["status"], false, false)];
+    let plan = plan_query(
+        Some(&json!({})),
+        Some(&[sort_entry("status", SortDirection::Desc)]),
+        &indexes,
+    );
+    // Index should NOT provide sort since direction mismatches
+    assert!(
+        !plan.index_provides_sort,
+        "ASC index should not provide DESC sort"
+    );
+}
+
+// ============================================================================
+// Compound index with two equalities + sort
+// ============================================================================
+
+#[test]
+fn plan_compound_two_equalities_with_sort() {
+    let indexes = vec![IndexDefinition::Field(FieldIndex {
+        name: "compound".to_string(),
+        fields: vec![
+            IndexField {
+                field: "status".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "category".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "createdAt".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+        ],
+        unique: false,
+        sparse: false,
+    })];
+
+    let plan = plan_query(
+        Some(&json!({"status": "active", "category": "tech"})),
+        Some(&[sort_entry("createdAt", SortDirection::Asc)]),
+        &indexes,
+    );
+
+    assert!(
+        plan.scan.is_some(),
+        "compound index should be selected"
+    );
+    assert!(
+        plan.index_provides_sort,
+        "compound index should provide sort after equality prefix"
+    );
+}
+
+// ============================================================================
+// $in over-limit falls back to full scan in plan_query
+// ============================================================================
+
+#[test]
+fn plan_in_over_limit_falls_back_to_full_scan() {
+    let indexes = vec![field_index("status", &["status"], false, false)];
+    let values: Vec<serde_json::Value> = (0..21).map(|i| json!(format!("v{i}"))).collect();
+    let plan = plan_query(
+        Some(&json!({"status": {"$in": values}})),
+        None,
+        &indexes,
+    );
+    // Over-limit $in goes to residual, so index can't help → no index scan
+    assert!(plan.scan.is_none(), "should fall back to full scan");
+    assert!(plan.post_filter.is_some(), "should have post-filter for residual $in");
+}
