@@ -51,7 +51,7 @@ impl SyncManager {
             collections,
             delete_strategy: options.delete_strategy,
             push_batch_size: options.push_batch_size,
-            quarantine_threshold: options.quarantine_threshold.unwrap_or(3),
+            quarantine_threshold: options.quarantine_threshold.unwrap_or(3).max(1),
             on_error: options.on_error,
             on_progress: options.on_progress,
             on_remote_delete: options.on_remote_delete,
@@ -121,10 +121,11 @@ impl SyncManager {
     }
 
     /// Get the last-known server sequence for a collection.
-    pub fn get_last_sequence(&self, collection: &str) -> Result<i64, String> {
-        self.adapter
-            .get_last_sequence(collection)
-            .map_err(|e| e.to_string())
+    ///
+    /// Returns `0` if the collection has never been synced or if the underlying
+    /// storage read fails (consistent with the never-throw public API contract).
+    pub fn get_last_sequence(&self, collection: &str) -> i64 {
+        self.adapter.get_last_sequence(collection).unwrap_or(0)
     }
 
     /// Return all registered collection definitions.
@@ -579,6 +580,10 @@ impl SyncManager {
     // Callbacks
     // -----------------------------------------------------------------------
 
+    /// Fire `on_remote_delete` for records where a remote tombstone deleted
+    /// local live data. Only fires when `previous_data` is `Some` — if the
+    /// local record was already a tombstone, the callback is not invoked since
+    /// no live data was lost.
     fn fire_remote_tombstones(
         &self,
         collection: &str,
@@ -586,7 +591,7 @@ impl SyncManager {
     ) {
         if let Some(ref on_remote_delete) = self.on_remote_delete {
             for record in applied {
-                if record.action == RemoteAction::Deleted {
+                if record.action == RemoteAction::Deleted && record.previous_data.is_some() {
                     let event = RemoteDeleteEvent {
                         collection: collection.to_string(),
                         id: record.id.clone(),

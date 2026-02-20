@@ -2013,7 +2013,7 @@ async fn get_last_sequence_returns_current() {
     adapter.set_sequence("tasks", 42);
 
     let manager = make_manager(transport.clone(), adapter.clone());
-    assert_eq!(manager.get_last_sequence("tasks").unwrap(), 42);
+    assert_eq!(manager.get_last_sequence("tasks"), 42);
 }
 
 #[tokio::test]
@@ -2022,7 +2022,7 @@ async fn get_last_sequence_returns_zero_for_unsynced() {
     let adapter = Arc::new(MockAdapter::new());
 
     let manager = make_manager(transport.clone(), adapter.clone());
-    assert_eq!(manager.get_last_sequence("tasks").unwrap(), 0);
+    assert_eq!(manager.get_last_sequence("tasks"), 0);
 }
 
 #[tokio::test]

@@ -94,10 +94,14 @@ impl SyncScheduler {
     /// Schedule a sync-all across all collections.
     ///
     /// Returns a merged `SyncResult` (throttle/coalesce operates on flat results).
+    ///
+    /// Uses a separate throttle slot from per-collection `schedule_sync` calls.
+    /// Concurrent `schedule_sync("x")` and `schedule_sync_all()` will both run
+    /// (SyncManager's per-collection locks prevent data races).
     pub async fn schedule_sync_all(&self) -> Result<SyncResult, String> {
         self.check_disposed()?;
         let sm = self.sync_manager.clone();
-        self.schedule("_all".to_string(), move || {
+        self.schedule("__sync_all__".to_string(), move || {
             let sm = sm.clone();
             async move {
                 let map = sm.sync_all().await;
