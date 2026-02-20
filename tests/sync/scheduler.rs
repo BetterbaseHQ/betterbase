@@ -23,6 +23,7 @@ struct MockTransport {
     inner: Mutex<MockTransportInner>,
 }
 
+#[allow(clippy::type_complexity)]
 struct MockTransportInner {
     push_response: Option<
         Box<

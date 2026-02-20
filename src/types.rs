@@ -161,6 +161,13 @@ pub struct MigrationStatus {
     pub complete: bool,
 }
 
+/// Closure type for deciding whether to reset sync state on metadata change.
+pub type ShouldResetSyncStateFn = dyn Fn(Option<&Value>, &Value) -> bool + Send + Sync;
+
+/// Closure type for custom delete conflict resolution.
+pub type DeleteConflictResolveFn =
+    dyn Fn(&StoredRecord, &RemoteRecord) -> DeleteResolution + Send + Sync;
+
 /// Delete conflict resolution strategy.
 ///
 /// The `Custom` variant holds a closure and therefore cannot derive `Debug`,
@@ -176,7 +183,7 @@ pub enum DeleteConflictStrategy {
     /// Live record always wins (resurrect)
     UpdateWins,
     /// Custom resolution function
-    Custom(Box<dyn Fn(&StoredRecord, &RemoteRecord) -> DeleteResolution + Send + Sync>),
+    Custom(Box<DeleteConflictResolveFn>),
 }
 
 impl std::fmt::Debug for DeleteConflictStrategy {
@@ -213,7 +220,7 @@ pub struct PutOptions {
     /// Middleware metadata
     pub meta: Option<Value>,
     /// Middleware hook: returns true → sequence resets to 0, pending_patches cleared.
-    pub should_reset_sync_state: Option<Arc<dyn Fn(Option<&Value>, &Value) -> bool + Send + Sync>>,
+    pub should_reset_sync_state: Option<Arc<ShouldResetSyncStateFn>>,
 }
 
 impl std::fmt::Debug for PutOptions {
@@ -251,7 +258,7 @@ pub struct PatchOptions {
     pub skip_unique_check: bool,
     pub meta: Option<Value>,
     /// Middleware hook: returns true → sequence resets to 0, pending_patches cleared.
-    pub should_reset_sync_state: Option<Arc<dyn Fn(Option<&Value>, &Value) -> bool + Send + Sync>>,
+    pub should_reset_sync_state: Option<Arc<ShouldResetSyncStateFn>>,
 }
 
 impl std::fmt::Debug for PatchOptions {

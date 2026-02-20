@@ -91,12 +91,15 @@ pub struct IndexScan {
 // Computed Index
 // ============================================================================
 
+/// Closure type for computing an index value from a document.
+pub type ComputeIndexFn = dyn Fn(&Value) -> Option<IndexableValue> + Send + Sync;
+
 /// Computed index with a derive function.
 /// Stores the computed value alongside the document.
 #[derive(Clone)]
 pub struct ComputedIndex {
     pub name: String,
-    pub compute: Arc<dyn Fn(&Value) -> Option<IndexableValue> + Send + Sync>,
+    pub compute: Arc<ComputeIndexFn>,
     pub unique: bool,
     pub sparse: bool,
 }

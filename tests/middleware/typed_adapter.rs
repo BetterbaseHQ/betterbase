@@ -74,10 +74,7 @@ impl Middleware for SpacesMiddleware {
         Some(json!({}))
     }
 
-    fn on_query(
-        &self,
-        options: &Value,
-    ) -> Option<Box<dyn Fn(Option<&Value>) -> bool + Send + Sync>> {
+    fn on_query(&self, options: &Value) -> Option<Box<less_db::middleware::types::MetaFilterFn>> {
         let target_space_id = if let Some(same_space) = options.get("sameSpaceAs") {
             same_space
                 .get("_spaceId")

@@ -186,7 +186,13 @@ pub enum SyncError {
     Disposed,
 
     #[error(transparent)]
-    Storage(#[from] StorageError),
+    Storage(Box<StorageError>),
+}
+
+impl From<StorageError> for SyncError {
+    fn from(e: StorageError) -> Self {
+        SyncError::Storage(Box::new(e))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +205,7 @@ pub enum LessDbError {
     Schema(#[from] SchemaError),
 
     #[error(transparent)]
-    Storage(#[from] StorageError),
+    Storage(Box<StorageError>),
 
     #[error(transparent)]
     Migration(#[from] MigrationError),
@@ -211,7 +217,7 @@ pub enum LessDbError {
     Merge(#[from] MergeConflictError),
 
     #[error(transparent)]
-    Sync(#[from] SyncError),
+    Sync(Box<SyncError>),
 
     #[error(transparent)]
     DiffDepth(#[from] crate::patch::diff::DiffDepthError),
@@ -221,6 +227,18 @@ pub enum LessDbError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+}
+
+impl From<StorageError> for LessDbError {
+    fn from(e: StorageError) -> Self {
+        LessDbError::Storage(Box::new(e))
+    }
+}
+
+impl From<SyncError> for LessDbError {
+    fn from(e: SyncError) -> Self {
+        LessDbError::Sync(Box::new(e))
+    }
 }
 
 /// Convenience alias — the default error type is `LessDbError`.

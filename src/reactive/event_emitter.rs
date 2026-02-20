@@ -21,12 +21,15 @@ use parking_lot::Mutex;
 /// [`EventEmitter::off`] to remove the listener.
 pub type ListenerId = u64;
 
+/// Closure type for event listeners.
+pub type ListenerFn<T> = dyn Fn(&T) + Send + Sync;
+
 /// Typed synchronous event emitter.
 ///
 /// `T` is the event payload type. All methods take `&self` — internal state
 /// is protected by a `parking_lot::Mutex` that is never held during callbacks.
 pub struct EventEmitter<T> {
-    listeners: Mutex<Vec<(ListenerId, Arc<dyn Fn(&T) + Send + Sync>)>>,
+    listeners: Mutex<Vec<(ListenerId, Arc<ListenerFn<T>>)>>,
     next_id: AtomicU64,
 }
 
@@ -62,7 +65,7 @@ impl<T> EventEmitter<T> {
     /// emission round. The lock is released before calling any callbacks.
     pub fn emit(&self, event: &T) {
         // Snapshot Arc references under the lock (cheap: just ref-count bumps).
-        let snapshot: Vec<Arc<dyn Fn(&T) + Send + Sync>> = {
+        let snapshot: Vec<Arc<ListenerFn<T>>> = {
             let guard = self.listeners.lock();
             guard.iter().map(|(_, cb)| Arc::clone(cb)).collect()
         };

@@ -37,6 +37,11 @@ const AUTO_FIELDS: &[&str] = &["id", "createdAt", "updatedAt"];
 // Public Types
 // ============================================================================
 
+/// Closure type for record migration between schema versions.
+pub type MigrateFn = dyn Fn(Value) -> std::result::Result<Value, Box<dyn std::error::Error + Send + Sync>>
+    + Send
+    + Sync;
+
 /// A single version in the version chain.
 pub struct VersionDef {
     pub version: u32,
@@ -44,13 +49,7 @@ pub struct VersionDef {
     pub schema: BTreeMap<String, SchemaNode>,
     /// Migration function: receives full record (with auto-fields), returns full record.
     /// None for v1 (no migration needed).
-    pub migrate: Option<
-        Box<
-            dyn Fn(Value) -> std::result::Result<Value, Box<dyn std::error::Error + Send + Sync>>
-                + Send
-                + Sync,
-        >,
-    >,
+    pub migrate: Option<Box<MigrateFn>>,
 }
 
 /// Complete collection definition produced by `build()`.

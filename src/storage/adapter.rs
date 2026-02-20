@@ -15,7 +15,7 @@ use crate::{
     error::{LessDbError, Result, StorageError},
     index::planner::{plan_query, QueryPlan},
     query::{
-        operators::{compare_values, filter_records, get_field_value},
+        operators::{compare_values, filter_records, get_field_value, matches_filter},
         types::{normalize_sort, Query, SortDirection},
     },
     storage::{
@@ -41,7 +41,7 @@ use crate::{
 /// Orchestration layer that wraps a `StorageBackend` with full CRUD, query,
 /// migration, and sync semantics.
 pub struct Adapter<B: StorageBackend> {
-    pub backend: B,
+    pub(crate) backend: B,
     collections: Vec<Arc<CollectionDef>>,
     initialized: bool,
     session_id: Mutex<Option<u64>>,
@@ -93,7 +93,7 @@ impl<B: StorageBackend> Adapter<B> {
 
     fn check_initialized(&self) -> Result<()> {
         if !self.initialized {
-            return Err(LessDbError::Storage(StorageError::NotInitialized));
+            return Err(StorageError::NotInitialized.into());
         }
         Ok(())
     }
@@ -296,21 +296,18 @@ impl<B: StorageBackend> Adapter<B> {
             }
         }
 
-        // Apply filter to data values
+        // Apply filter to data values, keeping parallel vecs in sync via index
         let (filtered_data, filtered_records): (Vec<Value>, Vec<SerializedRecord>) = {
-            // Build a filter to apply
             let needs_filter =
                 plan.post_filter.is_some() || (plan.scan.is_none() && query.filter.is_some());
 
             if needs_filter {
                 let filter = plan.post_filter.as_ref().or(query.filter.as_ref()).unwrap();
 
-                let filtered = filter_records(&data_records, filter)?;
-                // Keep only the records whose data survived the filter
                 let mut fd = Vec::new();
                 let mut fr = Vec::new();
                 for (d, r) in data_records.into_iter().zip(migrated_records.into_iter()) {
-                    if filtered.contains(&d) {
+                    if matches_filter(&d, filter)? {
                         fd.push(d);
                         fr.push(r);
                     }
@@ -544,10 +541,11 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
         // Throw if trying to put into a deleted record
         if let Some(ref existing) = existing {
             if existing.deleted {
-                return Err(LessDbError::Storage(StorageError::Deleted {
+                return Err(StorageError::Deleted {
                     collection: def.name.clone(),
                     id: existing.id.clone(),
-                }));
+                }
+                .into());
             }
         }
 
@@ -626,17 +624,18 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
         self.check_initialized()?;
 
         let existing = self.backend.get_raw(&def.name, &opts.id)?.ok_or_else(|| {
-            LessDbError::Storage(StorageError::NotFound {
+            LessDbError::from(StorageError::NotFound {
                 collection: def.name.clone(),
                 id: opts.id.clone(),
             })
         })?;
 
         if existing.deleted {
-            return Err(LessDbError::Storage(StorageError::Deleted {
+            return Err(StorageError::Deleted {
                 collection: def.name.clone(),
                 id: opts.id.clone(),
-            }));
+            }
+            .into());
         }
 
         let session_id = if let Some(sid) = opts.session_id {
@@ -694,23 +693,25 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
     ) -> Result<BatchResult> {
         self.check_initialized()?;
 
-        let mut result_records = Vec::new();
-        let mut errors = Vec::new();
+        self.backend.transaction(|_| {
+            let mut result_records = Vec::new();
+            let mut errors = Vec::new();
 
-        for data in records {
-            match self.put(def, data, opts) {
-                Ok(record) => result_records.push(record),
-                Err(e) => errors.push(RecordError {
-                    id: String::new(),
-                    collection: def.name.clone(),
-                    error: e.to_string(),
-                }),
+            for data in records {
+                match self.put(def, data, opts) {
+                    Ok(record) => result_records.push(record),
+                    Err(e) => errors.push(RecordError {
+                        id: String::new(),
+                        collection: def.name.clone(),
+                        error: e.to_string(),
+                    }),
+                }
             }
-        }
 
-        Ok(BatchResult {
-            records: result_records,
-            errors,
+            Ok(BatchResult {
+                records: result_records,
+                errors,
+            })
         })
     }
 
@@ -722,26 +723,28 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
     ) -> Result<BulkDeleteResult> {
         self.check_initialized()?;
 
-        let mut deleted_ids = Vec::new();
-        let mut errors = Vec::new();
+        self.backend.transaction(|_| {
+            let mut deleted_ids = Vec::new();
+            let mut errors = Vec::new();
 
-        for &id in ids {
-            match self.delete(def, id, opts) {
-                Ok(true) => deleted_ids.push(id.to_string()),
-                Ok(false) => {
-                    // Record not found or already deleted — not an error
+            for &id in ids {
+                match self.delete(def, id, opts) {
+                    Ok(true) => deleted_ids.push(id.to_string()),
+                    Ok(false) => {
+                        // Record not found or already deleted — not an error
+                    }
+                    Err(e) => errors.push(RecordError {
+                        id: id.to_string(),
+                        collection: def.name.clone(),
+                        error: e.to_string(),
+                    }),
                 }
-                Err(e) => errors.push(RecordError {
-                    id: id.to_string(),
-                    collection: def.name.clone(),
-                    error: e.to_string(),
-                }),
             }
-        }
 
-        Ok(BulkDeleteResult {
-            deleted_ids,
-            errors,
+            Ok(BulkDeleteResult {
+                deleted_ids,
+                errors,
+            })
         })
     }
 
@@ -753,48 +756,50 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
     ) -> Result<BulkPatchResult> {
         self.check_initialized()?;
 
-        let mut records = Vec::new();
-        let mut errors = Vec::new();
+        self.backend.transaction(|_| {
+            let mut records = Vec::new();
+            let mut errors = Vec::new();
 
-        for patch_data in patches {
-            // Extract the ID from the patch object
-            let id = patch_data
-                .as_object()
-                .and_then(|obj| obj.get("id"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            for patch_data in patches {
+                // Extract the ID from the patch object
+                let id = patch_data
+                    .as_object()
+                    .and_then(|obj| obj.get("id"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
 
-            let id = match id {
-                Some(id) => id,
-                None => {
-                    errors.push(RecordError {
-                        id: String::new(),
+                let id = match id {
+                    Some(id) => id,
+                    None => {
+                        errors.push(RecordError {
+                            id: String::new(),
+                            collection: def.name.clone(),
+                            error: "patch missing 'id' field".to_string(),
+                        });
+                        continue;
+                    }
+                };
+
+                let patch_opts = PatchOptions {
+                    id: id.clone(),
+                    session_id: opts.session_id,
+                    skip_unique_check: opts.skip_unique_check,
+                    meta: opts.meta.clone(),
+                    should_reset_sync_state: opts.should_reset_sync_state.clone(),
+                };
+
+                match self.patch(def, patch_data, &patch_opts) {
+                    Ok(record) => records.push(record),
+                    Err(e) => errors.push(RecordError {
+                        id,
                         collection: def.name.clone(),
-                        error: "patch missing 'id' field".to_string(),
-                    });
-                    continue;
+                        error: e.to_string(),
+                    }),
                 }
-            };
-
-            let patch_opts = PatchOptions {
-                id: id.clone(),
-                session_id: opts.session_id,
-                skip_unique_check: opts.skip_unique_check,
-                meta: opts.meta.clone(),
-                should_reset_sync_state: opts.should_reset_sync_state.clone(),
-            };
-
-            match self.patch(def, patch_data, &patch_opts) {
-                Ok(record) => records.push(record),
-                Err(e) => errors.push(RecordError {
-                    id,
-                    collection: def.name.clone(),
-                    error: e.to_string(),
-                }),
             }
-        }
 
-        Ok(BulkPatchResult { records, errors })
+            Ok(BulkPatchResult { records, errors })
+        })
     }
 
     fn delete_many(
@@ -810,27 +815,30 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
             ..Default::default()
         };
 
-        let query_result = self.query(def, &query)?;
+        // Query inside the transaction so the matched set and the writes are atomic.
+        self.backend.transaction(|_| {
+            let query_result = self.query(def, &query)?;
 
-        let mut deleted_ids = Vec::new();
-        let mut errors = Vec::new();
+            let mut deleted_ids = Vec::new();
+            let mut errors = Vec::new();
 
-        for record in query_result.records {
-            let id = record.id.clone();
-            match self.delete(def, &id, opts) {
-                Ok(true) => deleted_ids.push(id),
-                Ok(false) => {}
-                Err(e) => errors.push(RecordError {
-                    id,
-                    collection: def.name.clone(),
-                    error: e.to_string(),
-                }),
+            for record in query_result.records {
+                let id = record.id.clone();
+                match self.delete(def, &id, opts) {
+                    Ok(true) => deleted_ids.push(id),
+                    Ok(false) => {}
+                    Err(e) => errors.push(RecordError {
+                        id,
+                        collection: def.name.clone(),
+                        error: e.to_string(),
+                    }),
+                }
             }
-        }
 
-        Ok(BulkDeleteResult {
-            deleted_ids,
-            errors,
+            Ok(BulkDeleteResult {
+                deleted_ids,
+                errors,
+            })
         })
     }
 
@@ -848,40 +856,43 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
             ..Default::default()
         };
 
-        let query_result = self.query(def, &query)?;
-        let matched_count = query_result.records.len();
+        // Query inside the transaction so the matched set and the writes are atomic.
+        self.backend.transaction(|_| {
+            let query_result = self.query(def, &query)?;
+            let matched_count = query_result.records.len();
 
-        let mut records = Vec::new();
-        let mut errors = Vec::new();
+            let mut records = Vec::new();
+            let mut errors = Vec::new();
 
-        for record in query_result.records {
-            let id = record.id.clone();
+            for record in query_result.records {
+                let id = record.id.clone();
 
-            let patch_opts = PatchOptions {
-                id: id.clone(),
-                session_id: opts.session_id,
-                skip_unique_check: opts.skip_unique_check,
-                meta: opts.meta.clone(),
-                should_reset_sync_state: opts.should_reset_sync_state.clone(),
-            };
+                let patch_opts = PatchOptions {
+                    id: id.clone(),
+                    session_id: opts.session_id,
+                    skip_unique_check: opts.skip_unique_check,
+                    meta: opts.meta.clone(),
+                    should_reset_sync_state: opts.should_reset_sync_state.clone(),
+                };
 
-            match self.patch(def, patch.clone(), &patch_opts) {
-                Ok(record) => records.push(record),
-                Err(e) => errors.push(RecordError {
-                    id,
-                    collection: def.name.clone(),
-                    error: e.to_string(),
-                }),
+                match self.patch(def, patch.clone(), &patch_opts) {
+                    Ok(record) => records.push(record),
+                    Err(e) => errors.push(RecordError {
+                        id,
+                        collection: def.name.clone(),
+                        error: e.to_string(),
+                    }),
+                }
             }
-        }
 
-        let updated_count = records.len();
+            let updated_count = records.len();
 
-        Ok(PatchManyResult {
-            records,
-            errors,
-            matched_count,
-            updated_count,
+            Ok(PatchManyResult {
+                records,
+                errors,
+                matched_count,
+                updated_count,
+            })
         })
     }
 }
@@ -919,7 +930,7 @@ impl<B: StorageBackend> StorageSync for Adapter<B> {
         self.check_initialized()?;
 
         let existing = self.backend.get_raw(&def.name, id)?.ok_or_else(|| {
-            LessDbError::Storage(StorageError::NotFound {
+            LessDbError::from(StorageError::NotFound {
                 collection: def.name.clone(),
                 id: id.to_string(),
             })

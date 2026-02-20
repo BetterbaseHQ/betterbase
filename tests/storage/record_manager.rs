@@ -225,11 +225,12 @@ fn prepare_update_rejects_immutable_id_change() {
 
     assert!(result.is_err(), "changing id should be rejected");
     match result.unwrap_err() {
-        less_db::error::LessDbError::Storage(less_db::error::StorageError::ImmutableField {
-            field,
-            ..
-        }) => {
-            assert_eq!(field, "id");
+        less_db::error::LessDbError::Storage(inner)
+            if matches!(*inner, less_db::error::StorageError::ImmutableField { .. }) =>
+        {
+            if let less_db::error::StorageError::ImmutableField { field, .. } = *inner {
+                assert_eq!(field, "id");
+            }
         }
         other => panic!("expected ImmutableField error, got: {:?}", other),
     }
@@ -248,11 +249,12 @@ fn prepare_update_rejects_immutable_created_at_change() {
 
     assert!(result.is_err(), "changing createdAt should be rejected");
     match result.unwrap_err() {
-        less_db::error::LessDbError::Storage(less_db::error::StorageError::ImmutableField {
-            field,
-            ..
-        }) => {
-            assert_eq!(field, "createdAt");
+        less_db::error::LessDbError::Storage(inner)
+            if matches!(*inner, less_db::error::StorageError::ImmutableField { .. }) =>
+        {
+            if let less_db::error::StorageError::ImmutableField { field, .. } = *inner {
+                assert_eq!(field, "createdAt");
+            }
         }
         other => panic!("expected ImmutableField error, got: {:?}", other),
     }

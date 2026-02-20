@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::{
     collection::builder::CollectionDef,
     error::Result,
+    storage::traits::StorageSync,
     types::{
         ApplyRemoteOptions, ApplyRemoteResult, BatchResult, DeleteConflictStrategyName,
         PushSnapshot, RemoteRecord,
@@ -103,6 +104,48 @@ pub trait SyncAdapter: Send + Sync {
     ) -> Result<ApplyRemoteResult>;
     fn get_last_sequence(&self, collection: &str) -> Result<i64>;
     fn set_last_sequence(&self, collection: &str, sequence: i64) -> Result<()>;
+}
+
+/// Blanket implementation: any type implementing `StorageSync + Send + Sync`
+/// automatically satisfies `SyncAdapter`. This connects `Adapter<B>` and
+/// `ReactiveAdapter<B>` to the sync system without manual bridge code.
+///
+/// **Coupling note:** Adding a method to `SyncAdapter` requires either a
+/// default impl or a corresponding addition to `StorageSync` (and this
+/// blanket). Adding a method only to `StorageSync` is fine — it won't
+/// surface in `SyncAdapter`. Test mocks that implement `SyncAdapter`
+/// directly must NOT also implement `StorageSync` (coherence conflict).
+impl<T: StorageSync + Send + Sync> SyncAdapter for T {
+    fn get_dirty(&self, def: &CollectionDef) -> Result<BatchResult> {
+        StorageSync::get_dirty(self, def)
+    }
+
+    fn mark_synced(
+        &self,
+        def: &CollectionDef,
+        id: &str,
+        sequence: i64,
+        snapshot: Option<&PushSnapshot>,
+    ) -> Result<()> {
+        StorageSync::mark_synced(self, def, id, sequence, snapshot)
+    }
+
+    fn apply_remote_changes(
+        &self,
+        def: &CollectionDef,
+        records: &[RemoteRecord],
+        opts: &ApplyRemoteOptions,
+    ) -> Result<ApplyRemoteResult> {
+        StorageSync::apply_remote_changes(self, def, records, opts)
+    }
+
+    fn get_last_sequence(&self, collection: &str) -> Result<i64> {
+        StorageSync::get_last_sequence(self, collection)
+    }
+
+    fn set_last_sequence(&self, collection: &str, sequence: i64) -> Result<()> {
+        StorageSync::set_last_sequence(self, collection, sequence)
+    }
 }
 
 // ============================================================================
@@ -224,6 +267,15 @@ pub struct RemoteDeleteEvent {
 // SyncManager Options
 // ============================================================================
 
+/// Callback type for sync error events.
+pub type SyncErrorCallback = dyn Fn(&SyncErrorEvent) + Send + Sync;
+
+/// Callback type for sync progress updates.
+pub type SyncProgressCallback = dyn Fn(&SyncProgress) + Send + Sync;
+
+/// Callback type for remote delete events.
+pub type RemoteDeleteCallback = dyn Fn(&RemoteDeleteEvent) + Send + Sync;
+
 /// Configuration for `SyncManager`.
 pub struct SyncManagerOptions {
     pub transport: Arc<dyn SyncTransport>,
@@ -236,9 +288,9 @@ pub struct SyncManagerOptions {
     /// Consecutive permanent failures before quarantine (default: 3)
     pub quarantine_threshold: Option<usize>,
     /// Called for each sync error
-    pub on_error: Option<Arc<dyn Fn(&SyncErrorEvent) + Send + Sync>>,
+    pub on_error: Option<Arc<SyncErrorCallback>>,
     /// Called to report progress
-    pub on_progress: Option<Arc<dyn Fn(&SyncProgress) + Send + Sync>>,
+    pub on_progress: Option<Arc<SyncProgressCallback>>,
     /// Called when a remote tombstone deletes a local record
-    pub on_remote_delete: Option<Arc<dyn Fn(&RemoteDeleteEvent) + Send + Sync>>,
+    pub on_remote_delete: Option<Arc<RemoteDeleteCallback>>,
 }

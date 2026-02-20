@@ -27,9 +27,9 @@ pub struct SyncManager {
     delete_strategy: Option<crate::types::DeleteConflictStrategyName>,
     push_batch_size: Option<usize>,
     quarantine_threshold: usize,
-    on_error: Option<Arc<dyn Fn(&SyncErrorEvent) + Send + Sync>>,
-    on_progress: Option<Arc<dyn Fn(&SyncProgress) + Send + Sync>>,
-    on_remote_delete: Option<Arc<dyn Fn(&RemoteDeleteEvent) + Send + Sync>>,
+    on_error: Option<Arc<SyncErrorCallback>>,
+    on_progress: Option<Arc<SyncProgressCallback>>,
+    on_remote_delete: Option<Arc<RemoteDeleteCallback>>,
     /// Per-collection async locks for serializing concurrent sync calls
     locks: Mutex<HashMap<String, Arc<TokioMutex<()>>>>,
     /// Consecutive failure counts per `"collection:id"`

@@ -52,7 +52,7 @@ fn json_value_to_sql(v: &Value) -> rusqlite::types::Value {
 
 /// Map a rusqlite error to a `LessDbError`.
 fn storage_err(e: rusqlite::Error) -> LessDbError {
-    LessDbError::Storage(StorageError::Sqlite(e))
+    StorageError::Sqlite(e).into()
 }
 
 // ============================================================================
@@ -830,12 +830,13 @@ impl StorageBackend for SqliteBackend {
                                 .collect(),
                         )
                     };
-                    return Err(LessDbError::Storage(StorageError::UniqueConstraint {
+                    return Err(StorageError::UniqueConstraint {
                         collection: collection.to_string(),
                         index: fi.name.clone(),
                         existing_id: eid,
                         value: conflict_value,
-                    }));
+                    }
+                    .into());
                 }
 
                 Ok(())
@@ -892,12 +893,13 @@ impl StorageBackend for SqliteBackend {
 
                 if let Some(eid) = existing_id {
                     let conflict_value = field_val.cloned().unwrap_or(Value::Null);
-                    return Err(LessDbError::Storage(StorageError::UniqueConstraint {
+                    return Err(StorageError::UniqueConstraint {
                         collection: collection.to_string(),
                         index: ci.name.clone(),
                         existing_id: eid,
                         value: conflict_value,
-                    }));
+                    }
+                    .into());
                 }
 
                 Ok(())

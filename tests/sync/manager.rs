@@ -39,6 +39,7 @@ struct PullCall {
     since: i64,
 }
 
+#[allow(clippy::type_complexity)]
 struct MockTransportInner {
     push_calls: Vec<PushCall>,
     pull_calls: Vec<PullCall>,
@@ -157,6 +158,7 @@ struct ApplyCall {
     records: Vec<RemoteRecord>,
 }
 
+#[allow(clippy::type_complexity)]
 struct MockAdapterInner {
     dirty_records: HashMap<String, Vec<StoredRecordWithMeta>>,
     dirty_errors: HashMap<String, Vec<RecordError>>,
@@ -456,9 +458,9 @@ fn make_manager_with_opts(
     adapter: Arc<MockAdapter>,
     delete_strategy: Option<DeleteConflictStrategyName>,
     push_batch_size: Option<usize>,
-    on_error: Option<Arc<dyn Fn(&SyncErrorEvent) + Send + Sync>>,
-    on_progress: Option<Arc<dyn Fn(&SyncProgress) + Send + Sync>>,
-    on_remote_delete: Option<Arc<dyn Fn(&RemoteDeleteEvent) + Send + Sync>>,
+    on_error: Option<Arc<SyncErrorCallback>>,
+    on_progress: Option<Arc<SyncProgressCallback>>,
+    on_remote_delete: Option<Arc<RemoteDeleteCallback>>,
 ) -> SyncManager {
     let def = make_def("tasks");
     SyncManager::new(SyncManagerOptions {

@@ -998,11 +998,12 @@ fn check_immutable_fields(
         let new_val = new_obj.and_then(|o| o.get(field)).unwrap_or(&Value::Null);
 
         if existing_val != new_val {
-            return Err(LessDbError::Storage(StorageError::ImmutableField {
+            return Err(StorageError::ImmutableField {
                 collection: collection.to_string(),
                 id: record_id.to_string(),
                 field: field.clone(),
-            }));
+            }
+            .into());
         }
     }
 

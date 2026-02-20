@@ -3,6 +3,9 @@
 
 use serde_json::Value;
 
+/// Closure type for metadata-based query filtering.
+pub type MetaFilterFn = dyn Fn(Option<&Value>) -> bool + Send + Sync;
+
 /// Middleware hooks applied by [`TypedAdapter`](super::TypedAdapter).
 ///
 /// All methods have default no-op implementations. A middleware with zero
@@ -34,10 +37,7 @@ pub trait Middleware: Send + Sync {
     /// Return `None` for no filtering.
     ///
     /// Default: returns `None` (no filter).
-    fn on_query(
-        &self,
-        _options: &Value,
-    ) -> Option<Box<dyn Fn(Option<&Value>) -> bool + Send + Sync>> {
+    fn on_query(&self, _options: &Value) -> Option<Box<MetaFilterFn>> {
         None
     }
 

@@ -1,3 +1,3 @@
 mod middleware {
-    mod middleware;
+    mod typed_adapter;
 }

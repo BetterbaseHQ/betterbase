@@ -155,7 +155,7 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
     fn resolve_query_filter(
         &self,
         query_opts: Option<&Value>,
-    ) -> Option<Box<dyn Fn(Option<&Value>) -> bool + Send + Sync>> {
+    ) -> Option<Box<super::types::MetaFilterFn>> {
         let opts = query_opts?;
         self.middleware.on_query(opts)
     }
