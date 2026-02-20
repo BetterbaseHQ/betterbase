@@ -29,9 +29,13 @@ typecheck-js:
 test-js: typecheck-js
     cd crates/less-db-wasm/js && npx vitest run
 
-# Run benchmarks
+# Run Rust benchmarks
 bench *args:
     cargo bench --workspace {{args}}
+
+# Run browser benchmarks (WASM vs JS vs Dexie)
+bench-browser:
+    cd crates/less-db-wasm/js && npx vitest bench --config vitest.bench.config.ts
 
 # Build all targets
 build:

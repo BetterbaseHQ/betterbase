@@ -11,7 +11,7 @@ use less_db::types::{PurgeTombstonesOptions, RawBatchResult, ScanOptions, Serial
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
-use crate::conversions::value_to_js;
+use crate::conversions::{to_js, value_to_js};
 
 // ============================================================================
 // JS extern type
@@ -159,11 +159,7 @@ fn js_to_batch(v: &JsValue) -> Result<RawBatchResult, LessDbError> {
 
 /// Serialize a SerializedRecord to JsValue.
 fn record_to_js(record: &SerializedRecord) -> Result<JsValue, LessDbError> {
-    let val = serde_json::to_value(record).map_err(|e| StorageError::Transaction {
-        message: format!("Failed to serialize record: {e}"),
-        source: None,
-    })?;
-    serde_wasm_bindgen::to_value(&val).map_err(|e| {
+    to_js(record).map_err(|e| {
         StorageError::Transaction {
             message: format!("Failed to convert record to JsValue: {e}"),
             source: None,
@@ -195,11 +191,7 @@ impl StorageBackend for JsStorageBackend {
         collection: &str,
         options: &ScanOptions,
     ) -> less_db::error::Result<RawBatchResult> {
-        let opts_val = serde_json::to_value(options).map_err(|e| StorageError::Transaction {
-            message: format!("Failed to serialize scan options: {e}"),
-            source: None,
-        })?;
-        let opts_js = serde_wasm_bindgen::to_value(&opts_val)
+        let opts_js = to_js(options)
             .map_err(|e| LessDbError::Internal(format!("Failed to convert scan options: {e}")))?;
         let result = self.inner.scan_raw(collection, opts_js).map_err(js_err)?;
         js_to_batch(&result)
@@ -216,15 +208,7 @@ impl StorageBackend for JsStorageBackend {
     }
 
     fn batch_put_raw(&self, records: &[SerializedRecord]) -> less_db::error::Result<()> {
-        let vals: Vec<Value> = records
-            .iter()
-            .map(serde_json::to_value)
-            .collect::<Result<_, _>>()
-            .map_err(|e| StorageError::Transaction {
-                message: format!("Failed to serialize records: {e}"),
-                source: None,
-            })?;
-        let js_arr = serde_wasm_bindgen::to_value(&vals).map_err(|e| {
+        let js_arr = to_js(records).map_err(|e| {
             LessDbError::Internal(format!("Failed to convert records to JsValue: {e}"))
         })?;
         self.inner.batch_put_raw(js_arr).map_err(js_err)
@@ -235,11 +219,7 @@ impl StorageBackend for JsStorageBackend {
         collection: &str,
         options: &PurgeTombstonesOptions,
     ) -> less_db::error::Result<usize> {
-        let opts_val = serde_json::to_value(options).map_err(|e| StorageError::Transaction {
-            message: format!("Failed to serialize purge options: {e}"),
-            source: None,
-        })?;
-        let opts_js = serde_wasm_bindgen::to_value(&opts_val)
+        let opts_js = to_js(options)
             .map_err(|e| LessDbError::Internal(format!("Failed to convert purge options: {e}")))?;
         let n = self
             .inner
@@ -284,7 +264,7 @@ impl StorageBackend for JsStorageBackend {
         scan: &IndexScan,
     ) -> less_db::error::Result<Option<RawBatchResult>> {
         let scan_val = serialize_index_scan(scan)?;
-        let scan_js = serde_wasm_bindgen::to_value(&scan_val)
+        let scan_js = to_js(&scan_val)
             .map_err(|e| LessDbError::Internal(format!("Failed to convert index scan: {e}")))?;
         let result = self
             .inner
@@ -302,7 +282,7 @@ impl StorageBackend for JsStorageBackend {
         scan: &IndexScan,
     ) -> less_db::error::Result<Option<usize>> {
         let scan_val = serialize_index_scan(scan)?;
-        let scan_js = serde_wasm_bindgen::to_value(&scan_val)
+        let scan_js = to_js(&scan_val)
             .map_err(|e| LessDbError::Internal(format!("Failed to convert index scan: {e}")))?;
         let result = self
             .inner

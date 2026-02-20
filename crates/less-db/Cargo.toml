@@ -8,6 +8,7 @@ description = "Local-first document store with CRDT sync, schema migrations, and
 [features]
 default = ["sqlite"]
 sqlite = ["dep:rusqlite"]
+js = ["uuid/js"]
 
 [dependencies]
 json-joy = { path = "/Users/nchapman/Code/json-joy-rs/crates/json-joy" }

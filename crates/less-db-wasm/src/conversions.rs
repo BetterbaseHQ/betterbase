@@ -3,12 +3,24 @@
 use std::collections::BTreeMap;
 
 use less_db::schema::node::{LiteralValue, SchemaNode};
+use serde::Serialize;
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
+/// Create a serde-wasm-bindgen serializer that produces plain JS objects
+/// (not `Map` instances) for Rust maps/structs.
+fn js_serializer() -> serde_wasm_bindgen::Serializer {
+    serde_wasm_bindgen::Serializer::json_compatible()
+}
+
+/// Convert any `Serialize` value to a `JsValue` as a plain JS object.
+pub fn to_js<T: Serialize + ?Sized>(v: &T) -> Result<JsValue, serde_wasm_bindgen::Error> {
+    v.serialize(&js_serializer())
+}
+
 /// Convert a `serde_json::Value` to a `JsValue` using serde-wasm-bindgen.
 pub fn value_to_js(v: &Value) -> Result<JsValue, JsValue> {
-    serde_wasm_bindgen::to_value(v).map_err(|e| JsValue::from_str(&e.to_string()))
+    to_js(v).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Convert a `JsValue` to a `serde_json::Value` using serde-wasm-bindgen.

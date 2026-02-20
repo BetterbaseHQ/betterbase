@@ -9,7 +9,7 @@ description = "WebAssembly bindings for less-db"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-less-db = { path = "../less-db", default-features = false }
+less-db = { path = "../less-db", default-features = false, features = ["js"] }
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

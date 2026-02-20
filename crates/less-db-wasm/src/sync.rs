@@ -103,7 +103,7 @@ impl less_db::sync::types::SyncTransport for JsSyncTransport {
             })
             .collect();
 
-        let js_records = serde_wasm_bindgen::to_value(&records_val)
+        let js_records = crate::conversions::to_js(&records_val)
             .map_err(|e| SyncTransportError::new(format!("Failed to serialize records: {e}")))?;
 
         let result = self

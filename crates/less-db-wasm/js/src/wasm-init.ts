@@ -58,7 +58,6 @@ export async function initWasm(): Promise<WasmModule> {
 
   initPromise = (async () => {
     try {
-      // @ts-expect-error — WASM pkg is built separately, no .d.ts at typecheck time
       const mod = await import("../../pkg/less_db_wasm.js");
       wasmModule = mod as WasmModule;
       return wasmModule;

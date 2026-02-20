@@ -12,7 +12,7 @@ use less_db::schema::node::SchemaNode;
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
-use crate::conversions::{js_to_value, parse_schema};
+use crate::conversions::{js_to_value, parse_schema, to_js};
 
 // ============================================================================
 // WasmCollectionDef — opaque handle to a built CollectionDef
@@ -305,7 +305,7 @@ impl MigrationWrapper {
         &self,
         data: Value,
     ) -> std::result::Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let js_data = serde_wasm_bindgen::to_value(&data).map_err(|e| {
+        let js_data = to_js(&data).map_err(|e| {
             Box::<dyn std::error::Error + Send + Sync>::from(format!(
                 "Failed to serialize migration input: {e}"
             ))
@@ -337,7 +337,7 @@ unsafe impl Sync for ComputeWrapper {}
 
 impl ComputeWrapper {
     fn call(&self, data: &Value) -> Option<IndexableValue> {
-        let js_data = serde_wasm_bindgen::to_value(data).ok()?;
+        let js_data = to_js(data).ok()?;
         let result = self.0.call1(&js_data).ok()?;
 
         if result.is_null() || result.is_undefined() {
