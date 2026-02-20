@@ -16,22 +16,17 @@ pub const MIN_SESSION_ID: u64 = 65536;
 /// Maximum CRDT binary size (10 MB)
 pub const MAX_CRDT_BINARY_SIZE: usize = 10 * 1024 * 1024;
 
-/// Generate a random session ID (>= MIN_SESSION_ID).
+/// Generate a cryptographically random session ID (>= MIN_SESSION_ID).
 ///
-/// Uses the same approach as json-joy-rs `Model::create()` internally:
-/// combines system time components for entropy, then ensures the result
-/// meets the minimum SID requirement.
+/// Uses UUID v4 (backed by `getrandom`/OS CSPRNG) for collision resistance.
+/// Session ID collisions cause silent CRDT corruption, so cryptographic
+/// randomness is essential.
 pub fn generate_session_id() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let d = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    // Combine seconds (upper bits) and nanos (lower 30 bits) for entropy,
-    // matching the approach used in json-joy-rs Model::create().
-    let seed = (d.as_secs() << 30) ^ (d.subsec_nanos() as u64);
-    seed.wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407)
-        | MIN_SESSION_ID
+    let id = uuid::Uuid::new_v4();
+    let bytes = id.as_bytes();
+    // Take 8 bytes of cryptographic randomness and ensure MIN_SESSION_ID bit
+    let val = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+    val | MIN_SESSION_ID
 }
 
 /// Validate that a session ID meets json-joy requirements.
@@ -163,6 +158,13 @@ mod tests {
             sid >= MIN_SESSION_ID,
             "generated SID {sid} is below minimum {MIN_SESSION_ID}"
         );
+    }
+
+    #[test]
+    fn generate_session_id_is_unique() {
+        let ids: std::collections::HashSet<u64> =
+            (0..1000).map(|_| generate_session_id()).collect();
+        assert_eq!(ids.len(), 1000, "1000 generated session IDs should all be unique");
     }
 
     #[test]

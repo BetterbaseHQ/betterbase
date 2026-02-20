@@ -154,8 +154,19 @@ impl<B: StorageBackend> Adapter<B> {
                 version: mig.version,
                 ..raw
             };
-            // Best-effort persist — ignore errors (they'll resurface on next read)
-            let _ = self.backend.put_raw(&updated);
+            // Best-effort persist — log errors so operators can detect repeated
+            // migration failures that would cause migration transforms to appear
+            // as user edits in the CRDT diff on subsequent writes.
+            if let Err(e) = self.backend.put_raw(&updated) {
+                tracing::warn!(
+                    collection = %updated.collection,
+                    id = %updated.id,
+                    from_version = raw.version,
+                    to_version = updated.version,
+                    error = %e,
+                    "failed to persist migrated record — migration will re-run on next read"
+                );
+            }
             updated
         } else {
             raw
@@ -853,60 +864,66 @@ impl<B: StorageBackend> StorageSync for Adapter<B> {
     ) -> Result<ApplyRemoteResult> {
         self.check_initialized()?;
 
-        let strategy = Self::resolve_strategy(opts);
-        let received_at = opts.received_at.as_deref();
+        // Wrap in a transaction so all record writes in this batch are atomic.
+        // Note: set_last_sequence is updated separately by the caller after
+        // this returns. On crash between these two steps, re-apply is safe
+        // because CRDT operations are idempotent.
+        self.backend.transaction(|backend| {
+            let strategy = Self::resolve_strategy(opts);
+            let received_at = opts.received_at.as_deref();
 
-        let mut decisions = Vec::new();
-        let mut new_sequence: i64 = 0;
-        let mut merged_count: usize = 0;
-        // Track previous data for remote delete events
-        let mut previous_data_map: std::collections::HashMap<String, Value> =
-            std::collections::HashMap::new();
+            let mut decisions = Vec::new();
+            let mut new_sequence: i64 = 0;
+            let mut merged_count: usize = 0;
+            // Track previous data for remote delete events
+            let mut previous_data_map: std::collections::HashMap<String, Value> =
+                std::collections::HashMap::new();
 
-        for remote in records {
-            // Track max sequence
-            if remote.sequence > new_sequence {
-                new_sequence = remote.sequence;
+            for remote in records {
+                // Track max sequence
+                if remote.sequence > new_sequence {
+                    new_sequence = remote.sequence;
+                }
+
+                let local = backend.get_raw(&def.name, &remote.id)?;
+
+                // Capture previous data before applying tombstones
+                if remote.deleted {
+                    if let Some(ref local_rec) = local {
+                        if !local_rec.deleted {
+                            previous_data_map
+                                .insert(remote.id.clone(), local_rec.data.clone());
+                        }
+                    }
+                }
+
+                let decision =
+                    process_remote_record(def, local.as_ref(), remote, &strategy, received_at)?;
+
+                // Track merges (Case 10: dirty alive + remote live → CRDT merge)
+                if matches!(&decision.0, RemoteDecision::Merge(_)) {
+                    merged_count += 1;
+                }
+
+                decisions.push(decision);
             }
 
-            let local = self.backend.get_raw(&def.name, &remote.id)?;
+            let mut put_fn = |record: &SerializedRecord| backend.put_raw(record);
+            let (mut applied, errors) = apply_remote_decisions(decisions, &mut put_fn);
 
-            // Capture previous data before applying tombstones
-            if remote.deleted {
-                if let Some(ref local_rec) = local {
-                    if !local_rec.deleted {
-                        previous_data_map
-                            .insert(remote.id.clone(), local_rec.data.clone());
-                    }
+            // Populate previous_data for delete results
+            for result in &mut applied {
+                if let Some(prev) = previous_data_map.remove(&result.id) {
+                    result.previous_data = Some(prev);
                 }
             }
 
-            let decision =
-                process_remote_record(def, local.as_ref(), remote, &strategy, received_at)?;
-
-            // Track merges (Case 10: dirty alive + remote live → CRDT merge)
-            if matches!(&decision.0, RemoteDecision::Merge(_)) {
-                merged_count += 1;
-            }
-
-            decisions.push(decision);
-        }
-
-        let mut put_fn = |record: &SerializedRecord| self.backend.put_raw(record);
-        let (mut applied, errors) = apply_remote_decisions(decisions, &mut put_fn);
-
-        // Populate previous_data for delete results
-        for result in &mut applied {
-            if let Some(prev) = previous_data_map.remove(&result.id) {
-                result.previous_data = Some(prev);
-            }
-        }
-
-        Ok(ApplyRemoteResult {
-            applied,
-            errors,
-            new_sequence,
-            merged_count,
+            Ok(ApplyRemoteResult {
+                applied,
+                errors,
+                new_sequence,
+                merged_count,
+            })
         })
     }
 

@@ -709,11 +709,24 @@ impl StorageBackend for SqliteBackend {
         match f(self) {
             Ok(v) => {
                 let guard = self.conn.lock();
-                guard
+                let release_ok = guard
                     .borrow()
                     .execute(&format!("RELEASE SAVEPOINT {sp_name}"), [])
-                    .map_err(storage_err)?;
-                Ok(v)
+                    .is_ok();
+                drop(guard);
+                if release_ok {
+                    Ok(v)
+                } else {
+                    // Best-effort rollback to clean up the leaked savepoint
+                    let guard = self.conn.lock();
+                    let _ = guard
+                        .borrow()
+                        .execute(&format!("ROLLBACK TO SAVEPOINT {sp_name}"), []);
+                    Err(storage_err(rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+                        Some("RELEASE SAVEPOINT failed".to_string()),
+                    )))
+                }
             }
             Err(e) => {
                 let guard = self.conn.lock();

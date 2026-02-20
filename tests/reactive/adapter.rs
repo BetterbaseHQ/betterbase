@@ -11,9 +11,9 @@ use less_db::{
     storage::{
         adapter::Adapter,
         sqlite::SqliteBackend,
-        traits::{StorageLifecycle, StorageRead, StorageWrite},
+        traits::{StorageLifecycle, StorageRead, StorageSync, StorageWrite},
     },
-    types::{DeleteOptions, GetOptions, PutOptions},
+    types::{ApplyRemoteOptions, DeleteOptions, GetOptions, PutOptions, RemoteRecord},
 };
 use serde_json::{json, Value};
 
@@ -677,4 +677,120 @@ fn panicking_observe_callback_does_not_prevent_subsequent_callbacks() {
         1,
         "second callback should fire despite first panicking"
     );
+}
+
+// ============================================================================
+// apply_remote_changes — observer notification regression
+// ============================================================================
+
+#[test]
+fn apply_remote_changes_notifies_observe_callback() {
+    use less_db::crdt;
+
+    let def = users_def();
+    let ra = make_adapter(&def);
+
+    // Observe a specific ID
+    let log: Arc<Mutex<Vec<Option<Value>>>> = make_log();
+    let log_c = log.clone();
+    let _unsub = ra.observe(
+        Arc::new(users_def()),
+        "r1".to_string(),
+        Arc::new(move |val: Option<Value>| {
+            log_c.lock().unwrap().push(val);
+        }),
+        None,
+    );
+
+    // Initial flush gives None (record doesn't exist yet)
+    ra.wait_for_flush();
+    assert_eq!(log.lock().unwrap().len(), 1);
+    assert!(log.lock().unwrap()[0].is_none());
+
+    // Apply a remote record
+    let session_id = crdt::generate_session_id();
+    let data = json!({
+        "id": "r1", "name": "Remote", "email": "r@x.com",
+        "createdAt": "2024-01-01T00:00:00.000Z",
+        "updatedAt": "2024-01-01T00:00:00.000Z"
+    });
+    let model = crdt::create_model(&data, session_id).expect("create model");
+    let crdt_bytes = crdt::model_to_binary(&model);
+
+    let remote = RemoteRecord {
+        id: "r1".to_string(),
+        version: 1,
+        crdt: Some(crdt_bytes),
+        deleted: false,
+        sequence: 100,
+        meta: None,
+    };
+
+    let result = ra
+        .apply_remote_changes(&def, &[remote], &ApplyRemoteOptions::default())
+        .expect("apply_remote_changes");
+
+    assert_eq!(result.applied.len(), 1);
+
+    // The observer should have been notified with the new record data
+    let entries = log.lock().unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "observer should fire after apply_remote_changes"
+    );
+    let record_data = entries[1].as_ref().expect("should have record data");
+    assert_eq!(record_data["name"], "Remote");
+}
+
+#[test]
+fn apply_remote_changes_emits_remote_change_event() {
+    use less_db::crdt;
+
+    let def = users_def();
+    let ra = make_adapter(&def);
+
+    // Listen for change events
+    let events: Arc<Mutex<Vec<ChangeEvent>>> = make_log();
+    let events_c = events.clone();
+    let _unsub = ra.on_change(move |event: &ChangeEvent| {
+        events_c.lock().unwrap().push(event.clone());
+    });
+
+    // Apply a remote record
+    let session_id = crdt::generate_session_id();
+    let data = json!({
+        "id": "r1", "name": "Remote", "email": "r@x.com",
+        "createdAt": "2024-01-01T00:00:00.000Z",
+        "updatedAt": "2024-01-01T00:00:00.000Z"
+    });
+    let model = crdt::create_model(&data, session_id).expect("create model");
+    let crdt_bytes = crdt::model_to_binary(&model);
+
+    let remote = RemoteRecord {
+        id: "r1".to_string(),
+        version: 1,
+        crdt: Some(crdt_bytes),
+        deleted: false,
+        sequence: 100,
+        meta: None,
+    };
+
+    ra.apply_remote_changes(&def, &[remote], &ApplyRemoteOptions::default())
+        .expect("apply_remote_changes");
+
+    let events = events.lock().unwrap();
+    let remote_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, ChangeEvent::Remote { .. }))
+        .collect();
+    assert_eq!(
+        remote_events.len(),
+        1,
+        "should emit exactly one Remote change event"
+    );
+    if let ChangeEvent::Remote { collection, ids } = &remote_events[0] {
+        assert_eq!(collection, "users");
+        assert_eq!(ids, &vec!["r1".to_string()]);
+    }
 }

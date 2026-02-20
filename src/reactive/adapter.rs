@@ -731,7 +731,7 @@ impl<B: StorageBackend> StorageSync for ReactiveAdapter<B> {
         let ids: Vec<String> = result
             .applied
             .iter()
-            .filter_map(|r| r.record.as_ref().map(|rec| rec.id.clone()))
+            .map(|r| r.id.clone())
             .collect();
         if !ids.is_empty() {
             let collection = def.name.clone();
