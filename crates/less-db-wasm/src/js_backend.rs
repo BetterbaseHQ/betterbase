@@ -125,12 +125,11 @@ fn js_err(e: JsValue) -> LessDbError {
 
 /// Deserialize a JsValue into a SerializedRecord.
 fn js_to_record(v: &JsValue) -> Result<SerializedRecord, LessDbError> {
-    let val: Value = serde_wasm_bindgen::from_value(v.clone()).map_err(|e| {
-        StorageError::Transaction {
+    let val: Value =
+        serde_wasm_bindgen::from_value(v.clone()).map_err(|e| StorageError::Transaction {
             message: format!("Failed to deserialize record: {e}"),
             source: None,
-        }
-    })?;
+        })?;
     serde_json::from_value(val).map_err(|e| {
         StorageError::Transaction {
             message: format!("Invalid record shape: {e}"),
@@ -142,20 +141,18 @@ fn js_to_record(v: &JsValue) -> Result<SerializedRecord, LessDbError> {
 
 /// Deserialize a JsValue into a RawBatchResult.
 fn js_to_batch(v: &JsValue) -> Result<RawBatchResult, LessDbError> {
-    let val: Value = serde_wasm_bindgen::from_value(v.clone()).map_err(|e| {
-        StorageError::Transaction {
+    let val: Value =
+        serde_wasm_bindgen::from_value(v.clone()).map_err(|e| StorageError::Transaction {
             message: format!("Failed to deserialize batch result: {e}"),
             source: None,
-        }
-    })?;
+        })?;
 
     let records_val = val.get("records").cloned().unwrap_or(Value::Array(vec![]));
-    let records: Vec<SerializedRecord> = serde_json::from_value(records_val).map_err(|e| {
-        StorageError::Transaction {
+    let records: Vec<SerializedRecord> =
+        serde_json::from_value(records_val).map_err(|e| StorageError::Transaction {
             message: format!("Invalid batch records: {e}"),
             source: None,
-        }
-    })?;
+        })?;
 
     Ok(RawBatchResult { records })
 }
@@ -176,7 +173,11 @@ fn record_to_js(record: &SerializedRecord) -> Result<JsValue, LessDbError> {
 }
 
 impl StorageBackend for JsStorageBackend {
-    fn get_raw(&self, collection: &str, id: &str) -> less_db::error::Result<Option<SerializedRecord>> {
+    fn get_raw(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> less_db::error::Result<Option<SerializedRecord>> {
         let result = self.inner.get_raw(collection, id).map_err(js_err)?;
         if result.is_null() || result.is_undefined() {
             return Ok(None);
@@ -189,14 +190,17 @@ impl StorageBackend for JsStorageBackend {
         self.inner.put_raw(js_record).map_err(js_err)
     }
 
-    fn scan_raw(&self, collection: &str, options: &ScanOptions) -> less_db::error::Result<RawBatchResult> {
+    fn scan_raw(
+        &self,
+        collection: &str,
+        options: &ScanOptions,
+    ) -> less_db::error::Result<RawBatchResult> {
         let opts_val = serde_json::to_value(options).map_err(|e| StorageError::Transaction {
             message: format!("Failed to serialize scan options: {e}"),
             source: None,
         })?;
-        let opts_js = serde_wasm_bindgen::to_value(&opts_val).map_err(|e| {
-            LessDbError::Internal(format!("Failed to convert scan options: {e}"))
-        })?;
+        let opts_js = serde_wasm_bindgen::to_value(&opts_val)
+            .map_err(|e| LessDbError::Internal(format!("Failed to convert scan options: {e}")))?;
         let result = self.inner.scan_raw(collection, opts_js).map_err(js_err)?;
         js_to_batch(&result)
     }
@@ -214,7 +218,7 @@ impl StorageBackend for JsStorageBackend {
     fn batch_put_raw(&self, records: &[SerializedRecord]) -> less_db::error::Result<()> {
         let vals: Vec<Value> = records
             .iter()
-            .map(|r| serde_json::to_value(r))
+            .map(serde_json::to_value)
             .collect::<Result<_, _>>()
             .map_err(|e| StorageError::Transaction {
                 message: format!("Failed to serialize records: {e}"),
@@ -235,9 +239,8 @@ impl StorageBackend for JsStorageBackend {
             message: format!("Failed to serialize purge options: {e}"),
             source: None,
         })?;
-        let opts_js = serde_wasm_bindgen::to_value(&opts_val).map_err(|e| {
-            LessDbError::Internal(format!("Failed to convert purge options: {e}"))
-        })?;
+        let opts_js = serde_wasm_bindgen::to_value(&opts_val)
+            .map_err(|e| LessDbError::Internal(format!("Failed to convert purge options: {e}")))?;
         let n = self
             .inner
             .purge_tombstones_raw(collection, opts_js)
@@ -281,10 +284,12 @@ impl StorageBackend for JsStorageBackend {
         scan: &IndexScan,
     ) -> less_db::error::Result<Option<RawBatchResult>> {
         let scan_val = serialize_index_scan(scan)?;
-        let scan_js = serde_wasm_bindgen::to_value(&scan_val).map_err(|e| {
-            LessDbError::Internal(format!("Failed to convert index scan: {e}"))
-        })?;
-        let result = self.inner.scan_index_raw(collection, scan_js).map_err(js_err)?;
+        let scan_js = serde_wasm_bindgen::to_value(&scan_val)
+            .map_err(|e| LessDbError::Internal(format!("Failed to convert index scan: {e}")))?;
+        let result = self
+            .inner
+            .scan_index_raw(collection, scan_js)
+            .map_err(js_err)?;
         if result.is_null() || result.is_undefined() {
             return Ok(None);
         }
@@ -297,16 +302,17 @@ impl StorageBackend for JsStorageBackend {
         scan: &IndexScan,
     ) -> less_db::error::Result<Option<usize>> {
         let scan_val = serialize_index_scan(scan)?;
-        let scan_js = serde_wasm_bindgen::to_value(&scan_val).map_err(|e| {
-            LessDbError::Internal(format!("Failed to convert index scan: {e}"))
-        })?;
-        let result = self.inner.count_index_raw(collection, scan_js).map_err(js_err)?;
+        let scan_js = serde_wasm_bindgen::to_value(&scan_val)
+            .map_err(|e| LessDbError::Internal(format!("Failed to convert index scan: {e}")))?;
+        let result = self
+            .inner
+            .count_index_raw(collection, scan_js)
+            .map_err(js_err)?;
         if result.is_null() || result.is_undefined() {
             return Ok(None);
         }
-        let n: f64 = serde_wasm_bindgen::from_value(result).map_err(|e| {
-            LessDbError::Internal(format!("Failed to deserialize count: {e}"))
-        })?;
+        let n: f64 = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| LessDbError::Internal(format!("Failed to deserialize count: {e}")))?;
         Ok(Some(n as usize))
     }
 
@@ -318,7 +324,7 @@ impl StorageBackend for JsStorageBackend {
         computed: Option<&Value>,
         exclude_id: Option<&str>,
     ) -> less_db::error::Result<()> {
-        let index_val = serde_json::to_value(&index_to_serializable(index)).map_err(|e| {
+        let index_val = serde_json::to_value(index_to_serializable(index)).map_err(|e| {
             StorageError::Transaction {
                 message: format!("Failed to serialize index: {e}"),
                 source: None,
@@ -344,22 +350,28 @@ impl StorageBackend for JsStorageBackend {
 // Serialization helpers for types that don't derive Serialize
 // ============================================================================
 
-use less_db::index::types::{IndexableValue, IndexScanType, IndexSortOrder};
+use less_db::index::types::{IndexScanType, IndexSortOrder, IndexableValue};
 
 /// Serialize an IndexScan to a serde_json::Value for crossing the boundary.
 fn serialize_index_scan(scan: &IndexScan) -> Result<Value, LessDbError> {
     let mut obj = serde_json::Map::new();
     obj.insert(
         "scanType".to_string(),
-        Value::String(match scan.scan_type {
-            IndexScanType::Exact => "exact",
-            IndexScanType::Prefix => "prefix",
-            IndexScanType::Range => "range",
-            IndexScanType::Full => "full",
-        }.to_string()),
+        Value::String(
+            match scan.scan_type {
+                IndexScanType::Exact => "exact",
+                IndexScanType::Prefix => "prefix",
+                IndexScanType::Range => "range",
+                IndexScanType::Full => "full",
+            }
+            .to_string(),
+        ),
     );
-    obj.insert("index".to_string(), serde_json::to_value(&index_to_serializable(&scan.index))
-        .map_err(|e| LessDbError::Internal(format!("Failed to serialize index: {e}")))?);
+    obj.insert(
+        "index".to_string(),
+        serde_json::to_value(index_to_serializable(&scan.index))
+            .map_err(|e| LessDbError::Internal(format!("Failed to serialize index: {e}")))?,
+    );
 
     if let Some(ref vals) = scan.equality_values {
         let arr: Vec<Value> = vals.iter().map(indexable_to_value).collect();
@@ -383,10 +395,13 @@ fn serialize_index_scan(scan: &IndexScan) -> Result<Value, LessDbError> {
     }
     obj.insert(
         "direction".to_string(),
-        Value::String(match scan.direction {
-            IndexSortOrder::Asc => "asc",
-            IndexSortOrder::Desc => "desc",
-        }.to_string()),
+        Value::String(
+            match scan.direction {
+                IndexSortOrder::Asc => "asc",
+                IndexSortOrder::Desc => "desc",
+            }
+            .to_string(),
+        ),
     );
 
     Ok(Value::Object(obj))
@@ -413,10 +428,13 @@ fn index_to_serializable(idx: &IndexDefinition) -> Value {
                 .map(|fld| {
                     let mut obj = serde_json::Map::new();
                     obj.insert("field".to_string(), Value::String(fld.field.clone()));
-                    obj.insert("order".to_string(), Value::String(match fld.order {
-                        IndexSortOrder::Asc => "asc".to_string(),
-                        IndexSortOrder::Desc => "desc".to_string(),
-                    }));
+                    obj.insert(
+                        "order".to_string(),
+                        Value::String(match fld.order {
+                            IndexSortOrder::Asc => "asc".to_string(),
+                            IndexSortOrder::Desc => "desc".to_string(),
+                        }),
+                    );
                     Value::Object(obj)
                 })
                 .collect();

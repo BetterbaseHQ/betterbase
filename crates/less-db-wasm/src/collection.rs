@@ -107,7 +107,12 @@ impl WasmCollectionBuilder {
 
     /// Define a subsequent version with schema and migration function.
     /// The migration function receives the old data and must return the new data.
-    pub fn v(&mut self, version: u32, schema_js: JsValue, migrate: js_sys::Function) -> Result<(), JsValue> {
+    pub fn v(
+        &mut self,
+        version: u32,
+        schema_js: JsValue,
+        migrate: js_sys::Function,
+    ) -> Result<(), JsValue> {
         let schema = parse_schema(&schema_js)?;
         self.versions.push(VersionEntry {
             version,
@@ -132,8 +137,14 @@ impl WasmCollectionBuilder {
         };
 
         let name = opts.get("name").and_then(|v| v.as_str()).map(String::from);
-        let unique = opts.get("unique").and_then(|v| v.as_bool()).unwrap_or(false);
-        let sparse = opts.get("sparse").and_then(|v| v.as_bool()).unwrap_or(false);
+        let unique = opts
+            .get("unique")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let sparse = opts
+            .get("sparse")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         self.indexes.push(IndexEntry::Field {
             fields: fields_val,
@@ -147,15 +158,26 @@ impl WasmCollectionBuilder {
     /// Define a computed index.
     ///
     /// `compute` is a JS function `(data: object) => string | number | boolean | null`.
-    pub fn computed(&mut self, name: &str, compute: js_sys::Function, options: JsValue) -> Result<(), JsValue> {
+    pub fn computed(
+        &mut self,
+        name: &str,
+        compute: js_sys::Function,
+        options: JsValue,
+    ) -> Result<(), JsValue> {
         let opts: Value = if options.is_undefined() || options.is_null() {
             Value::Object(serde_json::Map::new())
         } else {
             js_to_value(&options)?
         };
 
-        let unique = opts.get("unique").and_then(|v| v.as_bool()).unwrap_or(false);
-        let sparse = opts.get("sparse").and_then(|v| v.as_bool()).unwrap_or(false);
+        let unique = opts
+            .get("unique")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let sparse = opts
+            .get("sparse")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         self.indexes.push(IndexEntry::Computed {
             name: name.to_string(),
@@ -233,12 +255,11 @@ impl WasmCollectionBuilder {
             } = idx
             {
                 if *unique || *sparse {
-                    if let Some(idx_def) = def.indexes.iter_mut().find(|i| i.name() == name) {
-                        if let less_db::index::types::IndexDefinition::Computed(ref mut c) = idx_def
-                        {
-                            c.unique = *unique;
-                            c.sparse = *sparse;
-                        }
+                    if let Some(less_db::index::types::IndexDefinition::Computed(ref mut c)) =
+                        def.indexes.iter_mut().find(|i| i.name() == name)
+                    {
+                        c.unique = *unique;
+                        c.sparse = *sparse;
                     }
                 }
             }
@@ -280,7 +301,10 @@ unsafe impl Send for MigrationWrapper {}
 unsafe impl Sync for MigrationWrapper {}
 
 impl MigrationWrapper {
-    fn call(&self, data: Value) -> std::result::Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    fn call(
+        &self,
+        data: Value,
+    ) -> std::result::Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let js_data = serde_wasm_bindgen::to_value(&data).map_err(|e| {
             Box::<dyn std::error::Error + Send + Sync>::from(format!(
                 "Failed to serialize migration input: {e}"
