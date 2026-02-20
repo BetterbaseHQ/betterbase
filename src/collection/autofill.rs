@@ -243,6 +243,7 @@ fn autofill_node(
 
         // Pass-through for non-auto scalar types
         SchemaNode::String
+        | SchemaNode::Text
         | SchemaNode::Number
         | SchemaNode::Boolean
         | SchemaNode::Date

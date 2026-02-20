@@ -378,6 +378,7 @@ dependencies = [
  "base64",
  "chrono",
  "json-joy",
+ "json-joy-json-pack",
  "parking_lot",
  "regex",
  "rusqlite",

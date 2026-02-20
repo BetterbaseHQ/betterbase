@@ -72,6 +72,7 @@ fn diff_node(
     match schema {
         // Scalar leaf nodes: compare with ==, record change if different
         SchemaNode::String
+        | SchemaNode::Text
         | SchemaNode::Number
         | SchemaNode::Boolean
         | SchemaNode::Literal(_)
@@ -183,6 +184,7 @@ fn values_equal(schema: &SchemaNode, a: &Value, b: &Value, depth: usize) -> bool
 
     match schema {
         SchemaNode::String
+        | SchemaNode::Text
         | SchemaNode::Number
         | SchemaNode::Boolean
         | SchemaNode::Literal(_)
@@ -282,7 +284,7 @@ fn records_equal(value_schema: &SchemaNode, a: &Value, b: &Value, depth: usize) 
 
 fn matches_variant(schema: &SchemaNode, value: &Value) -> bool {
     match schema {
-        SchemaNode::String | SchemaNode::Key => matches!(value, Value::String(_)),
+        SchemaNode::String | SchemaNode::Text | SchemaNode::Key => matches!(value, Value::String(_)),
         SchemaNode::Number => matches!(value, Value::Number(_)),
         SchemaNode::Boolean => matches!(value, Value::Bool(_)),
         SchemaNode::Date | SchemaNode::CreatedAt | SchemaNode::UpdatedAt => {

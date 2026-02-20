@@ -1,4 +1,5 @@
 pub mod patch_log;
+pub mod schema_aware;
 
 use json_joy::json_crdt::codec::structural::binary;
 use json_joy::json_crdt::nodes::TsKey;

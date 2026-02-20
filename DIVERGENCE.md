@@ -57,3 +57,11 @@ This file documents intentional differences between the Rust port and the origin
 - **JS**: No equivalent enum — the planner emits a scan plan with no bounds when only sort is needed.
 - **Rust**: `IndexScanType::Full` is an explicit variant meaning "traverse the entire index in order, no filter bounds." Used for sort-only scans where the index provides ordering but no filter conditions were matched.
 - **Why**: Using `Range` for a boundless traversal would mislead the SQLite executor into setting up range cursor bounds that don't exist. `Full` is semantically precise and easy to dispatch on.
+
+---
+
+## Divergence: Schema-aware CRDT wrapping uses `PatchBuilder` instead of `NodeBuilder` in `Value`
+
+- **JS**: `serializeForCrdt` wraps atomic string values with `jsonCrdtSchema.con(value)` NodeBuilder objects embedded in the data, which `model.api.set()` recognizes and builds as con (LWW) nodes.
+- **Rust**: `create_model_with_schema` uses `PatchBuilder` directly to build the CRDT structure, choosing `builder.con_val()` for atomic fields and `builder.str_node()`/`builder.ins_str()` for text fields. `serialize_for_crdt` only handles date→epoch-ms conversion.
+- **Why**: `serde_json::Value` cannot represent `NodeBuilder` objects. The Rust approach builds correct node types via the lower-level `PatchBuilder` API instead of embedding type hints in the data.

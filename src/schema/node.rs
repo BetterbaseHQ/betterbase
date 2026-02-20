@@ -27,7 +27,10 @@ impl PartialEq for LiteralValue {
 /// A schema node describing the shape and type constraints of a JSON value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SchemaNode {
+    /// Atomic string (LWW in CRDT — for identifiers, enums, URLs, labels).
     String,
+    /// Collaborative text (RGA in CRDT — for prose edited by multiple users).
+    Text,
     Number,
     Boolean,
     Date,
@@ -57,6 +60,10 @@ pub mod t {
 
     pub fn string() -> SchemaNode {
         SchemaNode::String
+    }
+
+    pub fn text() -> SchemaNode {
+        SchemaNode::Text
     }
 
     pub fn number() -> SchemaNode {
@@ -150,6 +157,7 @@ pub fn is_immutable_field(node: &SchemaNode) -> bool {
 
 /// Returns true for types that can be stored in an index.
 /// Indexable: String, Number, Boolean, Date, Key, CreatedAt, UpdatedAt, Literal.
+/// Note: Text fields are NOT indexable — they grow unboundedly via collaborative edits.
 pub fn is_indexable_node(node: &SchemaNode) -> bool {
     matches!(
         node,
@@ -161,5 +169,21 @@ pub fn is_indexable_node(node: &SchemaNode) -> bool {
             | SchemaNode::CreatedAt
             | SchemaNode::UpdatedAt
             | SchemaNode::Literal(_)
+    )
+}
+
+/// Returns true for fields that should use atomic (LWW con) nodes in the CRDT model.
+/// Atomic fields: String, Date, CreatedAt, UpdatedAt, Key, Literal, Bytes.
+/// Non-atomic (RGA): Text.
+pub fn is_atomic_field(node: &SchemaNode) -> bool {
+    matches!(
+        node,
+        SchemaNode::String
+            | SchemaNode::Date
+            | SchemaNode::CreatedAt
+            | SchemaNode::UpdatedAt
+            | SchemaNode::Key
+            | SchemaNode::Literal(_)
+            | SchemaNode::Bytes
     )
 }

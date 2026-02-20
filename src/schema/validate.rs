@@ -129,7 +129,7 @@ fn walk(schema: &SchemaNode, value: &Value, ctx: &mut ValidationContext, depth: 
     }
 
     match schema {
-        SchemaNode::String => {
+        SchemaNode::String | SchemaNode::Text => {
             if value.is_string() {
                 value.clone()
             } else {

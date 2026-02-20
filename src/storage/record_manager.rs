@@ -16,6 +16,7 @@ use crate::{
     crdt::{
         self,
         patch_log::{append_patch, deserialize_patches, serialize_patches, EMPTY_PATCH_LOG},
+        schema_aware::{create_model_with_schema, deserialize_from_crdt, diff_model_with_schema},
     },
     error::{LessDbError, MigrationError, Result, StorageError},
     index::types::{IndexDefinition, IndexableValue},
@@ -147,8 +148,8 @@ pub fn prepare_new(
     // Compute indexes
     let computed = compute_index_values(&validated, &def.indexes);
 
-    // Create CRDT model
-    let model = crdt::create_model(&validated, session_id)?;
+    // Create CRDT model with schema-aware node types
+    let model = create_model_with_schema(&validated, session_id, &def.current_schema)?;
     let crdt_binary = crdt::model_to_binary(&model);
 
     let record = SerializedRecord {
@@ -293,7 +294,7 @@ pub fn prepare_update(
 
     // Update CRDT model: load with session_id and diff against new data
     let mut model = crdt::model_load(&existing.crdt, session_id)?;
-    let patch = crdt::diff_model(&model, &validated);
+    let patch = diff_model_with_schema(&model, &validated, &def.current_schema);
 
     let (crdt_binary, pending_patches) = if let Some(p) = patch {
         crdt::apply_patch(&mut model, &p);
@@ -492,7 +493,7 @@ pub fn migrate_and_deserialize(
     // Apply migration as a diff to the CRDT to preserve causal history
     let crdt_binary = match crdt::model_from_binary(&raw.crdt) {
         Ok(mut old_model) => {
-            if let Some(patch) = crdt::diff_model(&old_model, &migrated_data) {
+            if let Some(patch) = diff_model_with_schema(&old_model, &migrated_data, &def.current_schema) {
                 crdt::apply_patch(&mut old_model, &patch);
             }
             crdt::model_to_binary(&old_model)
@@ -500,7 +501,7 @@ pub fn migrate_and_deserialize(
         Err(_) => {
             // CRDT is corrupt — rebuild from migrated data
             let session_id = crdt::generate_session_id();
-            let new_model = crdt::create_model(&migrated_data, session_id)?;
+            let new_model = create_model_with_schema(&migrated_data, session_id, &def.current_schema)?;
             crdt::model_to_binary(&new_model)
         }
     };
@@ -620,13 +621,13 @@ pub fn merge_records(
     let mut remote_model = crdt::model_from_binary(remote_crdt)?;
 
     // Snapshot remote view before applying local patches
-    let remote_only_view = crdt::view_model(&remote_model);
+    let remote_only_view = deserialize_from_crdt(&def.current_schema, &crdt::view_model(&remote_model));
 
     // Replay local pending patches onto the remote model
     let local_patches = deserialize_patches(&local.pending_patches)?;
     crdt::merge_with_pending_patches(&mut remote_model, &local_patches);
 
-    let raw_merged_view = crdt::view_model(&remote_model);
+    let raw_merged_view = deserialize_from_crdt(&def.current_schema, &crdt::view_model(&remote_model));
 
     // Validate the merged view
     let full_schema = SchemaNode::Object(def.current_schema.clone());
@@ -674,7 +675,7 @@ fn merge_with_migrated_remote(
 ) -> Result<MergeRecordsResult> {
     // Step 1: Materialize and migrate remote data
     let mut remote_model = crdt::model_from_binary(remote_crdt)?;
-    let remote_view = crdt::view_model(&remote_model);
+    let remote_view = deserialize_from_crdt(&def.current_schema, &crdt::view_model(&remote_model));
 
     // Validate against the stored version schema before migration
     let version_def = def.versions.iter().find(|v| v.version == remote_version)
@@ -707,13 +708,13 @@ fn merge_with_migrated_remote(
 
     // Step 2: Apply migration as a diff to preserve CRDT clock vectors
     let migrated_data = migration_result.data;
-    let migration_patch = crdt::diff_model(&remote_model, &migrated_data);
+    let migration_patch = diff_model_with_schema(&remote_model, &migrated_data, &def.current_schema);
     if let Some(p) = migration_patch {
         crdt::apply_patch(&mut remote_model, &p);
     }
 
     // Step 3: Diff migrated remote vs local data to find local edits
-    let local_edit_patch = crdt::diff_model(&remote_model, &local.data);
+    let local_edit_patch = diff_model_with_schema(&remote_model, &local.data, &def.current_schema);
 
     // Step 4: Apply local edits on top of migrated remote
     let had_local_changes = local_edit_patch.is_some();
@@ -721,7 +722,7 @@ fn merge_with_migrated_remote(
         crdt::apply_patch(&mut remote_model, p);
     }
 
-    let merged_view = crdt::view_model(&remote_model);
+    let merged_view = deserialize_from_crdt(&def.current_schema, &crdt::view_model(&remote_model));
     let merged_crdt = crdt::model_to_binary(&remote_model);
     let computed = compute_index_values(&merged_view, &def.indexes);
 
@@ -776,7 +777,7 @@ pub fn prepare_remote_insert(
     }
 
     let model = crdt::model_from_binary(crdt_bytes)?;
-    let mut materialized = crdt::view_model(&model);
+    let mut materialized = deserialize_from_crdt(&def.current_schema, &crdt::view_model(&model));
 
     if materialized.is_null() || !materialized.is_object() {
         return Err(LessDbError::Internal(format!(
@@ -817,9 +818,9 @@ pub fn prepare_remote_insert(
         materialized = migration_result.data;
         version = def.current_version;
 
-        // Rebuild CRDT from migrated data
+        // Rebuild CRDT from migrated data with schema-aware node types
         let session_id = model.clock.sid;
-        let new_model = crdt::create_model(&materialized, session_id)?;
+        let new_model = create_model_with_schema(&materialized, session_id, &def.current_schema)?;
         crdt_binary = crdt::model_to_binary(&new_model);
     } else {
         // Current version: validate against current schema

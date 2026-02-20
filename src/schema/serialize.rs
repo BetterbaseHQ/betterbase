@@ -30,6 +30,7 @@ fn serialize_node(schema: &SchemaNode, value: &Value, depth: usize) -> Value {
     match schema {
         // Scalars are already JSON-safe — pass through.
         SchemaNode::String
+        | SchemaNode::Text
         | SchemaNode::Number
         | SchemaNode::Boolean
         | SchemaNode::Literal(_)
@@ -121,6 +122,7 @@ fn deserialize_node(schema: &SchemaNode, value: &Value, depth: usize) -> Value {
 
     match schema {
         SchemaNode::String
+        | SchemaNode::Text
         | SchemaNode::Number
         | SchemaNode::Boolean
         | SchemaNode::Literal(_)
@@ -195,7 +197,7 @@ fn matches_variant(schema: &SchemaNode, value: &Value, depth: usize) -> bool {
         panic!("Maximum depth exceeded in matches_variant ({MAX_DEPTH})");
     }
     match schema {
-        SchemaNode::String | SchemaNode::Key => value.is_string(),
+        SchemaNode::String | SchemaNode::Text | SchemaNode::Key => value.is_string(),
         SchemaNode::Number => value.is_number(),
         SchemaNode::Boolean => value.is_boolean(),
         SchemaNode::Date | SchemaNode::CreatedAt | SchemaNode::UpdatedAt => value.is_string(),
@@ -226,7 +228,7 @@ fn matches_serialized_variant(schema: &SchemaNode, value: &Value, depth: usize) 
         panic!("Maximum depth exceeded in matchesSerializedVariant ({MAX_DEPTH})");
     }
     match schema {
-        SchemaNode::String | SchemaNode::Key => value.is_string(),
+        SchemaNode::String | SchemaNode::Text | SchemaNode::Key => value.is_string(),
         SchemaNode::Number => value.is_number(),
         SchemaNode::Boolean => value.is_boolean(),
         SchemaNode::Date | SchemaNode::CreatedAt | SchemaNode::UpdatedAt => value.is_string(),
