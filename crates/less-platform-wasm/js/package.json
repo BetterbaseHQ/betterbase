@@ -1,0 +1,49 @@
+{
+  "name": "@less-platform/wasm",
+  "version": "0.1.0",
+  "description": "WASM-powered crypto, auth, discovery, and sync primitives for the Less platform",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    },
+    "./crypto": {
+      "import": "./src/crypto.ts",
+      "types": "./src/crypto.ts"
+    },
+    "./auth": {
+      "import": "./src/auth.ts",
+      "types": "./src/auth.ts"
+    },
+    "./discovery": {
+      "import": "./src/discovery.ts",
+      "types": "./src/discovery.ts"
+    },
+    "./sync": {
+      "import": "./src/sync.ts",
+      "types": "./src/sync.ts"
+    }
+  },
+  "license": "MIT",
+  "scripts": {
+    "build:wasm": "wasm-pack build --target bundler ..",
+    "build:ts": "tsc --project tsconfig.json",
+    "build": "pnpm build:wasm && pnpm build:ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "check": "pnpm build:wasm && prettier --write . && pnpm typecheck"
+  },
+  "devDependencies": {
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.5.0",
+    "vitest": "^4.0.18"
+  }
+}
