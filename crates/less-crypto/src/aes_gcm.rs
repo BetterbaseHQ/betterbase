@@ -6,7 +6,6 @@
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
-use zeroize::Zeroize;
 
 use crate::error::CryptoError;
 use crate::types::{
@@ -200,7 +199,7 @@ pub fn decrypt_v4(
         Aes256Gcm::new_from_slice(dek).map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
     let nonce = Nonce::from_slice(iv);
 
-    let mut plaintext = match context {
+    let plaintext = match context {
         Some(ctx) => {
             let aad = build_aad(ctx);
             cipher.decrypt(
@@ -215,8 +214,6 @@ pub fn decrypt_v4(
     }
     .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
 
-    // Zeroize plaintext copy in cipher (the returned vec is owned by caller)
-    let _ = &mut plaintext;
     Ok(plaintext)
 }
 
@@ -278,12 +275,7 @@ pub fn aes_gcm_decrypt(key: &[u8], data: &[u8], aad: &[u8]) -> Result<Vec<u8>, C
         .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))
 }
 
-impl Drop for SyncCrypto {
-    fn drop(&mut self) {
-        // Epoch is not secret, but zero it for hygiene
-        self.epoch.zeroize();
-    }
-}
+// Aes256Gcm zeroizes its key schedule on drop via the `zeroize` feature.
 
 #[cfg(test)]
 mod tests {

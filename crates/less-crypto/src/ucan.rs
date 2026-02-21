@@ -6,6 +6,7 @@ use p256::ecdsa::SigningKey;
 use serde_json::Value;
 
 use crate::base64url::{base64url_decode, base64url_encode};
+use crate::edit_chain::canonical_json;
 use crate::error::CryptoError;
 use crate::signing::{export_public_key_jwk, sign};
 
@@ -60,9 +61,9 @@ pub fn compress_p256_public_key(jwk: &Value) -> Result<Vec<u8>, CryptoError> {
     let y_bytes =
         base64url_decode(y_b64).map_err(|e| CryptoError::InvalidCoordinates(e.to_string()))?;
 
-    if x_bytes.len() > 32 || y_bytes.len() > 32 {
+    if x_bytes.is_empty() || y_bytes.is_empty() || x_bytes.len() > 32 || y_bytes.len() > 32 {
         return Err(CryptoError::InvalidCoordinates(
-            "exceeds 32 bytes".to_string(),
+            "coordinate out of range".to_string(),
         ));
     }
 
@@ -108,10 +109,11 @@ fn generate_nonce() -> String {
 }
 
 /// Sign a JWT with ES256 (ECDSA P-256 + SHA-256).
+/// Uses canonical_json for deterministic serialization across serde_json versions.
 fn sign_es256_jwt(private_key: &SigningKey, payload: &Value) -> Result<String, CryptoError> {
     let header = serde_json::json!({"alg": "ES256", "typ": "JWT"});
-    let header_b64 = base64url_encode(header.to_string().as_bytes());
-    let payload_b64 = base64url_encode(payload.to_string().as_bytes());
+    let header_b64 = base64url_encode(canonical_json(&header)?.as_bytes());
+    let payload_b64 = base64url_encode(canonical_json(payload)?.as_bytes());
     let signing_input = format!("{}.{}", header_b64, payload_b64);
 
     let signature = sign(private_key, signing_input.as_bytes())?;
@@ -223,6 +225,12 @@ mod tests {
     #[test]
     fn compress_missing_coordinates() {
         let jwk = serde_json::json!({"kty": "EC", "crv": "P-256"});
+        assert!(compress_p256_public_key(&jwk).is_err());
+    }
+
+    #[test]
+    fn compress_empty_coordinates() {
+        let jwk = serde_json::json!({"kty": "EC", "crv": "P-256", "x": "", "y": ""});
         assert!(compress_p256_public_key(&jwk).is_err());
     }
 

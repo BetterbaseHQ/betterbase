@@ -45,7 +45,12 @@ pub fn wrap_dek(dek: &[u8], kek: &[u8], epoch: u32) -> Result<[u8; WRAPPED_DEK_S
         });
     }
 
-    let kek_key = Kek::from(TryInto::<[u8; 32]>::try_into(kek).unwrap());
+    // Length validated above, so try_into cannot fail
+    let kek_array: [u8; 32] = kek.try_into().map_err(|_| CryptoError::InvalidKeyLength {
+        expected: AES_KEY_LENGTH,
+        got: kek.len(),
+    })?;
+    let kek_key = Kek::from(kek_array);
     let mut wrapped = [0u8; AES_KW_OUTPUT_SIZE];
     kek_key
         .wrap(dek, &mut wrapped)
@@ -79,10 +84,19 @@ pub fn unwrap_dek(wrapped_dek: &[u8], kek: &[u8]) -> Result<(Vec<u8>, u32), Cryp
         });
     }
 
-    let epoch = u32::from_be_bytes(wrapped_dek[..4].try_into().unwrap());
+    // Length validated above: wrapped_dek is exactly WRAPPED_DEK_SIZE (44) bytes
+    let epoch = u32::from_be_bytes(
+        wrapped_dek[..4]
+            .try_into()
+            .expect("slice is exactly 4 bytes after length check"),
+    );
     let wrapped_key_bytes = &wrapped_dek[4..];
 
-    let kek_key = Kek::from(TryInto::<[u8; 32]>::try_into(kek).unwrap());
+    let kek_array: [u8; 32] = kek.try_into().map_err(|_| CryptoError::InvalidKeyLength {
+        expected: AES_KEY_LENGTH,
+        got: kek.len(),
+    })?;
+    let kek_key = Kek::from(kek_array);
     let mut dek = vec![0u8; AES_KEY_LENGTH];
     kek_key
         .unwrap(wrapped_key_bytes, &mut dek)
