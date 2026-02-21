@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = ["crates/less-crypto", "crates/less-discovery", "crates/less-auth", "crates/less-sync-core", "crates/less-platform-wasm"]
