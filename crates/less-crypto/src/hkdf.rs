@@ -15,7 +15,11 @@ use crate::types::AES_KEY_LENGTH;
 ///
 /// # Returns
 /// 32-byte derived key
-pub fn hkdf_derive(ikm: &[u8], salt: &[u8], info: &[u8]) -> Result<[u8; AES_KEY_LENGTH], CryptoError> {
+pub fn hkdf_derive(
+    ikm: &[u8],
+    salt: &[u8],
+    info: &[u8],
+) -> Result<[u8; AES_KEY_LENGTH], CryptoError> {
     let hk = Hkdf::<Sha256>::new(Some(salt), ikm);
     let mut okm = [0u8; AES_KEY_LENGTH];
     hk.expand(info, &mut okm)

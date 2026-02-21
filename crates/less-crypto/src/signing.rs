@@ -4,7 +4,6 @@
 
 use ecdsa::signature::{Signer, Verifier};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
 use serde_json::Value;
 
 use crate::base64url::base64url_decode;
@@ -65,11 +64,11 @@ pub fn import_public_key_jwk(jwk: &Value) -> Result<VerifyingKey, CryptoError> {
     uncompressed.push(0x04);
     // Left-pad to 32 bytes if needed
     if x_bytes.len() < 32 {
-        uncompressed.extend(std::iter::repeat(0u8).take(32 - x_bytes.len()));
+        uncompressed.extend(std::iter::repeat_n(0u8, 32 - x_bytes.len()));
     }
     uncompressed.extend_from_slice(&x_bytes);
     if y_bytes.len() < 32 {
-        uncompressed.extend(std::iter::repeat(0u8).take(32 - y_bytes.len()));
+        uncompressed.extend(std::iter::repeat_n(0u8, 32 - y_bytes.len()));
     }
     uncompressed.extend_from_slice(&y_bytes);
 

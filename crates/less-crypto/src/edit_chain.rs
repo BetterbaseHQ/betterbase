@@ -164,6 +164,7 @@ fn sha256_hash(data: &[u8]) -> Vec<u8> {
 ///
 /// Computes prevHash from the previous entry's signature via SHA-256.
 /// Enforces timestamp monotonicity: `t = max(t, prevEntry.t + 1)`.
+#[allow(clippy::too_many_arguments)]
 pub fn sign_edit_entry(
     private_key: &SigningKey,
     public_key_jwk: &Value,
@@ -182,8 +183,14 @@ pub fn sign_edit_entry(
         t = t.max(prev.t + 1);
     }
 
-    let message =
-        build_edit_signing_message(collection, record_id, author, t, prev_hash.as_deref(), &diffs);
+    let message = build_edit_signing_message(
+        collection,
+        record_id,
+        author,
+        t,
+        prev_hash.as_deref(),
+        &diffs,
+    );
     let s = sign(private_key, &message)?;
 
     Ok(EditEntry {
@@ -352,8 +359,8 @@ pub fn parse_edit_chain(serialized: &str) -> Result<Vec<EditEntry>, CryptoError>
     parsed
         .into_iter()
         .map(|e| {
-            let s =
-                base64url_decode(&e.s).map_err(|e| CryptoError::SerializationError(e.to_string()))?;
+            let s = base64url_decode(&e.s)
+                .map_err(|e| CryptoError::SerializationError(e.to_string()))?;
             Ok(EditEntry {
                 a: e.a,
                 t: e.t,
@@ -388,17 +395,10 @@ fn navigate_to_parent<'a>(
 ) -> &'a mut serde_json::Map<String, Value> {
     let mut current = obj;
     for &key in &parts[..parts.len() - 1] {
-        if !current.contains_key(key)
-            || !current[key].is_object()
-            || current[key].is_null()
-        {
+        if !current.contains_key(key) || !current[key].is_object() || current[key].is_null() {
             current.insert(key.to_string(), serde_json::json!({}));
         }
-        current = current
-            .get_mut(key)
-            .unwrap()
-            .as_object_mut()
-            .unwrap();
+        current = current.get_mut(key).unwrap().as_object_mut().unwrap();
     }
     current
 }
@@ -474,8 +474,7 @@ mod tests {
 
     #[test]
     fn canonical_json_nested() {
-        let result =
-            canonical_json(&serde_json::json!({"b": {"d": 1, "c": 2}, "a": 3})).unwrap();
+        let result = canonical_json(&serde_json::json!({"b": {"d": 1, "c": 2}, "a": 3})).unwrap();
         assert_eq!(result, r#"{"a":3,"b":{"c":2,"d":1}}"#);
     }
 
@@ -500,7 +499,9 @@ mod tests {
 
     #[test]
     fn canonical_json_nested_arrays_of_objects() {
-        let result = canonical_json(&serde_json::json!([{"z": 1, "a": 2}, {"b": [{"y": 3, "x": 4}]}])).unwrap();
+        let result =
+            canonical_json(&serde_json::json!([{"z": 1, "a": 2}, {"b": [{"y": 3, "x": 4}]}]))
+                .unwrap();
         assert_eq!(result, r#"[{"a":2,"z":1},{"b":[{"x":4,"y":3}]}]"#);
     }
 

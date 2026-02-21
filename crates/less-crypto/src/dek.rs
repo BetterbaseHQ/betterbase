@@ -5,11 +5,9 @@
 //!
 //! Wrapped DEK wire format: [epoch:4 BE][AES-KW(KEK, DEK):40] = 44 bytes total
 
-use aes_kw::Kek;
-use zeroize::Zeroize;
-
 use crate::error::CryptoError;
 use crate::types::AES_KEY_LENGTH;
+use aes_kw::Kek;
 
 /// Size of a wrapped DEK in bytes: 4 (epoch) + 40 (AES-KW output for 32-byte key).
 pub const WRAPPED_DEK_SIZE: usize = 44;

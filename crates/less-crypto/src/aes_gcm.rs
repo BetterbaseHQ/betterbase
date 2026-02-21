@@ -72,8 +72,13 @@ impl SyncCrypto {
         let ciphertext = match context {
             Some(ctx) => {
                 let aad = build_aad(ctx);
-                self.cipher
-                    .encrypt(nonce, Payload { msg: data, aad: &aad })
+                self.cipher.encrypt(
+                    nonce,
+                    Payload {
+                        msg: data,
+                        aad: &aad,
+                    },
+                )
             }
             None => self.cipher.encrypt(nonce, data),
         }
@@ -139,15 +144,21 @@ pub fn encrypt_v4(
             got: dek.len(),
         });
     }
-    let cipher = Aes256Gcm::new_from_slice(dek)
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(dek).map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
     let iv = generate_iv();
     let nonce = Nonce::from_slice(&iv);
 
     let ciphertext = match context {
         Some(ctx) => {
             let aad = build_aad(ctx);
-            cipher.encrypt(nonce, Payload { msg: data, aad: &aad })
+            cipher.encrypt(
+                nonce,
+                Payload {
+                    msg: data,
+                    aad: &aad,
+                },
+            )
         }
         None => cipher.encrypt(nonce, data),
     }
@@ -185,8 +196,8 @@ pub fn decrypt_v4(
     let iv = &blob[1..1 + AES_GCM_IV_LENGTH];
     let ciphertext = &blob[1 + AES_GCM_IV_LENGTH..];
 
-    let cipher = Aes256Gcm::new_from_slice(dek)
-        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(dek).map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
     let nonce = Nonce::from_slice(iv);
 
     let mut plaintext = match context {
@@ -218,8 +229,8 @@ pub fn aes_gcm_encrypt(key: &[u8], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u
             got: key.len(),
         });
     }
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
     let iv = generate_iv();
     let nonce = Nonce::from_slice(&iv);
 
@@ -250,8 +261,8 @@ pub fn aes_gcm_decrypt(key: &[u8], data: &[u8], aad: &[u8]) -> Result<Vec<u8>, C
     if data.len() < AES_GCM_IV_LENGTH + AES_GCM_TAG_LENGTH {
         return Err(CryptoError::DataTooShort);
     }
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
     let iv = &data[..AES_GCM_IV_LENGTH];
     let ciphertext = &data[AES_GCM_IV_LENGTH..];
     let nonce = Nonce::from_slice(iv);

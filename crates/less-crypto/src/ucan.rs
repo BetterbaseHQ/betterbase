@@ -108,10 +108,7 @@ fn generate_nonce() -> String {
 }
 
 /// Sign a JWT with ES256 (ECDSA P-256 + SHA-256).
-fn sign_es256_jwt(
-    private_key: &SigningKey,
-    payload: &Value,
-) -> Result<String, CryptoError> {
+fn sign_es256_jwt(private_key: &SigningKey, payload: &Value) -> Result<String, CryptoError> {
     let header = serde_json::json!({"alg": "ES256", "typ": "JWT"});
     let header_b64 = base64url_encode(header.to_string().as_bytes());
     let payload_b64 = base64url_encode(payload.to_string().as_bytes());
@@ -199,10 +196,8 @@ mod tests {
 
     fn parse_jwt(token: &str) -> (Value, Value) {
         let parts: Vec<&str> = token.split('.').collect();
-        let header: Value =
-            serde_json::from_slice(&base64url_decode(parts[0]).unwrap()).unwrap();
-        let payload: Value =
-            serde_json::from_slice(&base64url_decode(parts[1]).unwrap()).unwrap();
+        let header: Value = serde_json::from_slice(&base64url_decode(parts[0]).unwrap()).unwrap();
+        let payload: Value = serde_json::from_slice(&base64url_decode(parts[1]).unwrap()).unwrap();
         (header, payload)
     }
 
@@ -240,7 +235,10 @@ mod tests {
             "y": "efsX5b10x8yjyrj4ny3pGfLcY7Xby1KzgqOdqnsrJIM",
         });
         let did = encode_did_key_from_jwk(&jwk).unwrap();
-        assert_eq!(did, "did:key:zDnaerx9CtbPJ1q36T5Ln5wYt3MQYeGRG5ehnPAmxcf5mDZpv");
+        assert_eq!(
+            did,
+            "did:key:zDnaerx9CtbPJ1q36T5Ln5wYt3MQYeGRG5ehnPAmxcf5mDZpv"
+        );
     }
 
     #[test]
@@ -358,7 +356,10 @@ mod tests {
 
         let (_, payload) = parse_jwt(&delegated_ucan);
         assert_eq!(payload["iss"], delegate_did);
-        assert_eq!(payload["aud"], serde_json::json!(["did:key:zFakeRecipient"]));
+        assert_eq!(
+            payload["aud"],
+            serde_json::json!(["did:key:zFakeRecipient"])
+        );
         assert_eq!(payload["cmd"], "/space/read");
         assert_eq!(payload["prf"], serde_json::json!([&root_ucan]));
     }
@@ -453,9 +454,6 @@ mod tests {
         assert!(result.is_ok());
 
         let (_, payload) = parse_jwt(&result.unwrap());
-        assert_eq!(
-            payload["prf"],
-            serde_json::json!(["not.a-valid-jwt.token"])
-        );
+        assert_eq!(payload["prf"], serde_json::json!(["not.a-valid-jwt.token"]));
     }
 }
