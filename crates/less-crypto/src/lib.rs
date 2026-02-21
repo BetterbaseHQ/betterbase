@@ -20,7 +20,10 @@ pub use edit_chain::{
 };
 pub use epoch::{derive_epoch_key_from_root, derive_next_epoch_key};
 pub use error::CryptoError;
-pub use signing::{sign, verify};
+pub use signing::{
+    export_private_key_jwk, export_public_key_jwk, generate_p256_keypair, import_private_key_jwk,
+    import_public_key_jwk, sign, verify,
+};
 pub use types::{EncryptionContext, CURRENT_VERSION, SUPPORTED_VERSIONS};
 pub use ucan::{
     compress_p256_public_key, delegate_ucan, encode_did_key, encode_did_key_from_jwk,

@@ -33,7 +33,7 @@ pub struct EditDiff {
 }
 
 /// A signed entry in the edit chain.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditEntry {
     /// Author did:key.
     pub a: String,

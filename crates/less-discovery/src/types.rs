@@ -29,7 +29,7 @@ pub struct WebFingerLink {
 }
 
 /// Parsed result from WebFinger resolution.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UserResolution {
     pub subject: String,
     pub sync_endpoint: String,

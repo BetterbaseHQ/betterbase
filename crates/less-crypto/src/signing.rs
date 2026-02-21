@@ -107,6 +107,18 @@ pub fn export_private_key_jwk(key: &SigningKey) -> Value {
     })
 }
 
+/// Import a P-256 private key from JWK format.
+pub fn import_private_key_jwk(jwk: &Value) -> Result<SigningKey, CryptoError> {
+    let d_b64 = jwk
+        .get("d")
+        .and_then(|v| v.as_str())
+        .ok_or(CryptoError::MissingJwkField("d"))?;
+    let d_bytes =
+        base64url_decode(d_b64).map_err(|e| CryptoError::InvalidJwk(format!("d: {}", e)))?;
+    SigningKey::from_bytes(d_bytes.as_slice().into())
+        .map_err(|e| CryptoError::InvalidJwk(format!("P-256 scalar: {}", e)))
+}
+
 /// Generate a new P-256 signing key pair.
 pub fn generate_p256_keypair() -> SigningKey {
     SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng)
