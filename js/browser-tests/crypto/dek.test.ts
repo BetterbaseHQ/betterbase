@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { initWasm } from "../../src/wasm-init.js";
-import { generateDEK, wrapDEK, unwrapDEK, WRAPPED_DEK_SIZE } from "../../src/crypto/dek.js";
+import {
+  generateDEK,
+  wrapDEK,
+  unwrapDEK,
+  WRAPPED_DEK_SIZE,
+} from "../../src/crypto/dek.js";
 
 describe("DEK wrap/unwrap (browser)", () => {
   beforeAll(async () => {

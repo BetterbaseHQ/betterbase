@@ -18,11 +18,16 @@
  * Import raw key bytes as a non-extractable AES-GCM CryptoKey.
  * Used for the encryption-key stored in IndexedDB.
  */
-export async function importEncryptionCryptoKey(raw: Uint8Array): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", toBuffer(raw), { name: "AES-GCM" }, false, [
-    "encrypt",
-    "decrypt",
-  ]);
+export async function importEncryptionCryptoKey(
+  raw: Uint8Array,
+): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "raw",
+    toBuffer(raw),
+    { name: "AES-GCM" },
+    false,
+    ["encrypt", "decrypt"],
+  );
 }
 
 /**
@@ -30,21 +35,29 @@ export async function importEncryptionCryptoKey(raw: Uint8Array): Promise<Crypto
  * Used for the epoch KEK (wraps/unwraps per-record DEKs).
  */
 export async function importEpochKwKey(raw: Uint8Array): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", toBuffer(raw), { name: "AES-KW" }, false, [
-    "wrapKey",
-    "unwrapKey",
-  ]);
+  return crypto.subtle.importKey(
+    "raw",
+    toBuffer(raw),
+    { name: "AES-KW" },
+    false,
+    ["wrapKey", "unwrapKey"],
+  );
 }
 
 /**
  * Import raw key bytes as a non-extractable HKDF CryptoKey.
  * Used for forward epoch derivation.
  */
-export async function importEpochDeriveKey(raw: Uint8Array): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", toBuffer(raw), { name: "HKDF" }, false, [
-    "deriveBits",
-    "deriveKey",
-  ]);
+export async function importEpochDeriveKey(
+  raw: Uint8Array,
+): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "raw",
+    toBuffer(raw),
+    { name: "HKDF" },
+    false,
+    ["deriveBits", "deriveKey"],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -65,12 +78,18 @@ export async function webcryptoWrapDEK(
   epoch: number,
 ): Promise<Uint8Array> {
   // Import transient DEK as an extractable AES-GCM CryptoKey
-  const dekKey = await crypto.subtle.importKey("raw", toBuffer(dek), { name: "AES-GCM" }, true, [
-    "encrypt",
-  ]);
+  const dekKey = await crypto.subtle.importKey(
+    "raw",
+    toBuffer(dek),
+    { name: "AES-GCM" },
+    true,
+    ["encrypt"],
+  );
 
   // Wrap it under the non-extractable KEK
-  const wrapped = await crypto.subtle.wrapKey("raw", dekKey, kek, { name: "AES-KW" });
+  const wrapped = await crypto.subtle.wrapKey("raw", dekKey, kek, {
+    name: "AES-KW",
+  });
 
   // Prepend epoch (4 bytes, big-endian)
   const result = new Uint8Array(4 + wrapped.byteLength);
@@ -89,7 +108,11 @@ export async function webcryptoUnwrapDEK(
   kek: CryptoKey,
 ): Promise<{ dek: Uint8Array; epoch: number }> {
   // Read epoch prefix
-  const view = new DataView(wrappedDEK.buffer, wrappedDEK.byteOffset, wrappedDEK.byteLength);
+  const view = new DataView(
+    wrappedDEK.buffer,
+    wrappedDEK.byteOffset,
+    wrappedDEK.byteLength,
+  );
   const epoch = view.getUint32(0, false);
 
   // Extract AES-KW ciphertext (after 4-byte epoch prefix)
@@ -128,7 +151,9 @@ export async function webcryptoDeriveEpochKey(
   nextEpoch: number,
 ): Promise<{ kwKey: CryptoKey; deriveKey: CryptoKey }> {
   const salt = new TextEncoder().encode("betterbase:epoch-salt:v1");
-  const info = new TextEncoder().encode(`betterbase:epoch:v1:${spaceId}:${nextEpoch}`);
+  const info = new TextEncoder().encode(
+    `betterbase:epoch:v1:${spaceId}:${nextEpoch}`,
+  );
 
   // Derive 256 raw bits via HKDF
   const rawBits = await crypto.subtle.deriveBits(
@@ -144,8 +169,14 @@ export async function webcryptoDeriveEpochKey(
 
   // Import as both AES-KW (non-extractable) and HKDF (non-extractable)
   const [kwKey, newDeriveKey] = await Promise.all([
-    crypto.subtle.importKey("raw", rawBits, { name: "AES-KW" }, false, ["wrapKey", "unwrapKey"]),
-    crypto.subtle.importKey("raw", rawBits, { name: "HKDF" }, false, ["deriveBits", "deriveKey"]),
+    crypto.subtle.importKey("raw", rawBits, { name: "AES-KW" }, false, [
+      "wrapKey",
+      "unwrapKey",
+    ]),
+    crypto.subtle.importKey("raw", rawBits, { name: "HKDF" }, false, [
+      "deriveBits",
+      "deriveKey",
+    ]),
   ]);
 
   // Zero intermediate key material now that both imports are complete
@@ -223,7 +254,10 @@ export async function generateEphemeralECDHKeyPair(): Promise<{
  * 5. AES-KW unwrap the CEK
  * 6. AES-GCM decrypt the ciphertext
  */
-export async function webcryptoDecryptJwe(jwe: string, privateKey: CryptoKey): Promise<Uint8Array> {
+export async function webcryptoDecryptJwe(
+  jwe: string,
+  privateKey: CryptoKey,
+): Promise<Uint8Array> {
   // 1. Parse compact JWE: header.encryptedKey.iv.ciphertext.tag
   const parts = jwe.split(".");
   if (parts.length !== 5) {
@@ -232,7 +266,9 @@ export async function webcryptoDecryptJwe(jwe: string, privateKey: CryptoKey): P
 
   const [headerB64, encKeyB64, ivB64, ciphertextB64, tagB64] = parts;
 
-  const header = JSON.parse(new TextDecoder().decode(base64urlDecode(headerB64!)));
+  const header = JSON.parse(
+    new TextDecoder().decode(base64urlDecode(headerB64!)),
+  );
   const encryptedKey = base64urlDecode(encKeyB64!);
   const iv = base64urlDecode(ivB64!);
   const ciphertext = base64urlDecode(ciphertextB64!);
@@ -272,8 +308,12 @@ export async function webcryptoDecryptJwe(jwe: string, privateKey: CryptoKey): P
   // AlgorithmID = full "alg" header value per RFC 7518 §4.6.2
   // (NOT just "A256KW" — that's the enc value for direct agreement)
   const algId = lengthPrefixed(new TextEncoder().encode("ECDH-ES+A256KW"));
-  const partyU = lengthPrefixed(header.apu ? base64urlDecode(header.apu) : new Uint8Array(0));
-  const partyV = lengthPrefixed(header.apv ? base64urlDecode(header.apv) : new Uint8Array(0));
+  const partyU = lengthPrefixed(
+    header.apu ? base64urlDecode(header.apu) : new Uint8Array(0),
+  );
+  const partyV = lengthPrefixed(
+    header.apv ? base64urlDecode(header.apv) : new Uint8Array(0),
+  );
   const suppPub = new Uint8Array(4);
   new DataView(suppPub.buffer).setUint32(0, 256, false); // keydatalen = 256 bits
 
@@ -294,9 +334,13 @@ export async function webcryptoDecryptJwe(jwe: string, privateKey: CryptoKey): P
   hashInput.fill(0);
 
   // 5. AES-KW unwrap the CEK
-  const kek = await crypto.subtle.importKey("raw", kekBits, { name: "AES-KW" }, false, [
-    "unwrapKey",
-  ]);
+  const kek = await crypto.subtle.importKey(
+    "raw",
+    kekBits,
+    { name: "AES-KW" },
+    false,
+    ["unwrapKey"],
+  );
 
   // Zero ECDH shared secret and derived KEK now that imports are complete
   new Uint8Array(sharedBits).fill(0);
@@ -320,7 +364,12 @@ export async function webcryptoDecryptJwe(jwe: string, privateKey: CryptoKey): P
   const ciphertextWithTag = concatBytes(ciphertext, tag);
 
   const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: toBuffer(iv), additionalData: toBuffer(aad), tagLength: 128 },
+    {
+      name: "AES-GCM",
+      iv: toBuffer(iv),
+      additionalData: toBuffer(aad),
+      tagLength: 128,
+    },
     cek,
     toBuffer(ciphertextWithTag),
   );
@@ -358,7 +407,10 @@ function lengthPrefixed(data: Uint8Array): Uint8Array {
  * (which includes SharedArrayBuffer), but Web Crypto expects ArrayBuffer.
  */
 function toBuffer(u: Uint8Array): ArrayBuffer {
-  return (u.buffer as ArrayBuffer).slice(u.byteOffset, u.byteOffset + u.byteLength);
+  return (u.buffer as ArrayBuffer).slice(
+    u.byteOffset,
+    u.byteOffset + u.byteLength,
+  );
 }
 
 /** Concatenate multiple Uint8Arrays. */

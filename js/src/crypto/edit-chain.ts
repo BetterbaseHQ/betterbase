@@ -53,7 +53,11 @@ export function signEditEntry(
 /**
  * Verify a single edit entry's signature and DID/key consistency.
  */
-export function verifyEditEntry(entry: EditEntry, collection: string, recordId: string): boolean {
+export function verifyEditEntry(
+  entry: EditEntry,
+  collection: string,
+  recordId: string,
+): boolean {
   return ensureWasm().verifyEditEntry(entry, collection, recordId);
 }
 
@@ -95,6 +99,9 @@ export function parseEditChain(serialized: string): EditEntry[] {
 }
 
 /** Reconstruct state by folding diffs forward from the beginning. */
-export function reconstructState(entries: EditEntry[], upToIndex: number): Record<string, unknown> {
+export function reconstructState(
+  entries: EditEntry[],
+  upToIndex: number,
+): Record<string, unknown> {
   return ensureWasm().reconstructState(entries, upToIndex);
 }

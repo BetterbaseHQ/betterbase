@@ -8,7 +8,9 @@ use crate::epoch_cache::EpochKeyCache;
 use crate::error::SyncError;
 use crate::padding::{pad_to_bucket, unpad};
 use crate::types::BlobEnvelope;
-use betterbase_crypto::{decrypt_v4, encrypt_v4, generate_dek, unwrap_dek, wrap_dek, EncryptionContext};
+use betterbase_crypto::{
+    decrypt_v4, encrypt_v4, generate_dek, unwrap_dek, wrap_dek, EncryptionContext,
+};
 use zeroize::Zeroize;
 
 /// Encrypt an outbound record for push.

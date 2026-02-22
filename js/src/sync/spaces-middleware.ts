@@ -76,7 +76,10 @@ export function createSpacesMiddleware(
   defaultSpaceId: string,
 ): Middleware<SpaceFields, SpaceWriteOptions, SpaceQueryOptions> {
   return {
-    onRead(record: unknown, meta: Record<string, unknown>): SpaceFields & Record<string, unknown> {
+    onRead(
+      record: unknown,
+      meta: Record<string, unknown>,
+    ): SpaceFields & Record<string, unknown> {
       const rec = record as Record<string, unknown>;
       const result: Record<string, unknown> = {
         ...rec,
@@ -94,7 +97,10 @@ export function createSpacesMiddleware(
           );
           result._editChainValid = (meta._editChainValid as boolean) ?? false;
         } catch (e) {
-          console.warn("[betterbase-sync] Edit chain parse failed in onRead:", e);
+          console.warn(
+            "[betterbase-sync] Edit chain parse failed in onRead:",
+            e,
+          );
           result._editChain = undefined;
           result._editChainValid = false;
         }
@@ -150,6 +156,8 @@ export function reconstructState(
   upToIndex: number,
 ): Record<string, unknown> {
   // Map EditHistoryEntry (diffs) to wire shape (d) for the crypto function
-  const mapped = entries.map((e) => ("diffs" in e ? { d: e.diffs } : e)) as EditEntry[];
+  const mapped = entries.map((e) =>
+    "diffs" in e ? { d: e.diffs } : e,
+  ) as EditEntry[];
   return cryptoReconstructState(mapped, upToIndex);
 }

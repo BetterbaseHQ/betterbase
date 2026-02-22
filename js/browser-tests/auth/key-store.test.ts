@@ -46,9 +46,9 @@ describe("KeyStore CryptoKey storage (browser)", () => {
     });
 
     it("rejects non-32-byte keys", async () => {
-      await expect(keyStore.importEncryptionKey(new Uint8Array(16))).rejects.toThrow(
-        "expected 32 bytes",
-      );
+      await expect(
+        keyStore.importEncryptionKey(new Uint8Array(16)),
+      ).rejects.toThrow("expected 32 bytes");
     });
   });
 
@@ -145,9 +145,11 @@ describe("KeyStore CryptoKey storage (browser)", () => {
 
   describe("ephemeral OAuth key", () => {
     it("store/retrieve/delete lifecycle", async () => {
-      const kp = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, [
-        "deriveBits",
-      ]);
+      const kp = await crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" },
+        false,
+        ["deriveBits"],
+      );
 
       await keyStore.storeEphemeralOAuthKey(kp.privateKey);
       const retrieved = await keyStore.getEphemeralOAuthKey();

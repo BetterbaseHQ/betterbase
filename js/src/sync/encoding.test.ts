@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { bytesToBase64, base64ToBytes, bytesToBase64Url, base64UrlToBytes } from "./encoding.js";
+import {
+  bytesToBase64,
+  base64ToBytes,
+  bytesToBase64Url,
+  base64UrlToBytes,
+} from "./encoding.js";
 
 describe("base64 round-trips", () => {
   it("round-trips bytes through base64", () => {

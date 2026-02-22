@@ -146,7 +146,9 @@ export class RpcConnection {
   /** Register a handler for server-initiated notifications. */
   onNotification(method: string, handler: (params: unknown) => void): void {
     if (this.notificationHandlers.has(method)) {
-      throw new Error(`Notification handler for "${method}" already registered`);
+      throw new Error(
+        `Notification handler for "${method}" already registered`,
+      );
     }
     this.notificationHandlers.set(method, handler);
   }
@@ -197,7 +199,9 @@ export class RpcConnection {
 
       ws.onclose = (event: CloseEvent) => {
         this.ws = null;
-        this.rejectAllPending(new Error(`connection lost (code ${event.code})`));
+        this.rejectAllPending(
+          new Error(`connection lost (code ${event.code})`),
+        );
         this.config.onClose?.(event.code, event.reason);
 
         if (!this.closed) {
@@ -211,7 +215,9 @@ export class RpcConnection {
     if (!(data instanceof ArrayBuffer)) return;
 
     if (data.byteLength > MAX_FRAME_BYTES) {
-      console.warn(`[betterbase-sync] Frame too large: ${data.byteLength} bytes, dropping`);
+      console.warn(
+        `[betterbase-sync] Frame too large: ${data.byteLength} bytes, dropping`,
+      );
       return;
     }
 
@@ -226,9 +232,9 @@ export class RpcConnection {
     try {
       frame = decode(bytes) as RPCFrame;
     } catch (err) {
-      const preview = Array.from(bytes.slice(0, 16), (b) => b.toString(16).padStart(2, "0")).join(
-        " ",
-      );
+      const preview = Array.from(bytes.slice(0, 16), (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join(" ");
       console.warn(
         `[betterbase-sync] Received malformed CBOR frame (${bytes.length} bytes, preview: ${preview}), dropping`,
         err,
@@ -256,7 +262,9 @@ export class RpcConnection {
         break;
       default: {
         const _exhaustive: never = frame;
-        console.warn(`[betterbase-sync] Unknown frame type: ${(_exhaustive as any).type}`);
+        console.warn(
+          `[betterbase-sync] Unknown frame type: ${(_exhaustive as any).type}`,
+        );
       }
     }
   }
@@ -279,7 +287,9 @@ export class RpcConnection {
       const expected = meta._chunks;
       if (typeof expected === "number" && expected !== call.chunkCount) {
         call.reject(
-          new Error(`chunk count mismatch: server=${expected}, received=${call.chunkCount}`),
+          new Error(
+            `chunk count mismatch: server=${expected}, received=${call.chunkCount}`,
+          ),
         );
         return;
       }
@@ -294,7 +304,10 @@ export class RpcConnection {
       try {
         handler(frame.params);
       } catch (err) {
-        console.error(`[betterbase-sync] Notification handler "${frame.method}" threw:`, err);
+        console.error(
+          `[betterbase-sync] Notification handler "${frame.method}" threw:`,
+          err,
+        );
       }
     }
   }
@@ -307,7 +320,9 @@ export class RpcConnection {
     clearTimeout(call.timeout);
     call.timeout = setTimeout(() => {
       this.pending.delete(frame.id);
-      call.reject(new Error(`chunk timeout (no data for ${REQUEST_TIMEOUT}ms)`));
+      call.reject(
+        new Error(`chunk timeout (no data for ${REQUEST_TIMEOUT}ms)`),
+      );
     }, REQUEST_TIMEOUT);
 
     try {

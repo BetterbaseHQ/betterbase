@@ -22,7 +22,10 @@ export function generateCodeVerifier(): string {
  * @param verifier - The code verifier
  * @param thumbprint - Optional JWK thumbprint for key binding
  */
-export function generateCodeChallenge(verifier: string, thumbprint?: string): string {
+export function generateCodeChallenge(
+  verifier: string,
+  thumbprint?: string,
+): string {
   return ensureWasm().computeCodeChallenge(verifier, thumbprint);
 }
 

@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { initWasm } from "../../src/wasm-init.js";
-import { generateCodeVerifier, generateCodeChallenge, generateState } from "../../src/auth/pkce.js";
+import {
+  generateCodeVerifier,
+  generateCodeChallenge,
+  generateState,
+} from "../../src/auth/pkce.js";
 
 describe("PKCE (browser)", () => {
   beforeAll(async () => {

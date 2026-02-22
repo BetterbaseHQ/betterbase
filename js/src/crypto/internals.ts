@@ -13,7 +13,11 @@ export { base64UrlEncode, base64UrlDecode } from "./base64url.js";
 export { generateDEK, wrapDEK, unwrapDEK, WRAPPED_DEK_SIZE } from "./dek.js";
 
 // Channel key derivation (presence & events)
-export { deriveChannelKey, buildPresenceAAD, buildEventAAD } from "./channel.js";
+export {
+  deriveChannelKey,
+  buildPresenceAAD,
+  buildEventAAD,
+} from "./channel.js";
 
 // UCAN primitives
 export { compressP256PublicKey, issueRootUCAN, delegateUCAN } from "./ucan.js";

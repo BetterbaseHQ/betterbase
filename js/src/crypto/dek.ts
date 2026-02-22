@@ -32,7 +32,11 @@ export function generateDEK(): Uint8Array {
  * @param epoch - Epoch number for the KEK
  * @returns 44-byte wrapped DEK: [epoch:4 BE][AES-KW(KEK, DEK):40]
  */
-export function wrapDEK(dek: Uint8Array, kek: Uint8Array, epoch: number): Uint8Array {
+export function wrapDEK(
+  dek: Uint8Array,
+  kek: Uint8Array,
+  epoch: number,
+): Uint8Array {
   return ensureWasm().wrapDEK(dek, kek, epoch);
 }
 

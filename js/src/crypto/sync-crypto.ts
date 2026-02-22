@@ -34,7 +34,9 @@ export class SyncCrypto implements Disposable {
    */
   constructor(key: Uint8Array, epoch: number = 0) {
     if (key.length !== 32) {
-      throw new Error(`Invalid key length: expected 32 bytes, got ${key.length}`);
+      throw new Error(
+        `Invalid key length: expected 32 bytes, got ${key.length}`,
+      );
     }
     this.key = key.slice();
     this.epoch = epoch;
@@ -48,7 +50,12 @@ export class SyncCrypto implements Disposable {
    * @returns Encrypted blob: [version=4][IV:12][ciphertext+tag]
    */
   encrypt(data: Uint8Array, context?: EncryptionContext): Uint8Array {
-    return ensureWasm().encryptV4(data, this.key, context?.spaceId, context?.recordId);
+    return ensureWasm().encryptV4(
+      data,
+      this.key,
+      context?.spaceId,
+      context?.recordId,
+    );
   }
 
   /**
@@ -60,7 +67,12 @@ export class SyncCrypto implements Disposable {
    * @throws Error if version is unsupported or decryption fails
    */
   decrypt(encrypted: Uint8Array, context?: EncryptionContext): Uint8Array {
-    return ensureWasm().decryptV4(encrypted, this.key, context?.spaceId, context?.recordId);
+    return ensureWasm().decryptV4(
+      encrypted,
+      this.key,
+      context?.spaceId,
+      context?.recordId,
+    );
   }
 
   /** Zero the key material. Safe to call multiple times. */

@@ -103,7 +103,8 @@ export class MembershipClient {
     } catch (err) {
       if (err instanceof RPCCallError) {
         if (err.code === "not_found") throw new SpaceNotFoundError(spaceId);
-        if (err.code === "conflict") throw new VersionConflictError(err.message);
+        if (err.code === "conflict")
+          throw new VersionConflictError(err.message);
       }
       throw err;
     }
@@ -127,13 +128,18 @@ export class MembershipClient {
     } catch (err) {
       if (err instanceof RPCCallError) {
         if (err.code === "not_found") throw new SpaceNotFoundError(spaceId);
-        if (err.code === "forbidden") throw new Error(`Get membership log failed: status 403`);
+        if (err.code === "forbidden")
+          throw new Error(`Get membership log failed: status 403`);
       }
       throw err;
     }
   }
 
-  async revokeUCAN(spaceId: string, ucanCID: string, ucan?: string): Promise<void> {
+  async revokeUCAN(
+    spaceId: string,
+    ucanCID: string,
+    ucan?: string,
+  ): Promise<void> {
     try {
       await this.config.ws.revokeUCAN({
         space: spaceId,
@@ -172,7 +178,10 @@ export function encryptMembershipPayload(
   spaceId: string,
   seq: number,
 ): Uint8Array {
-  const sc = cryptoOrKey instanceof Uint8Array ? new SyncCrypto(cryptoOrKey) : cryptoOrKey;
+  const sc =
+    cryptoOrKey instanceof Uint8Array
+      ? new SyncCrypto(cryptoOrKey)
+      : cryptoOrKey;
   const plaintext = new TextEncoder().encode(payload);
   const context: EncryptionContext = { spaceId, recordId: String(seq) };
   return sc.encrypt(plaintext, context);
@@ -187,7 +196,10 @@ export function decryptMembershipPayload(
   spaceId: string,
   seq: number,
 ): string {
-  const sc = cryptoOrKey instanceof Uint8Array ? new SyncCrypto(cryptoOrKey) : cryptoOrKey;
+  const sc =
+    cryptoOrKey instanceof Uint8Array
+      ? new SyncCrypto(cryptoOrKey)
+      : cryptoOrKey;
   const context: EncryptionContext = { spaceId, recordId: String(seq) };
   const plaintext = sc.decrypt(encrypted, context);
   return new TextDecoder().decode(plaintext);
@@ -287,7 +299,9 @@ function validateHandle(value: unknown): string | undefined {
 /**
  * Serialize a membership entry payload to signed JSON format.
  */
-export function serializeMembershipEntry(entry: MembershipEntryPayload): string {
+export function serializeMembershipEntry(
+  entry: MembershipEntryPayload,
+): string {
   const obj: Record<string, unknown> = {
     u: entry.ucan,
     t: entry.type,
@@ -315,7 +329,10 @@ export function serializeMembershipEntry(entry: MembershipEntryPayload): string 
 /**
  * Verify a membership entry's signature.
  */
-export function verifyMembershipEntry(entry: MembershipEntryPayload, spaceId: string): boolean {
+export function verifyMembershipEntry(
+  entry: MembershipEntryPayload,
+  spaceId: string,
+): boolean {
   const parsed = parseUCANPayload(entry.ucan);
   let expectedSignerDID: string;
   switch (entry.type) {
@@ -367,7 +384,11 @@ function verifyUCANSignature(ucan: string, publicKeyJwk: JsonWebKey): boolean {
   const signingInput = `${parts[0]}.${parts[1]}`;
   const signatureBytes = base64UrlToBytes(parts[2]);
 
-  return verify(publicKeyJwk, new TextEncoder().encode(signingInput), signatureBytes);
+  return verify(
+    publicKeyJwk,
+    new TextEncoder().encode(signingInput),
+    signatureBytes,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -400,7 +421,8 @@ export function parseUCANPayload(ucan: string): ParsedUCAN {
     issuerDID: iss ?? "",
     audienceDID: aud ?? "",
     permission: json.cmd ?? "",
-    spaceId: typeof json.with === "string" ? json.with.replace(/^space:/, "") : "",
+    spaceId:
+      typeof json.with === "string" ? json.with.replace(/^space:/, "") : "",
     expiresAt: json.exp ?? 0,
   };
 }

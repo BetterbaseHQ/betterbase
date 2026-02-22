@@ -4,7 +4,11 @@
 
 import type { OAuthConfig, AuthResult, TokenResponse } from "./types.js";
 import { STORAGE_KEYS } from "./types.js";
-import { generateCodeVerifier, generateCodeChallenge, generateState } from "./pkce.js";
+import {
+  generateCodeVerifier,
+  generateCodeChallenge,
+  generateState,
+} from "./pkce.js";
 import {
   generateEphemeralKeyPair,
   encodePublicJwk,
@@ -77,7 +81,10 @@ export class OAuthClient {
       await keyStore.storeEphemeralOAuthKey(keyPair.privateKey);
 
       // Store thumbprint in sessionStorage
-      sessionStorage.setItem(STORAGE_KEYS.keysJwkThumbprint, keyPair.thumbprint);
+      sessionStorage.setItem(
+        STORAGE_KEYS.keysJwkThumbprint,
+        keyPair.thumbprint,
+      );
     } else {
       // Standard PKCE (no encryption key needed)
       codeChallenge = generateCodeChallenge(codeVerifier);
@@ -146,7 +153,10 @@ export class OAuthClient {
     // Extract JWT claims
     const issuer = decodeJwtClaim(tokenResponse.access_token, "iss");
     const userId = decodeJwtClaim(tokenResponse.access_token, "sub");
-    const personalSpaceId = decodeJwtClaim(tokenResponse.access_token, "personal_space_id");
+    const personalSpaceId = decodeJwtClaim(
+      tokenResponse.access_token,
+      "personal_space_id",
+    );
 
     const result: AuthResult = {
       accessToken: tokenResponse.access_token,
@@ -167,7 +177,10 @@ export class OAuthClient {
 
       if (privateKey) {
         try {
-          const scopedKeys = await decryptKeysJwe(tokenResponse.keys_jwe, privateKey);
+          const scopedKeys = await decryptKeysJwe(
+            tokenResponse.keys_jwe,
+            privateKey,
+          );
 
           // Extract and immediately import symmetric encryption key
           const extracted = extractEncryptionKey(scopedKeys);
@@ -175,14 +188,24 @@ export class OAuthClient {
             result.keyId = extracted.keyId;
             // Derive purpose-specific keys, import to KeyStore, and zero immediately
             const encKey = hkdfDerive(extracted.key, "betterbase:encrypt:v1");
-            const epochKey = hkdfDerive(extracted.key, "betterbase:epoch-root:v1");
+            const epochKey = hkdfDerive(
+              extracted.key,
+              "betterbase:epoch-root:v1",
+            );
             try {
               // Derive mailbox ID while raw key bytes are still available
               if (issuer && userId) {
                 try {
-                  result.mailboxId = deriveMailboxId(extracted.key, issuer, userId);
+                  result.mailboxId = deriveMailboxId(
+                    extracted.key,
+                    issuer,
+                    userId,
+                  );
                 } catch (err) {
-                  console.error("[betterbase-auth] Failed to derive mailbox ID:", err);
+                  console.error(
+                    "[betterbase-auth] Failed to derive mailbox ID:",
+                    err,
+                  );
                 }
               }
               await keyStore.importEncryptionKey(encKey);
@@ -202,18 +225,25 @@ export class OAuthClient {
               result.appKeypair = appKeypair;
             }
           } catch (err) {
-            result.appKeypairError = err instanceof Error ? err : new Error(String(err));
+            result.appKeypairError =
+              err instanceof Error ? err : new Error(String(err));
           }
         } catch (err) {
-          result.encryptionKeyError = err instanceof Error ? err : new Error(String(err));
+          result.encryptionKeyError =
+            err instanceof Error ? err : new Error(String(err));
         }
 
         // Clean up ephemeral key
         await keyStore.deleteEphemeralOAuthKey();
       } else {
-        const error = new Error("Missing ephemeral private key for JWE decryption");
+        const error = new Error(
+          "Missing ephemeral private key for JWE decryption",
+        );
         result.encryptionKeyError = error;
-        console.error("[betterbase-auth] Failed to decrypt encryption key:", error.message);
+        console.error(
+          "[betterbase-auth] Failed to decrypt encryption key:",
+          error.message,
+        );
       }
     }
 
@@ -222,7 +252,9 @@ export class OAuthClient {
       this.clearOAuthState();
       throw new CallbackError(
         "Sync requires encryption key but JWE decryption failed. Please log in again." +
-          (result.encryptionKeyError ? ` Cause: ${result.encryptionKeyError.message}` : ""),
+          (result.encryptionKeyError
+            ? ` Cause: ${result.encryptionKeyError.message}`
+            : ""),
         { cause: result.encryptionKeyError },
       );
     }
@@ -230,19 +262,27 @@ export class OAuthClient {
     // Register mailbox ID and refresh token (no raw key material needed)
     if (result.mailboxId) {
       try {
-        await this.registerMailboxId(tokenResponse.access_token, result.mailboxId);
+        await this.registerMailboxId(
+          tokenResponse.access_token,
+          result.mailboxId,
+        );
 
         // Refresh token so JWT includes mailbox_id claim
         if (tokenResponse.refresh_token) {
           try {
-            const refreshed = await this.refreshToken(tokenResponse.refresh_token);
+            const refreshed = await this.refreshToken(
+              tokenResponse.refresh_token,
+            );
             result.accessToken = refreshed.access_token;
             if (refreshed.refresh_token) {
               result.refreshToken = refreshed.refresh_token;
             }
             result.expiresIn = refreshed.expires_in;
           } catch (err) {
-            console.error("[betterbase-auth] Token refresh after mailbox registration failed:", err);
+            console.error(
+              "[betterbase-auth] Token refresh after mailbox registration failed:",
+              err,
+            );
           }
         }
       } catch (err) {
@@ -256,7 +296,9 @@ export class OAuthClient {
 
   private async exchangeCode(code: string): Promise<TokenResponse> {
     const codeVerifier = sessionStorage.getItem(STORAGE_KEYS.codeVerifier);
-    const keysJwkThumbprint = sessionStorage.getItem(STORAGE_KEYS.keysJwkThumbprint);
+    const keysJwkThumbprint = sessionStorage.getItem(
+      STORAGE_KEYS.keysJwkThumbprint,
+    );
 
     if (!codeVerifier) {
       throw new Error("Missing code verifier - please try again");
@@ -293,7 +335,10 @@ export class OAuthClient {
     const data = await response.json();
 
     if (typeof data.access_token !== "string" || !data.access_token) {
-      throw new OAuthTokenError("Invalid token response: missing access_token", 0);
+      throw new OAuthTokenError(
+        "Invalid token response: missing access_token",
+        0,
+      );
     }
 
     return data as TokenResponse;
@@ -325,13 +370,19 @@ export class OAuthClient {
     const data = await response.json();
 
     if (typeof data.access_token !== "string" || !data.access_token) {
-      throw new OAuthTokenError("Invalid token response: missing access_token", 0);
+      throw new OAuthTokenError(
+        "Invalid token response: missing access_token",
+        0,
+      );
     }
 
     return data as TokenResponse;
   }
 
-  private async registerMailboxId(accessToken: string, mailboxId: string): Promise<void> {
+  private async registerMailboxId(
+    accessToken: string,
+    mailboxId: string,
+  ): Promise<void> {
     const accountsServer = await this.accountsUrl();
     const response = await fetch(`${accountsServer}/oauth/mailbox`, {
       method: "POST",

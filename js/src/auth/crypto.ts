@@ -7,7 +7,10 @@
 
 import { ensureWasm } from "../wasm-init.js";
 import type { ScopedKeys } from "./types.js";
-import { generateEphemeralECDHKeyPair, webcryptoDecryptJwe } from "../crypto/webcrypto.js";
+import {
+  generateEphemeralECDHKeyPair,
+  webcryptoDecryptJwe,
+} from "../crypto/webcrypto.js";
 
 /**
  * Compute JWK thumbprint per RFC 7638.
@@ -16,10 +19,14 @@ import { generateEphemeralECDHKeyPair, webcryptoDecryptJwe } from "../crypto/web
  */
 export function computeJwkThumbprint(jwk: JsonWebKey): string {
   if (jwk.kty !== "EC") {
-    throw new Error(`JWK thumbprint only supports EC keys, got kty=${jwk.kty ?? "undefined"}`);
+    throw new Error(
+      `JWK thumbprint only supports EC keys, got kty=${jwk.kty ?? "undefined"}`,
+    );
   }
   if (!jwk.crv || !jwk.x || !jwk.y) {
-    throw new Error("JWK missing required EC fields for thumbprint (crv, x, y)");
+    throw new Error(
+      "JWK missing required EC fields for thumbprint (crv, x, y)",
+    );
   }
   return ensureWasm().computeJwkThumbprint(jwk.kty, jwk.crv, jwk.x, jwk.y);
 }
@@ -59,7 +66,9 @@ export function encodePublicJwk(jwk: JsonWebKey): string {
     x: jwk.x,
     y: jwk.y,
   };
-  return ensureWasm().base64urlEncode(new TextEncoder().encode(JSON.stringify(publicJwk)));
+  return ensureWasm().base64urlEncode(
+    new TextEncoder().encode(JSON.stringify(publicJwk)),
+  );
 }
 
 /**
@@ -69,7 +78,10 @@ export function encodePublicJwk(jwk: JsonWebKey): string {
  * @param privateKey - The ephemeral private CryptoKey (non-extractable ECDH)
  * @returns The decrypted scoped keys
  */
-export async function decryptKeysJwe(jwe: string, privateKey: CryptoKey): Promise<ScopedKeys> {
+export async function decryptKeysJwe(
+  jwe: string,
+  privateKey: CryptoKey,
+): Promise<ScopedKeys> {
   const plaintext = await webcryptoDecryptJwe(jwe, privateKey);
   return JSON.parse(new TextDecoder().decode(plaintext));
 }
@@ -95,7 +107,10 @@ export function extractEncryptionKey(
  * @param recipientPublicKeyJwk - Recipient's P-256 public key as JWK
  * @returns Compact JWE string
  */
-export function encryptJwe(payload: Uint8Array, recipientPublicKeyJwk: JsonWebKey): string {
+export function encryptJwe(
+  payload: Uint8Array,
+  recipientPublicKeyJwk: JsonWebKey,
+): string {
   return ensureWasm().encryptJwe(payload, recipientPublicKeyJwk);
 }
 
@@ -121,7 +136,11 @@ export function decryptJwe(jwe: string, privateKeyJwk: JsonWebKey): Uint8Array {
  * @param userId - User ID (JWT sub claim)
  * @returns 64-character hex string
  */
-export function deriveMailboxId(encryptionKey: Uint8Array, issuer: string, userId: string): string {
+export function deriveMailboxId(
+  encryptionKey: Uint8Array,
+  issuer: string,
+  userId: string,
+): string {
   return ensureWasm().deriveMailboxId(encryptionKey, issuer, userId);
 }
 
@@ -148,7 +167,9 @@ export function hkdfDerive(ikm: Uint8Array, info: string): Uint8Array {
  * @param scopedKeys - The decrypted scoped keys
  * @returns The EC keypair as a JWK, or undefined if no app-keypair entry exists
  */
-export function extractAppKeypair(scopedKeys: ScopedKeys): JsonWebKey | undefined {
+export function extractAppKeypair(
+  scopedKeys: ScopedKeys,
+): JsonWebKey | undefined {
   const result = ensureWasm().extractAppKeypair(JSON.stringify(scopedKeys));
   if (!result) return undefined;
   return {

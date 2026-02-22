@@ -34,7 +34,9 @@ export interface UseAuthSessionResult {
  *
  * Returns `{ session, isAuthenticated, isLoading, error, logout }`.
  */
-export function useAuthSession(client: OAuthClient | null): UseAuthSessionResult {
+export function useAuthSession(
+  client: OAuthClient | null,
+): UseAuthSessionResult {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +90,10 @@ export function useAuthSession(client: OAuthClient | null): UseAuthSessionResult
         callbackPromiseRef.current = null;
 
         if (result) {
-          const session = await AuthSession.create({ client, onExpired }, result);
+          const session = await AuthSession.create(
+            { client, onExpired },
+            result,
+          );
           if (cancelled) return;
           setSession(session);
           return;
@@ -158,11 +163,16 @@ export interface UseSessionTokenResult {
  *
  * Also exposes the session's `encryptionKey`, `personalSpaceId`, `keypair`, and `handle`.
  */
-export function useSessionToken(session: AuthSession | null): UseSessionTokenResult {
+export function useSessionToken(
+  session: AuthSession | null,
+): UseSessionTokenResult {
   const sessionRef = useRef(session);
   sessionRef.current = session;
 
-  const getToken = useCallback(() => sessionRef.current?.getToken() ?? Promise.resolve(null), []);
+  const getToken = useCallback(
+    () => sessionRef.current?.getToken() ?? Promise.resolve(null),
+    [],
+  );
 
   const personalSpaceId = session?.getPersonalSpaceId() ?? null;
   const handle = session?.getHandle() ?? null;
@@ -244,9 +254,16 @@ export interface UseAuthResult {
  * full session lifecycle plus token/key accessors in a single call.
  */
 export function useAuth(client: OAuthClient | null): UseAuthResult {
-  const { session, isAuthenticated, isLoading, error, logout } = useAuthSession(client);
-  const { getToken, encryptionKey, epochKey, personalSpaceId, keypair, handle } =
-    useSessionToken(session);
+  const { session, isAuthenticated, isLoading, error, logout } =
+    useAuthSession(client);
+  const {
+    getToken,
+    encryptionKey,
+    epochKey,
+    personalSpaceId,
+    keypair,
+    handle,
+  } = useSessionToken(session);
 
   return {
     session,

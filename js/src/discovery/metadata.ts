@@ -33,7 +33,9 @@ interface ServerMetadataWire {
  *
  * @throws Error on network failure or invalid response.
  */
-export async function fetchServerMetadata(domain: string): Promise<ServerMetadata> {
+export async function fetchServerMetadata(
+  domain: string,
+): Promise<ServerMetadata> {
   if (!domain) {
     throw new Error("domain parameter is required");
   }
@@ -50,7 +52,9 @@ export async function fetchServerMetadata(domain: string): Promise<ServerMetadat
     signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
   });
   if (!response.ok) {
-    throw new Error(`Discovery failed for ${domain}: HTTP ${response.status} from ${url}`);
+    throw new Error(
+      `Discovery failed for ${domain}: HTTP ${response.status} from ${url}`,
+    );
   }
 
   const data: unknown = await response.json();
@@ -73,7 +77,10 @@ function parseServerMetadata(data: unknown): ServerMetadata {
       `Unsupported discovery version ${obj["version"]} (this client supports version 1)`,
     );
   }
-  if (typeof obj["accounts_endpoint"] !== "string" || !obj["accounts_endpoint"]) {
+  if (
+    typeof obj["accounts_endpoint"] !== "string" ||
+    !obj["accounts_endpoint"]
+  ) {
     throw new Error("Invalid discovery response: missing accounts_endpoint");
   }
   if (typeof obj["sync_endpoint"] !== "string" || !obj["sync_endpoint"]) {

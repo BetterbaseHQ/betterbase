@@ -388,9 +388,11 @@ pub fn wasm_encrypt_with_aad(key: &[u8], data: &[u8], aad: &[u8]) -> Result<Vec<
 pub fn wasm_decrypt_with_aad(key: &[u8], encrypted: &[u8], aad: &[u8]) -> Result<Vec<u8>, JsValue> {
     // Strip v4 version prefix, then decrypt with arbitrary AAD
     if encrypted.is_empty() || encrypted[0] != CURRENT_VERSION {
-        return Err(to_js_error(betterbase_crypto::CryptoError::UnsupportedVersion(
-            encrypted.first().copied().unwrap_or(0),
-        )));
+        return Err(to_js_error(
+            betterbase_crypto::CryptoError::UnsupportedVersion(
+                encrypted.first().copied().unwrap_or(0),
+            ),
+        ));
     }
     aes_gcm_decrypt(key, &encrypted[1..], aad).map_err(to_js_error)
 }

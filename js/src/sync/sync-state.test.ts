@@ -3,7 +3,11 @@ import { syncReducer, initialSyncState, type SyncState } from "./sync-state.js";
 
 describe("syncReducer", () => {
   it("has correct initial state", () => {
-    expect(initialSyncState).toEqual({ phase: "connecting", syncing: false, error: null });
+    expect(initialSyncState).toEqual({
+      phase: "connecting",
+      syncing: false,
+      error: null,
+    });
   });
 
   it("BOOTSTRAP_START advances connecting → bootstrapping with syncing=true", () => {
@@ -17,12 +21,22 @@ describe("syncReducer", () => {
     const ready: SyncState = { phase: "ready", syncing: false, error: null };
     expect(syncReducer(ready, { type: "BOOTSTRAP_START" })).toBe(ready);
 
-    const bootstrapping: SyncState = { phase: "bootstrapping", syncing: true, error: null };
-    expect(syncReducer(bootstrapping, { type: "BOOTSTRAP_START" })).toBe(bootstrapping);
+    const bootstrapping: SyncState = {
+      phase: "bootstrapping",
+      syncing: true,
+      error: null,
+    };
+    expect(syncReducer(bootstrapping, { type: "BOOTSTRAP_START" })).toBe(
+      bootstrapping,
+    );
   });
 
   it("BOOTSTRAP_COMPLETE advances bootstrapping → ready with syncing=false", () => {
-    const s0: SyncState = { phase: "bootstrapping", syncing: true, error: null };
+    const s0: SyncState = {
+      phase: "bootstrapping",
+      syncing: true,
+      error: null,
+    };
     const s1 = syncReducer(s0, { type: "BOOTSTRAP_COMPLETE" });
     expect(s1.phase).toBe("ready");
     expect(s1.syncing).toBe(false);
@@ -30,15 +44,25 @@ describe("syncReducer", () => {
   });
 
   it("BOOTSTRAP_COMPLETE is a no-op outside bootstrapping", () => {
-    const connecting: SyncState = { phase: "connecting", syncing: false, error: null };
-    expect(syncReducer(connecting, { type: "BOOTSTRAP_COMPLETE" })).toBe(connecting);
+    const connecting: SyncState = {
+      phase: "connecting",
+      syncing: false,
+      error: null,
+    };
+    expect(syncReducer(connecting, { type: "BOOTSTRAP_COMPLETE" })).toBe(
+      connecting,
+    );
 
     const ready: SyncState = { phase: "ready", syncing: false, error: null };
     expect(syncReducer(ready, { type: "BOOTSTRAP_COMPLETE" })).toBe(ready);
   });
 
   it("SYNC_START sets syncing=true and clears error only when ready", () => {
-    const ready: SyncState = { phase: "ready", syncing: false, error: "old error" };
+    const ready: SyncState = {
+      phase: "ready",
+      syncing: false,
+      error: "old error",
+    };
     const s = syncReducer(ready, { type: "SYNC_START" });
     expect(s.syncing).toBe(true);
     expect(s.error).toBeNull();
@@ -46,8 +70,14 @@ describe("syncReducer", () => {
   });
 
   it("SYNC_START is a no-op during bootstrap", () => {
-    const bootstrapping: SyncState = { phase: "bootstrapping", syncing: true, error: null };
-    expect(syncReducer(bootstrapping, { type: "SYNC_START" })).toBe(bootstrapping);
+    const bootstrapping: SyncState = {
+      phase: "bootstrapping",
+      syncing: true,
+      error: null,
+    };
+    expect(syncReducer(bootstrapping, { type: "SYNC_START" })).toBe(
+      bootstrapping,
+    );
   });
 
   it("SYNC_COMPLETE sets syncing=false only when ready", () => {
@@ -57,17 +87,31 @@ describe("syncReducer", () => {
   });
 
   it("SYNC_COMPLETE is a no-op during bootstrap", () => {
-    const bootstrapping: SyncState = { phase: "bootstrapping", syncing: true, error: null };
-    expect(syncReducer(bootstrapping, { type: "SYNC_COMPLETE" })).toBe(bootstrapping);
+    const bootstrapping: SyncState = {
+      phase: "bootstrapping",
+      syncing: true,
+      error: null,
+    };
+    expect(syncReducer(bootstrapping, { type: "SYNC_COMPLETE" })).toBe(
+      bootstrapping,
+    );
   });
 
   it("ERROR sets error and syncing=false from any phase", () => {
-    const connecting: SyncState = { phase: "connecting", syncing: false, error: null };
+    const connecting: SyncState = {
+      phase: "connecting",
+      syncing: false,
+      error: null,
+    };
     const s1 = syncReducer(connecting, { type: "ERROR", error: "fail" });
     expect(s1.error).toBe("fail");
     expect(s1.syncing).toBe(false);
 
-    const bootstrapping: SyncState = { phase: "bootstrapping", syncing: true, error: null };
+    const bootstrapping: SyncState = {
+      phase: "bootstrapping",
+      syncing: true,
+      error: null,
+    };
     const s2 = syncReducer(bootstrapping, { type: "ERROR", error: "fail2" });
     expect(s2.error).toBe("fail2");
     expect(s2.syncing).toBe(false);
@@ -94,7 +138,10 @@ describe("syncReducer", () => {
   });
 
   it("ERROR during connecting preserves connecting phase", () => {
-    const s = syncReducer(initialSyncState, { type: "ERROR", error: "network fail" });
+    const s = syncReducer(initialSyncState, {
+      type: "ERROR",
+      error: "network fail",
+    });
     expect(s.phase).toBe("connecting");
     expect(s.error).toBe("network fail");
     expect(s.syncing).toBe(false);

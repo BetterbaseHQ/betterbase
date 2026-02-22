@@ -51,7 +51,9 @@ function parseWrappedDEKHeader(response: Response): Uint8Array {
   }
   const dek = base64ToBytes(dekHeader);
   if (dek.length !== 44) {
-    throw new Error(`Invalid X-Wrapped-DEK: expected 44 bytes, got ${dek.length}`);
+    throw new Error(
+      `Invalid X-Wrapped-DEK: expected 44 bytes, got ${dek.length}`,
+    );
   }
   return dek;
 }
@@ -99,7 +101,9 @@ export class FilesClient {
     });
 
     if (response.status === 401) {
-      throw new AuthenticationError("Token expired or invalid - please log in again");
+      throw new AuthenticationError(
+        "Token expired or invalid - please log in again",
+      );
     }
 
     if (response.status === 201) {
@@ -126,7 +130,9 @@ export class FilesClient {
     });
 
     if (response.status === 401) {
-      throw new AuthenticationError("Token expired or invalid - please log in again");
+      throw new AuthenticationError(
+        "Token expired or invalid - please log in again",
+      );
     }
 
     if (response.status === 404) {
@@ -162,7 +168,9 @@ export class FilesClient {
     });
 
     if (response.status === 401) {
-      throw new AuthenticationError("Token expired or invalid - please log in again");
+      throw new AuthenticationError(
+        "Token expired or invalid - please log in again",
+      );
     }
 
     if (response.status === 404) {

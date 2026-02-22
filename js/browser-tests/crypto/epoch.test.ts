@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { initWasm } from "../../src/wasm-init.js";
-import { deriveNextEpochKey, deriveEpochKeyFromRoot } from "../../src/crypto/epoch.js";
+import {
+  deriveNextEpochKey,
+  deriveEpochKeyFromRoot,
+} from "../../src/crypto/epoch.js";
 
 describe("epoch key derivation (browser)", () => {
   beforeAll(async () => {

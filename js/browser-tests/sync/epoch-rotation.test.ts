@@ -161,7 +161,9 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     const envelope = cborEncode({ c: collection, v: 1, crdt });
     // Pad to 256 bytes (smallest bucket) like the transport does
     const totalLen = envelope.length + 4; // 4-byte length prefix
-    const bucketSize = [256, 1024, 4096, 16384, 65536, 262144, 1048576].find((b) => b >= totalLen)!;
+    const bucketSize = [256, 1024, 4096, 16384, 65536, 262144, 1048576].find(
+      (b) => b >= totalLen,
+    )!;
     const padded = new Uint8Array(bucketSize);
     const view = new DataView(padded.buffer);
     view.setUint32(0, envelope.length, true); // LE length prefix
@@ -214,7 +216,14 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
 
     // Pull it back (simulate server returning the same change)
     transport.setPrepulledChanges(
-      [{ id: "rec-1", blob: pushed[0]!.blob, sequence: 1, dek: pushed[0]!.dek }],
+      [
+        {
+          id: "rec-1",
+          blob: pushed[0]!.blob,
+          sequence: 1,
+          dek: pushed[0]!.dek,
+        },
+      ],
       1,
     );
     const pullResult = await transport.pull("items", 0);
@@ -240,7 +249,10 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     dek.fill(0);
 
     // Pull it — transport derives forward from epoch 1 to epoch 2
-    transport.setPrepulledChanges([{ id: "rec-2", blob, sequence: 1, dek: wrappedDEK }], 1);
+    transport.setPrepulledChanges(
+      [{ id: "rec-2", blob, sequence: 1, dek: wrappedDEK }],
+      1,
+    );
     const pullResult = await transport.pull("items", 0);
     expect(pullResult.records.length).toBe(1);
     expect(pullResult.failures).toBeUndefined();
@@ -267,7 +279,10 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     expect(smKey.every((b) => b === 0)).toBe(true);
 
     // Transport's defensive copy survives — can still decrypt
-    transport.setPrepulledChanges([{ id: "rec-3", blob, sequence: 1, dek: wrappedDEK }], 1);
+    transport.setPrepulledChanges(
+      [{ id: "rec-3", blob, sequence: 1, dek: wrappedDEK }],
+      1,
+    );
     const pullResult = await transport.pull("items", 0);
     expect(pullResult.records.length).toBe(1);
     expect(pullResult.failures).toBeUndefined();
@@ -294,7 +309,10 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     smKey.fill(0);
 
     // Transport derives forward from its copy → succeeds
-    transport.setPrepulledChanges([{ id: "rec-4", blob, sequence: 1, dek: wrappedDEK }], 1);
+    transport.setPrepulledChanges(
+      [{ id: "rec-4", blob, sequence: 1, dek: wrappedDEK }],
+      1,
+    );
     const pullResult = await transport.pull("items", 0);
     expect(pullResult.records.length).toBe(1);
     expect(pullResult.failures).toBeUndefined();
@@ -360,7 +378,10 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     transport.updateEncryptionEpoch(2);
 
     // Step 3: pull("items") — decrypt epoch 2 records
-    transport.setPrepulledChanges([{ id: "rec-6", blob, sequence: 1, dek: wrappedDEK }], 1);
+    transport.setPrepulledChanges(
+      [{ id: "rec-6", blob, sequence: 1, dek: wrappedDEK }],
+      1,
+    );
     const pullResult = await transport.pull("items", 0);
     expect(pullResult.records.length).toBe(1);
     expect(pullResult.failures).toBeUndefined();
@@ -393,7 +414,10 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     transport.updateEncryptionEpoch(2);
 
     // But can still decrypt the epoch-1 record (base key copy is intact)
-    transport.setPrepulledChanges([{ id: "rec-7", blob, sequence: 1, dek: wrappedDEK }], 1);
+    transport.setPrepulledChanges(
+      [{ id: "rec-7", blob, sequence: 1, dek: wrappedDEK }],
+      1,
+    );
     const pullResult = await transport.pull("items", 0);
     expect(pullResult.records.length).toBe(1);
     expect(pullResult.failures).toBeUndefined();
@@ -480,7 +504,10 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
 
     // SyncCrypto built from newKey can decrypt the re-encrypted entries
     const recoveredDek = unwrapDEK(wrappedDEK, spaceKeys.get(spaceId)!);
-    const decrypted = decryptV4(blob, recoveredDek.dek, { spaceId, recordId: "1" });
+    const decrypted = decryptV4(blob, recoveredDek.dek, {
+      spaceId,
+      recordId: "1",
+    });
     expect(decrypted).toEqual(plaintext);
   });
 

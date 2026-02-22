@@ -12,7 +12,11 @@
 import type { AuthResult, AuthSessionConfig, TokenResponse } from "./types.js";
 import { KeyStore } from "./key-store.js";
 import { hkdfDerive } from "./crypto.js";
-import { SessionExpiredError, TokenRefreshError, OAuthTokenError } from "./errors.js";
+import {
+  SessionExpiredError,
+  TokenRefreshError,
+  OAuthTokenError,
+} from "./errors.js";
 import { decodeJwtClaim } from "./jwt.js";
 
 /** HKDF info for deriving the AES-GCM encryption key from the OPAQUE export key. */
@@ -73,7 +77,8 @@ export class AuthSession {
 
   private constructor(config: AuthSessionConfig, state: SessionState) {
     this.config = config;
-    this.storageKey = (config.storagePrefix ?? DEFAULT_STORAGE_PREFIX) + "state";
+    this.storageKey =
+      (config.storagePrefix ?? DEFAULT_STORAGE_PREFIX) + "state";
     this.accessToken = state.accessToken;
     this.refreshTokenValue = state.refreshToken;
     this.expiresAt = state.expiresAt;
@@ -94,9 +99,14 @@ export class AuthSession {
    * Imports keys to KeyStore as non-extractable CryptoKeys (or uses pre-imported keys).
    * Persists to localStorage, schedules proactive refresh, and listens for cross-tab changes.
    */
-  static async create(config: AuthSessionConfig, authResult: AuthResult): Promise<AuthSession> {
+  static async create(
+    config: AuthSessionConfig,
+    authResult: AuthResult,
+  ): Promise<AuthSession> {
     if (!authResult.accessToken || !authResult.refreshToken) {
-      throw new TokenRefreshError("AuthSession requires accessToken and refreshToken");
+      throw new TokenRefreshError(
+        "AuthSession requires accessToken and refreshToken",
+      );
     }
 
     const keyStore = KeyStore.getInstance();
@@ -166,7 +176,8 @@ export class AuthSession {
    * Returns null if no stored session or refresh fails.
    */
   static async restore(config: AuthSessionConfig): Promise<AuthSession | null> {
-    const storageKey = (config.storagePrefix ?? DEFAULT_STORAGE_PREFIX) + "state";
+    const storageKey =
+      (config.storagePrefix ?? DEFAULT_STORAGE_PREFIX) + "state";
     const raw = localStorage.getItem(storageKey);
     if (!raw) return null;
 
@@ -174,7 +185,10 @@ export class AuthSession {
     try {
       state = JSON.parse(raw) as SessionState;
     } catch (err) {
-      console.error("[betterbase-auth] Failed to parse persisted session state:", err);
+      console.error(
+        "[betterbase-auth] Failed to parse persisted session state:",
+        err,
+      );
       return null;
     }
 
@@ -185,7 +199,10 @@ export class AuthSession {
     try {
       await keyStore.initialize();
     } catch (err) {
-      console.error("[betterbase-auth] KeyStore initialization failed, cannot restore session:", err);
+      console.error(
+        "[betterbase-auth] KeyStore initialization failed, cannot restore session:",
+        err,
+      );
       return null;
     }
 
@@ -193,7 +210,10 @@ export class AuthSession {
 
     // Backfill personalSpaceId from access token for sessions persisted before this field existed
     if (!session.personalSpaceIdValue && state.accessToken) {
-      session.personalSpaceIdValue = decodeJwtClaim(state.accessToken, "personal_space_id");
+      session.personalSpaceIdValue = decodeJwtClaim(
+        state.accessToken,
+        "personal_space_id",
+      );
       if (session.personalSpaceIdValue) {
         session.persist();
       }
@@ -208,7 +228,10 @@ export class AuthSession {
       try {
         await session.refresh();
       } catch (err) {
-        console.error("[betterbase-auth] Session refresh failed during restore:", err);
+        console.error(
+          "[betterbase-auth] Session refresh failed during restore:",
+          err,
+        );
         session.dispose();
         return null;
       }
@@ -230,7 +253,10 @@ export class AuthSession {
       try {
         await this.refresh();
       } catch (err) {
-        console.error("[betterbase-auth] Token refresh failed in getToken():", err);
+        console.error(
+          "[betterbase-auth] Token refresh failed in getToken():",
+          err,
+        );
         return null;
       }
     }
@@ -324,9 +350,10 @@ export class AuthSession {
   ): Promise<void> {
     if (epochKey instanceof CryptoKey) {
       // CryptoKey path — store both KW key and derive key atomically.
-      const entries: { id: import("./key-store.js").KeyId; value: CryptoKey }[] = [
-        { id: "epoch-key", value: epochKey },
-      ];
+      const entries: {
+        id: import("./key-store.js").KeyId;
+        value: CryptoKey;
+      }[] = [{ id: "epoch-key", value: epochKey }];
       if (epochDeriveKey) {
         entries.push({ id: "epoch-derive-key", value: epochDeriveKey });
       }
@@ -380,7 +407,10 @@ export class AuthSession {
     try {
       await this.keyStore.clearAll();
     } catch (err) {
-      console.error("[betterbase-auth] Failed to clear KeyStore during cleanup:", err);
+      console.error(
+        "[betterbase-auth] Failed to clear KeyStore during cleanup:",
+        err,
+      );
     }
   }
 
@@ -423,7 +453,8 @@ export class AuthSession {
         this.expiresAt = Date.now() + (response.expires_in ?? 3600) * 1000;
         // Update claims from new token response
         this.personalSpaceIdValue =
-          decodeJwtClaim(response.access_token, "personal_space_id") ?? this.personalSpaceIdValue;
+          decodeJwtClaim(response.access_token, "personal_space_id") ??
+          this.personalSpaceIdValue;
         // Handle comes from response body, not JWT (avoids leaking to resource servers)
         this.handleValue = response.handle ?? this.handleValue;
 
@@ -472,7 +503,10 @@ export class AuthSession {
       const publicKeyJwk = JSON.parse(this.appPublicKeyJwkStr) as JsonWebKey;
       return { privateKeyJwk, publicKeyJwk };
     } catch (err) {
-      console.error("[betterbase-auth] Failed to parse app public key JWK:", err);
+      console.error(
+        "[betterbase-auth] Failed to parse app public key JWK:",
+        err,
+      );
       return null;
     }
   }
@@ -486,7 +520,10 @@ export class AuthSession {
     try {
       return JSON.parse(this.appPublicKeyJwkStr);
     } catch (err) {
-      console.error("[betterbase-auth] Failed to parse app public key JWK:", err);
+      console.error(
+        "[betterbase-auth] Failed to parse app public key JWK:",
+        err,
+      );
       return null;
     }
   }
@@ -515,7 +552,8 @@ export class AuthSession {
       clearTimeout(this.refreshTimer);
     }
 
-    const bufferMs = (this.config.refreshBufferSeconds ?? DEFAULT_BUFFER_SECONDS) * 1000;
+    const bufferMs =
+      (this.config.refreshBufferSeconds ?? DEFAULT_BUFFER_SECONDS) * 1000;
     const delay = Math.max(0, this.expiresAt - Date.now() - bufferMs);
 
     this.refreshTimer = setTimeout(() => {
@@ -554,7 +592,10 @@ export class AuthSession {
         this.epochAdvancedAtValue = state.epochAdvancedAt;
         this.scheduleRefresh();
       } catch (err) {
-        console.error("[betterbase-auth] Failed to process storage event:", err);
+        console.error(
+          "[betterbase-auth] Failed to process storage event:",
+          err,
+        );
       }
     };
     window.addEventListener("storage", this.storageListener);

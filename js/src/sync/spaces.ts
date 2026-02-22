@@ -4,7 +4,11 @@
  * Creates a shared space on the sync server with a self-issued root UCAN.
  */
 
-import { compressP256PublicKey, issueRootUCAN, type UCANPermission } from "../crypto/internals.js";
+import {
+  compressP256PublicKey,
+  issueRootUCAN,
+  type UCANPermission,
+} from "../crypto/internals.js";
 import type { WSClient } from "./ws-client.js";
 
 /** UCAN lifetime in seconds (90 days). */

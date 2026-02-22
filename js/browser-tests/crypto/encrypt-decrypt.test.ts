@@ -26,7 +26,10 @@ describe("encryptV4 / decryptV4 (browser)", () => {
   it("round-trips with encryption context", () => {
     const key = randomKey();
     const sc = new SyncCrypto(key);
-    const context: EncryptionContext = { spaceId: "space-1", recordId: "rec-1" };
+    const context: EncryptionContext = {
+      spaceId: "space-1",
+      recordId: "rec-1",
+    };
     const plaintext = new TextEncoder().encode("with context");
 
     const encrypted = sc.encrypt(plaintext, context);

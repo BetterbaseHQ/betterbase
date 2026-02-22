@@ -57,7 +57,11 @@ export class EventManager {
    * Register a listener for a named event in a space.
    * Returns an unsubscribe function.
    */
-  onEvent<T = unknown>(spaceId: string, name: string, cb: SpaceEventHandler<T>): () => void {
+  onEvent<T = unknown>(
+    spaceId: string,
+    name: string,
+    cb: SpaceEventHandler<T>,
+  ): () => void {
     const key = `${spaceId}:${name}`;
     let set = this.listeners.get(key);
     if (!set) {
@@ -84,13 +88,18 @@ export class EventManager {
     this.config.encrypt(spaceId, encoded).then(
       (encrypted) => {
         if (!encrypted) {
-          console.warn(`[betterbase-sync] Event "${name}" dropped for space ${spaceId}: key unavailable`);
+          console.warn(
+            `[betterbase-sync] Event "${name}" dropped for space ${spaceId}: key unavailable`,
+          );
           return;
         }
         this.config.ws.sendEvent(spaceId, encrypted);
       },
       (err) => {
-        console.error(`[betterbase-sync] Failed to encrypt event for space ${spaceId}:`, err);
+        console.error(
+          `[betterbase-sync] Failed to encrypt event for space ${spaceId}:`,
+          err,
+        );
       },
     );
   }
@@ -99,7 +108,11 @@ export class EventManager {
    * Handle an inbound encrypted event. Decrypts, checks timestamp,
    * extracts name+payload, and dispatches to registered listeners.
    */
-  async handleEvent(spaceId: string, peer: string, encryptedData: Uint8Array): Promise<void> {
+  async handleEvent(
+    spaceId: string,
+    peer: string,
+    encryptedData: Uint8Array,
+  ): Promise<void> {
     const plaintext = await this.config.decrypt(spaceId, encryptedData);
     if (!plaintext) return; // Decryption failed (stale key)
 

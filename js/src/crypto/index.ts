@@ -42,7 +42,10 @@ export {
 export type { EditDiff, EditEntry } from "./edit-chain.js";
 
 // Web Crypto key management (non-extractable CryptoKey)
-export { generateEphemeralECDHKeyPair, webcryptoDecryptJwe } from "./webcrypto.js";
+export {
+  generateEphemeralECDHKeyPair,
+  webcryptoDecryptJwe,
+} from "./webcrypto.js";
 
 // Constants and types
 export {

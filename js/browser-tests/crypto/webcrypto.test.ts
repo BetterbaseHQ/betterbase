@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { initWasm } from "../../src/wasm-init.js";
-import { generateDEK, wrapDEK, unwrapDEK, WRAPPED_DEK_SIZE } from "../../src/crypto/dek.js";
+import {
+  generateDEK,
+  wrapDEK,
+  unwrapDEK,
+  WRAPPED_DEK_SIZE,
+} from "../../src/crypto/dek.js";
 import { deriveNextEpochKey } from "../../src/crypto/epoch.js";
 import { deriveChannelKey } from "../../src/crypto/channel.js";
 import {
@@ -161,8 +166,16 @@ describe("Web Crypto key operations (browser)", () => {
       const spaceId = "chain-test";
 
       // Derive epoch 1 → 2 → 3 via Web Crypto
-      const { kwKey: _, deriveKey: dk1 } = await webcryptoDeriveEpochKey(deriveKey, spaceId, 1);
-      const { kwKey: __, deriveKey: dk2 } = await webcryptoDeriveEpochKey(dk1, spaceId, 2);
+      const { kwKey: _, deriveKey: dk1 } = await webcryptoDeriveEpochKey(
+        deriveKey,
+        spaceId,
+        1,
+      );
+      const { kwKey: __, deriveKey: dk2 } = await webcryptoDeriveEpochKey(
+        dk1,
+        spaceId,
+        2,
+      );
       const { kwKey: kwKey3 } = await webcryptoDeriveEpochKey(dk2, spaceId, 3);
 
       // Derive epoch 1 → 2 → 3 via WASM
@@ -181,7 +194,11 @@ describe("Web Crypto key operations (browser)", () => {
       const rootKey = randomKey();
       const deriveKey = await importEpochDeriveKey(rootKey);
 
-      const { deriveKey: newDk } = await webcryptoDeriveEpochKey(deriveKey, "s", 1);
+      const { deriveKey: newDk } = await webcryptoDeriveEpochKey(
+        deriveKey,
+        "s",
+        1,
+      );
       expect(newDk).toBeInstanceOf(CryptoKey);
       expect(newDk.extractable).toBe(false);
       expect(newDk.algorithm).toMatchObject({ name: "HKDF" });
@@ -198,7 +215,10 @@ describe("Web Crypto key operations (browser)", () => {
       const deriveKey = await importEpochDeriveKey(rootKey);
       const spaceId = "channel-test";
 
-      const webCryptoResult = await webcryptoDeriveChannelKey(deriveKey, spaceId);
+      const webCryptoResult = await webcryptoDeriveChannelKey(
+        deriveKey,
+        spaceId,
+      );
       const wasmResult = deriveChannelKey(rootKey, spaceId);
 
       expect(webCryptoResult).toEqual(wasmResult);
@@ -228,7 +248,10 @@ describe("Web Crypto key operations (browser)", () => {
 
       expect(privateKey).toBeInstanceOf(CryptoKey);
       expect(privateKey.extractable).toBe(false);
-      expect(privateKey.algorithm).toMatchObject({ name: "ECDH", namedCurve: "P-256" });
+      expect(privateKey.algorithm).toMatchObject({
+        name: "ECDH",
+        namedCurve: "P-256",
+      });
 
       expect(publicKeyJwk.kty).toBe("EC");
       expect(publicKeyJwk.crv).toBe("P-256");
@@ -240,8 +263,12 @@ describe("Web Crypto key operations (browser)", () => {
 
     it("private key cannot be exported", async () => {
       const { privateKey } = await generateEphemeralECDHKeyPair();
-      await expect(crypto.subtle.exportKey("raw", privateKey)).rejects.toThrow();
-      await expect(crypto.subtle.exportKey("jwk", privateKey)).rejects.toThrow();
+      await expect(
+        crypto.subtle.exportKey("raw", privateKey),
+      ).rejects.toThrow();
+      await expect(
+        crypto.subtle.exportKey("jwk", privateKey),
+      ).rejects.toThrow();
     });
 
     it("two generated keypairs are distinct", async () => {

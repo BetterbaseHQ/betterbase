@@ -22,7 +22,11 @@ import type {
   CollectionWrite,
   TypedAdapter,
 } from "../db";
-import type { SpaceFields, SpaceWriteOptions, SpaceQueryOptions } from "./spaces-middleware.js";
+import type {
+  SpaceFields,
+  SpaceWriteOptions,
+  SpaceQueryOptions,
+} from "./spaces-middleware.js";
 
 type SpaceDb = TypedAdapter<SpaceFields, SpaceWriteOptions, SpaceQueryOptions>;
 
@@ -40,7 +44,9 @@ type SpaceDb = TypedAdapter<SpaceFields, SpaceWriteOptions, SpaceQueryOptions>;
  * await db.put(cards, { boardId, columnId, title: "" }, spaceOf(board));
  * ```
  */
-export function spaceOf(record: { readonly _spaceId?: string }): { space: string } | undefined {
+export function spaceOf(record: {
+  readonly _spaceId?: string;
+}): { space: string } | undefined {
   return record._spaceId ? { space: record._spaceId } : undefined;
 }
 
@@ -71,7 +77,10 @@ export function spaceOf(record: { readonly _spaceId?: string }): { space: string
  * await bulkMoveToSpace(db, notes, noteIds, spaceId, { notebookId: newNotebook.id });
  * ```
  */
-export async function moveToSpace<TName extends string, TSchema extends SchemaShape>(
+export async function moveToSpace<
+  TName extends string,
+  TSchema extends SchemaShape,
+>(
   db: SpaceDb,
   collection: CollectionDefHandle<TName, TSchema>,
   id: string,
@@ -81,11 +90,19 @@ export async function moveToSpace<TName extends string, TSchema extends SchemaSh
   const record = await db.get(collection, id);
   if (!record) throw new Error(`moveToSpace: record ${id} not found`);
 
-  const { id: _id, _spaceId: _s, ...rest } = record as unknown as Record<string, unknown>;
+  const {
+    id: _id,
+    _spaceId: _s,
+    ...rest
+  } = record as unknown as Record<string, unknown>;
   const writeData = overrides ? { ...rest, ...overrides } : rest;
-  const newRecord = await db.put(collection, writeData as CollectionWrite<TSchema>, {
-    space: spaceId,
-  });
+  const newRecord = await db.put(
+    collection,
+    writeData as CollectionWrite<TSchema>,
+    {
+      space: spaceId,
+    },
+  );
   await db.delete(collection, id);
 
   return newRecord;
@@ -118,14 +135,19 @@ export async function moveToSpace<TName extends string, TSchema extends SchemaSh
  * await bulkMoveToSpace(db, notes, noteIds, spaceId, { notebookId: newNotebook.id });
  * ```
  */
-export async function bulkMoveToSpace<TName extends string, TSchema extends SchemaShape>(
+export async function bulkMoveToSpace<
+  TName extends string,
+  TSchema extends SchemaShape,
+>(
   db: SpaceDb,
   collection: CollectionDefHandle<TName, TSchema>,
   ids: string[],
   spaceId: string,
   overrides?:
     | Partial<CollectionWrite<TSchema>>
-    | ((record: CollectionRead<TSchema> & SpaceFields) => Partial<CollectionWrite<TSchema>>),
+    | ((
+        record: CollectionRead<TSchema> & SpaceFields,
+      ) => Partial<CollectionWrite<TSchema>>),
 ): Promise<(CollectionRead<TSchema> & SpaceFields)[]> {
   if (ids.length === 0) return [];
 
@@ -140,9 +162,16 @@ export async function bulkMoveToSpace<TName extends string, TSchema extends Sche
 
   // 2. Build write data: strip id and _spaceId, apply overrides
   const writeData = originals.map((record) => {
-    const { id: _id, _spaceId: _s, ...rest } = record as unknown as Record<string, unknown>;
-    const recordOverrides = typeof overrides === "function" ? overrides(record) : overrides;
-    return (recordOverrides ? { ...rest, ...recordOverrides } : rest) as CollectionWrite<TSchema>;
+    const {
+      id: _id,
+      _spaceId: _s,
+      ...rest
+    } = record as unknown as Record<string, unknown>;
+    const recordOverrides =
+      typeof overrides === "function" ? overrides(record) : overrides;
+    return (
+      recordOverrides ? { ...rest, ...recordOverrides } : rest
+    ) as CollectionWrite<TSchema>;
   });
 
   // 3. Create new records in target space
@@ -151,14 +180,18 @@ export async function bulkMoveToSpace<TName extends string, TSchema extends Sche
   });
   if (createResult.errors.length > 0) {
     // Rollback: delete any records that were created
-    const createdIds = createResult.records.map((r) => (r as { id: string }).id);
+    const createdIds = createResult.records.map(
+      (r) => (r as { id: string }).id,
+    );
     if (createdIds.length > 0) {
       await db.bulkDelete(collection, createdIds).catch(() => {
         // Best effort — if rollback fails, user has duplicates (safe)
       });
     }
     const firstError = createResult.errors[0]!;
-    throw new Error(`bulkMoveToSpace: failed to create records: ${firstError.error}`);
+    throw new Error(
+      `bulkMoveToSpace: failed to create records: ${firstError.error}`,
+    );
   }
 
   // 4. Delete originals (tombstone in old space)

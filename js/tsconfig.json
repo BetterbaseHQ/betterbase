@@ -26,5 +26,10 @@
     "allowUnusedLabels": false
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "../crates/betterbase-wasm/pkg", "../crates/betterbase-db-wasm/pkg"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "../crates/betterbase-wasm/pkg",
+    "../crates/betterbase-db-wasm/pkg"
+  ]
 }

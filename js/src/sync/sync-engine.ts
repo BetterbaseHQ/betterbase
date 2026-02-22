@@ -18,7 +18,11 @@ import { FileStore } from "./file-store.js";
 import { WSTransport } from "./ws-transport.js";
 import { WSClient } from "./ws-client.js";
 import { CLOSE_AUTH_FAILED, CLOSE_TOKEN_EXPIRED } from "./ws-frames.js";
-import type { WSPresenceData, WSPresenceLeaveData, WSEventData } from "./ws-frames.js";
+import type {
+  WSPresenceData,
+  WSPresenceLeaveData,
+  WSEventData,
+} from "./ws-frames.js";
 import type { EpochConfig, TokenProvider } from "./types.js";
 import { SpaceManager } from "./space-manager.js";
 import {
@@ -31,12 +35,21 @@ import { spaces } from "./spaces-collection.js";
 import { PresenceManager } from "./presence.js";
 import { EventManager } from "./event-manager.js";
 import { encodeDIDKeyFromJwk } from "../crypto/index.js";
-import { deriveChannelKey, buildPresenceAAD, buildEventAAD } from "../crypto/internals.js";
+import {
+  deriveChannelKey,
+  buildPresenceAAD,
+  buildEventAAD,
+} from "../crypto/internals.js";
 import { webcryptoDeriveChannelKey } from "../crypto/webcrypto.js";
 import type { EditChainIdentity } from "./transport.js";
 import { encode as cborEncode, decode as cborDecode } from "cborg";
 import { channelEncrypt, channelDecrypt } from "./channel-crypto.js";
-import { type SyncState, type SyncAction, initialSyncState, syncReducer } from "./sync-state.js";
+import {
+  type SyncState,
+  type SyncAction,
+  initialSyncState,
+  syncReducer,
+} from "./sync-state.js";
 import { buildWsUrl } from "./url.js";
 import {
   SyncManager,
@@ -231,12 +244,19 @@ export class SyncEngine {
 
     // 1. Derive DID from public key JWK (synchronous via WASM)
     const selfDID = encodeDIDKeyFromJwk(keypair.publicKeyJwk);
-    (engine as { privateKeyJwk: JsonWebKey }).privateKeyJwk = keypair.privateKeyJwk;
+    (engine as { privateKeyJwk: JsonWebKey }).privateKeyJwk =
+      keypair.privateKeyJwk;
 
     // 3. Create TypedAdapter with spaces middleware
     const middleware = createSpacesMiddleware(personalSpaceId);
-    const typedDb: TypedAdapter<SpaceFields, SpaceWriteOptions, SpaceQueryOptions> =
-      new TypedAdapter<SpaceFields, SpaceWriteOptions, SpaceQueryOptions>(adapter, middleware);
+    const typedDb: TypedAdapter<
+      SpaceFields,
+      SpaceWriteOptions,
+      SpaceQueryOptions
+    > = new TypedAdapter<SpaceFields, SpaceWriteOptions, SpaceQueryOptions>(
+      adapter,
+      middleware,
+    );
     (engine as { db: typeof typedDb }).db = typedDb;
 
     // 4. Create SpaceManager
@@ -284,7 +304,9 @@ export class SyncEngine {
     // Derives fresh each call — avoids caching raw key material in memory.
     // CryptoKey path: Web Crypto HKDF derivation (fast).
     // Raw bytes path: WASM HKDF derivation (fast, synchronous).
-    const getChannelKey = async (spaceId: string): Promise<Uint8Array | null> => {
+    const getChannelKey = async (
+      spaceId: string,
+    ): Promise<Uint8Array | null> => {
       if (spaceId === personalSpaceId) {
         if (!epochKey) return null;
         if (epochDeriveKey) {
@@ -317,13 +339,19 @@ export class SyncEngine {
       onInvitation: () => {
         if (engine._disposed) return;
         spaceManager.checkInvitations(keypair.privateKeyJwk).catch((err) => {
-          console.error("[betterbase-sync] Failed to check invitations on WS event:", err);
+          console.error(
+            "[betterbase-sync] Failed to check invitations on WS event:",
+            err,
+          );
         });
       },
       onRevoked: (data) => {
         if (engine._disposed) return;
         spaceManager.handleRevocation(data.space).catch((err) => {
-          console.error(`[betterbase-sync] Failed to handle revocation for space ${data.space}:`, err);
+          console.error(
+            `[betterbase-sync] Failed to handle revocation for space ${data.space}:`,
+            err,
+          );
         });
       },
       onPresence: (data: WSPresenceData) => {
@@ -364,19 +392,31 @@ export class SyncEngine {
           t.subscribe()
             .then(() => engine.scheduler?.flushAll())
             .catch((err) => {
-              console.error("[betterbase-sync] Failed to sync after WS reconnect:", err);
+              console.error(
+                "[betterbase-sync] Failed to sync after WS reconnect:",
+                err,
+              );
             });
         } else {
           engine.scheduler?.flushAll().catch((err) => {
-            console.error("[betterbase-sync] Failed to sync after WS reconnect:", err);
+            console.error(
+              "[betterbase-sync] Failed to sync after WS reconnect:",
+              err,
+            );
           });
         }
         fileStore.invalidate();
         fileStore.processQueue().catch((err) => {
-          console.error("[betterbase-sync] Failed to process file queue on WS reconnect:", err);
+          console.error(
+            "[betterbase-sync] Failed to process file queue on WS reconnect:",
+            err,
+          );
         });
         spaceManager.checkInvitations(keypair.privateKeyJwk).catch((err) => {
-          console.error("[betterbase-sync] Failed to check invitations on WS reconnect:", err);
+          console.error(
+            "[betterbase-sync] Failed to check invitations on WS reconnect:",
+            err,
+          );
         });
       },
     });
@@ -439,7 +479,10 @@ export class SyncEngine {
       presence: true,
       onInitialPeers: (spaceId, peers) => {
         pm.handleInitialPeers(spaceId, peers).catch((err) => {
-          console.error("[betterbase-sync] Failed to handle initial peers:", err);
+          console.error(
+            "[betterbase-sync] Failed to handle initial peers:",
+            err,
+          );
         });
       },
       onRotationError: (spaceId, error) => {
@@ -448,7 +491,8 @@ export class SyncEngine {
       },
       cursorStore: {
         get: (key) => engine.db.getLastSequence(`spaceCursor:${key}`),
-        set: (key, value) => engine.db.setLastSequence(`spaceCursor:${key}`, value),
+        set: (key, value) =>
+          engine.db.setLastSequence(`spaceCursor:${key}`, value),
       },
     });
     engine.transport = transport;
@@ -468,7 +512,10 @@ export class SyncEngine {
             .filter((v): v is string => typeof v === "string");
           if (fileIds.length > 0) {
             fileStore.evictAll(fileIds).catch((err) => {
-              console.warn("[betterbase-sync] Auto file cleanup on remote delete failed:", err);
+              console.warn(
+                "[betterbase-sync] Auto file cleanup on remote delete failed:",
+                err,
+              );
             });
           }
         }
@@ -542,7 +589,10 @@ export class SyncEngine {
       await transport.connect();
       await scheduler.flushAll();
       spaceManager.checkInvitations(keypair.privateKeyJwk).catch((err) => {
-        console.error("[betterbase-sync] Failed to check invitations during bootstrap:", err);
+        console.error(
+          "[betterbase-sync] Failed to check invitations during bootstrap:",
+          err,
+        );
       });
       const activated = await spaceManager.initializeFromSpaces();
       if (activated > 0) {
@@ -553,7 +603,10 @@ export class SyncEngine {
       engine._bootstrapping = false;
       engine.dispatch({ type: "BOOTSTRAP_COMPLETE" });
       fileStore.processQueue().catch((err) => {
-        console.error("[betterbase-sync] Failed to process file queue after bootstrap:", err);
+        console.error(
+          "[betterbase-sync] Failed to process file queue after bootstrap:",
+          err,
+        );
       });
     } catch (err) {
       engine._bootstrapping = false;
@@ -576,7 +629,10 @@ export class SyncEngine {
       await this.scheduler.flushAll();
       this.dispatch({ type: "SYNC_COMPLETE" });
       this.fileStore.processQueue().catch((err) => {
-        console.error("[betterbase-sync] Failed to process file queue after manual sync:", err);
+        console.error(
+          "[betterbase-sync] Failed to process file queue after manual sync:",
+          err,
+        );
       });
     } catch (err) {
       if (err instanceof AuthenticationError) {

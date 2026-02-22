@@ -13,7 +13,10 @@ import { ensureWasm } from "../wasm-init.js";
  * @param message - Message bytes to sign
  * @returns 64-byte IEEE P1363 signature (r||s)
  */
-export function sign(privateKeyJwk: JsonWebKey, message: Uint8Array): Uint8Array {
+export function sign(
+  privateKeyJwk: JsonWebKey,
+  message: Uint8Array,
+): Uint8Array {
   return ensureWasm().sign(privateKeyJwk, message);
 }
 

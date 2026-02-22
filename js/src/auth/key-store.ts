@@ -87,7 +87,11 @@ export class KeyStore {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
 
       request.onerror = () => {
-        reject(new Error(`Failed to open KeyStore database: ${request.error?.message}`));
+        reject(
+          new Error(
+            `Failed to open KeyStore database: ${request.error?.message}`,
+          ),
+        );
       };
 
       request.onsuccess = () => {
@@ -116,7 +120,10 @@ export class KeyStore {
   /**
    * Store a value in IndexedDB.
    */
-  async storeValue(id: KeyId, value: Uint8Array | JsonWebKey | CryptoKey): Promise<void> {
+  async storeValue(
+    id: KeyId,
+    value: Uint8Array | JsonWebKey | CryptoKey,
+  ): Promise<void> {
     await this.ensureInitialized();
 
     return new Promise((resolve, reject) => {
@@ -125,7 +132,8 @@ export class KeyStore {
       store.put(value, id);
 
       transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(new Error(`Transaction failed while storing key "${id}"`));
+      transaction.onerror = () =>
+        reject(new Error(`Transaction failed while storing key "${id}"`));
     });
   }
 
@@ -142,7 +150,9 @@ export class KeyStore {
       const request = store.get(id);
 
       request.onerror = () =>
-        reject(new Error(`Failed to get key "${id}": ${request.error?.message}`));
+        reject(
+          new Error(`Failed to get key "${id}": ${request.error?.message}`),
+        );
       request.onsuccess = () => {
         const result = request.result;
         if (result instanceof Uint8Array) {
@@ -174,7 +184,9 @@ export class KeyStore {
     // Migration: raw bytes → CryptoKey
     // Copy to avoid zeroing IDB's internal buffer (which may be the same object)
     const raw = new Uint8Array(
-      value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBuffer),
+      value instanceof Uint8Array
+        ? value
+        : new Uint8Array(value as ArrayBuffer),
     );
     let cryptoKey: CryptoKey;
     try {
@@ -191,7 +203,10 @@ export class KeyStore {
   /**
    * Import raw bytes as the appropriate CryptoKey type based on KeyId.
    */
-  private async importRawToCryptoKey(id: KeyId, raw: Uint8Array): Promise<CryptoKey> {
+  private async importRawToCryptoKey(
+    id: KeyId,
+    raw: Uint8Array,
+  ): Promise<CryptoKey> {
     switch (id) {
       case "encryption-key":
         return importEncryptionCryptoKey(raw);
@@ -216,7 +231,9 @@ export class KeyStore {
       const request = store.get(id);
 
       request.onerror = () =>
-        reject(new Error(`Failed to get key "${id}": ${request.error?.message}`));
+        reject(
+          new Error(`Failed to get key "${id}": ${request.error?.message}`),
+        );
       request.onsuccess = () => resolve(request.result ?? null);
     });
   }
@@ -233,7 +250,9 @@ export class KeyStore {
       const request = store.get(id);
 
       request.onerror = () =>
-        reject(new Error(`Failed to get key "${id}": ${request.error?.message}`));
+        reject(
+          new Error(`Failed to get key "${id}": ${request.error?.message}`),
+        );
       request.onsuccess = () => resolve(request.result ?? null);
     });
   }
@@ -250,7 +269,8 @@ export class KeyStore {
       store.delete(id);
 
       transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(new Error(`Failed to delete key "${id}"`));
+      transaction.onerror = () =>
+        reject(new Error(`Failed to delete key "${id}"`));
     });
   }
 
@@ -276,7 +296,9 @@ export class KeyStore {
    */
   async importEncryptionKey(rawKey: Uint8Array): Promise<void> {
     if (rawKey.length !== 32) {
-      throw new Error(`Invalid encryption key length: expected 32 bytes, got ${rawKey.length}`);
+      throw new Error(
+        `Invalid encryption key length: expected 32 bytes, got ${rawKey.length}`,
+      );
     }
 
     try {
@@ -295,7 +317,9 @@ export class KeyStore {
    */
   async importEpochKey(rawKey: Uint8Array): Promise<void> {
     if (rawKey.length !== 32) {
-      throw new Error(`Invalid epoch key length: expected 32 bytes, got ${rawKey.length}`);
+      throw new Error(
+        `Invalid epoch key length: expected 32 bytes, got ${rawKey.length}`,
+      );
     }
 
     try {
@@ -328,7 +352,8 @@ export class KeyStore {
       }
 
       transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(new Error("Transaction failed while storing keys"));
+      transaction.onerror = () =>
+        reject(new Error("Transaction failed while storing keys"));
     });
   }
 
@@ -337,7 +362,9 @@ export class KeyStore {
    */
   async importAppPrivateKey(jwk: JsonWebKey): Promise<void> {
     if (jwk.kty !== "EC" || jwk.crv !== "P-256") {
-      throw new Error(`Invalid app key: expected P-256 EC key, got kty=${jwk.kty}, crv=${jwk.crv}`);
+      throw new Error(
+        `Invalid app key: expected P-256 EC key, got kty=${jwk.kty}, crv=${jwk.crv}`,
+      );
     }
 
     await this.storeValue("app-private-key", jwk);

@@ -17,7 +17,10 @@ export function base64ToBytes(base64: string): Uint8Array {
 
 /** Encode bytes as a base64url string (no padding). */
 export function bytesToBase64Url(bytes: Uint8Array): string {
-  return bytesToBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return bytesToBase64(bytes)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 /** Decode a base64url string to bytes (handles missing padding). */

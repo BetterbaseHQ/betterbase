@@ -13,7 +13,9 @@ describe("parseHandle", () => {
   });
 
   it("throws on null byte", () => {
-    expect(() => parseHandle("alice\0@example.com")).toThrow("contains null byte");
+    expect(() => parseHandle("alice\0@example.com")).toThrow(
+      "contains null byte",
+    );
   });
 
   it("throws on over-length handle", () => {

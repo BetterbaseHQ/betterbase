@@ -72,9 +72,15 @@ export async function advanceEpoch(
   });
 
   // Check for conflict result (returned as success with error field)
-  if ("error" in result && (result as WSEpochConflictResult).error === "epoch_conflict") {
+  if (
+    "error" in result &&
+    (result as WSEpochConflictResult).error === "epoch_conflict"
+  ) {
     const conflict = result as WSEpochConflictResult;
-    throw new EpochMismatchError(conflict.current_epoch, conflict.rewrap_epoch ?? null);
+    throw new EpochMismatchError(
+      conflict.current_epoch,
+      conflict.rewrap_epoch ?? null,
+    );
   }
 }
 
@@ -114,8 +120,11 @@ export interface RewrapResult {
  * re-wraps with the new key, and uploads. Idempotent — skips DEKs
  * already at the target epoch.
  */
-export async function rewrapAllDEKs(config: RewrapAllDEKsConfig): Promise<RewrapResult> {
-  const { ws, spaceId, ucan, currentEpoch, currentKey, newEpoch, newKey } = config;
+export async function rewrapAllDEKs(
+  config: RewrapAllDEKsConfig,
+): Promise<RewrapResult> {
+  const { ws, spaceId, ucan, currentEpoch, currentKey, newEpoch, newKey } =
+    config;
   const includeFiles = config.includeFiles !== false;
 
   if (newEpoch <= currentEpoch) {
@@ -127,7 +136,10 @@ export async function rewrapAllDEKs(config: RewrapAllDEKsConfig): Promise<Rewrap
   // CryptoKey path: use Web Crypto for unwrap/wrap
   if (currentKey instanceof CryptoKey) {
     return rewrapAllDEKsCryptoKey(
-      config as RewrapAllDEKsConfig & { currentKey: CryptoKey; newKey: CryptoKey },
+      config as RewrapAllDEKsConfig & {
+        currentKey: CryptoKey;
+        newKey: CryptoKey;
+      },
     );
   }
 
@@ -185,7 +197,8 @@ export async function rewrapAllDEKs(config: RewrapAllDEKsConfig): Promise<Rewrap
         const dekEpoch = peekEpoch(wrappedDEK);
         if (dekEpoch === newEpoch) continue;
         const unwrapKey = keyCache.get(dekEpoch);
-        if (!unwrapKey) throw new Error(`No key for file DEK epoch ${dekEpoch}`);
+        if (!unwrapKey)
+          throw new Error(`No key for file DEK epoch ${dekEpoch}`);
         const { dek } = unwrapDEK(wrappedDEK, unwrapKey);
         try {
           rewrappedFiles.push({ id, dek: wrapDEK(dek, rawNewKey, newEpoch) });
@@ -199,7 +212,8 @@ export async function rewrapAllDEKs(config: RewrapAllDEKsConfig): Promise<Rewrap
           ...(ucan ? { ucan } : {}),
           deks: rewrappedFiles,
         });
-        if (!result.ok) throw new Error("File DEK re-wrapping failed on server");
+        if (!result.ok)
+          throw new Error("File DEK re-wrapping failed on server");
       }
       fileDekCount = rewrappedFiles.length;
     }
@@ -225,8 +239,16 @@ const MAX_EPOCH_ADVANCE = 1000;
 async function rewrapAllDEKsCryptoKey(
   config: RewrapAllDEKsConfig & { currentKey: CryptoKey; newKey: CryptoKey },
 ): Promise<RewrapResult> {
-  const { ws, spaceId, ucan, currentEpoch, currentKey, currentDeriveKey, newEpoch, newKey } =
-    config;
+  const {
+    ws,
+    spaceId,
+    ucan,
+    currentEpoch,
+    currentKey,
+    currentDeriveKey,
+    newEpoch,
+    newKey,
+  } = config;
   const includeFiles = config.includeFiles !== false;
 
   const distance = newEpoch - currentEpoch;
@@ -261,7 +283,10 @@ async function rewrapAllDEKsCryptoKey(
       if (!unwrapKey) throw new Error(`No key for DEK epoch ${dekEpoch}`);
       const { dek } = await webcryptoUnwrapDEK(wrappedDEK, unwrapKey);
       try {
-        rewrapped.push({ id, dek: await webcryptoWrapDEK(dek, newKey, newEpoch) });
+        rewrapped.push({
+          id,
+          dek: await webcryptoWrapDEK(dek, newKey, newEpoch),
+        });
       } finally {
         dek.fill(0);
       }
@@ -301,7 +326,8 @@ async function rewrapAllDEKsCryptoKey(
           ...(ucan ? { ucan } : {}),
           deks: rewrappedFiles,
         });
-        if (!result.ok) throw new Error("File DEK re-wrapping failed on server");
+        if (!result.ok)
+          throw new Error("File DEK re-wrapping failed on server");
       }
       fileDekCount = rewrappedFiles.length;
     }
@@ -315,10 +341,11 @@ async function rewrapAllDEKsCryptoKey(
 
 /** Read the epoch prefix from a wrapped DEK without unwrapping it (first 4 bytes, big-endian u32). */
 export function peekEpoch(wrappedDEK: Uint8Array): number {
-  return new DataView(wrappedDEK.buffer, wrappedDEK.byteOffset, wrappedDEK.byteLength).getUint32(
-    0,
-    false,
-  );
+  return new DataView(
+    wrappedDEK.buffer,
+    wrappedDEK.byteOffset,
+    wrappedDEK.byteLength,
+  ).getUint32(0, false);
 }
 
 /**
@@ -331,7 +358,9 @@ export function deriveForward(
   toEpoch: number,
 ): Uint8Array {
   if (toEpoch < fromEpoch) {
-    throw new Error(`Cannot derive backward: fromEpoch=${fromEpoch}, toEpoch=${toEpoch}`);
+    throw new Error(
+      `Cannot derive backward: fromEpoch=${fromEpoch}, toEpoch=${toEpoch}`,
+    );
   }
   if (toEpoch === fromEpoch) return key;
   let current = key;
