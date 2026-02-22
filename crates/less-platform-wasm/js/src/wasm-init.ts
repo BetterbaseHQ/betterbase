@@ -137,8 +137,8 @@ export interface WasmModule {
   extractAppKeypair(scopedKeysJson: string): AppKeypairJwk | null;
 
   // --- discovery ---
-  validateServerMetadata(json: string): ServerMetadata;
-  parseWebfingerResponse(json: string): UserResolution;
+  validateServerMetadata(json: string): Record<string, unknown>;
+  parseWebfingerResponse(json: string): Record<string, unknown>;
 
   // --- sync ---
   padToBucket(data: Uint8Array): Uint8Array;
@@ -205,7 +205,6 @@ export interface WasmModule {
     spaceId: string,
     seq: number,
   ): string;
-  sha256Hash(data: Uint8Array): Uint8Array;
 }
 
 // --- Shared types ---
@@ -232,23 +231,6 @@ export interface AppKeypairJwk {
   x: string;
   y: string;
   d: string;
-}
-
-export interface ServerMetadata {
-  version: number;
-  federation: boolean;
-  accounts_endpoint: string;
-  sync_endpoint: string;
-  federation_ws: string;
-  jwks_uri: string;
-  webfinger: string;
-  protocols: string[];
-  pow_required: boolean;
-}
-
-export interface UserResolution {
-  subject: string;
-  sync_endpoint: string;
 }
 
 export interface MembershipEntryPayload {

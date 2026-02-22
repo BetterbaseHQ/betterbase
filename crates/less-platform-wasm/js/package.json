@@ -60,10 +60,13 @@
     "check": "pnpm build:wasm && prettier --write . && pnpm typecheck"
   },
   "peerDependencies": {
-    "@less-platform/db": "*",
+    "@less-platform/db": "^0.1.0",
     "react": "^18.0.0 || ^19.0.0"
   },
   "peerDependenciesMeta": {
+    "@less-platform/db": {
+      "optional": true
+    },
     "react": {
       "optional": true
     }

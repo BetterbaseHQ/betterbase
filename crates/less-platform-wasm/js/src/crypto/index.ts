@@ -43,7 +43,7 @@ export type { EditDiff, EditEntry } from "./edit-chain.js";
 
 // Constants and types
 export {
-  CURRENT_VERSION,
+  ENCRYPTION_FORMAT_VERSION,
   SUPPORTED_VERSIONS,
   DEFAULT_EPOCH_ADVANCE_INTERVAL_MS,
 } from "./types.js";

@@ -5,7 +5,8 @@
  *   Format: [version=4:1B][IV:12B][ciphertext+tag]
  *   DEK is wrapped separately with AES-KW: [epoch:4B][AES-KW(KEK, DEK):40B] = 44 bytes
  */
-export const CURRENT_VERSION = 4;
+/** Wire format version for encrypted blobs (AES-256-GCM envelope). */
+export const ENCRYPTION_FORMAT_VERSION = 4;
 
 /**
  * Supported wire format versions (for decryption).

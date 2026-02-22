@@ -16,6 +16,7 @@ export {
   AuthError,
   SessionExpiredError,
   TokenRefreshError,
+  OAuthTokenError,
   CallbackError,
   CSRFError,
 } from "./errors.js";

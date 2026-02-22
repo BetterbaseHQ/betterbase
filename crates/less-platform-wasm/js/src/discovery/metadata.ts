@@ -12,6 +12,19 @@ function inferScheme(domain: string): string {
   return host === "localhost" || host === "127.0.0.1" ? "http" : "https";
 }
 
+/** Wire format from the server (snake_case). */
+interface ServerMetadataWire {
+  version: number;
+  federation: boolean;
+  accounts_endpoint: string;
+  sync_endpoint: string;
+  federation_ws: string;
+  jwks_uri: string;
+  webfinger: string;
+  protocols: string[];
+  pow_required: boolean;
+}
+
 /**
  * Fetch server metadata from a domain's .well-known endpoint.
  *
@@ -45,12 +58,11 @@ export async function fetchServerMetadata(
   }
 
   const data: unknown = await response.json();
-  validateServerMetadata(data);
-  return data;
+  return parseServerMetadata(data);
 }
 
-/** Validate that an unknown value is a valid ServerMetadata. */
-function validateServerMetadata(data: unknown): asserts data is ServerMetadata {
+/** Validate and map a wire-format response to camelCase ServerMetadata. */
+function parseServerMetadata(data: unknown): ServerMetadata {
   if (typeof data !== "object" || data === null) {
     throw new Error("Invalid discovery response: expected object");
   }
@@ -74,4 +86,17 @@ function validateServerMetadata(data: unknown): asserts data is ServerMetadata {
   if (typeof obj["sync_endpoint"] !== "string" || !obj["sync_endpoint"]) {
     throw new Error("Invalid discovery response: missing sync_endpoint");
   }
+
+  const wire = data as ServerMetadataWire;
+  return {
+    version: wire.version,
+    federation: wire.federation,
+    accountsEndpoint: wire.accounts_endpoint,
+    syncEndpoint: wire.sync_endpoint,
+    federationWs: wire.federation_ws,
+    jwksUri: wire.jwks_uri,
+    webfinger: wire.webfinger,
+    protocols: wire.protocols,
+    powRequired: wire.pow_required,
+  };
 }

@@ -12,27 +12,13 @@
 import type { AuthResult, AuthSessionConfig, TokenResponse } from "./types.js";
 import { KeyStore } from "./key-store.js";
 import { hkdfDerive } from "./crypto.js";
-import { SessionExpiredError, TokenRefreshError } from "./errors.js";
+import { SessionExpiredError, TokenRefreshError, OAuthTokenError } from "./errors.js";
+import { decodeJwtClaim } from "./jwt.js";
 
 /** HKDF info for deriving the AES-GCM encryption key from the OPAQUE export key. */
 const ENCRYPT_INFO = "less:encrypt:v1";
 /** HKDF info for deriving the epoch root key (AES-KW) from the OPAQUE export key. */
 const EPOCH_ROOT_INFO = "less:epoch-root:v1";
-
-/** Decode a single claim from a JWT payload without verification. */
-function decodeJwtClaim(token: string, claim: string): string | undefined {
-  try {
-    const payload = token.split(".")[1];
-    if (!payload) return undefined;
-    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
-    const claims = JSON.parse(json);
-    const value = claims[claim];
-    return typeof value === "string" ? value : undefined;
-  } catch (err) {
-    console.error("[less-auth] Failed to decode JWT claim:", err);
-    return undefined;
-  }
-}
 
 /** Persisted session state in localStorage */
 interface SessionState {
@@ -564,16 +550,12 @@ export class AuthSession {
   }
 }
 
-/** Check if an error message suggests a server rejection (not a network error) */
+/** Check if an error is a server rejection (4xx) rather than a network error. */
 function isServerError(err: Error): boolean {
-  const msg = err.message.toLowerCase();
-  return (
-    msg.includes("invalid_grant") ||
-    msg.includes("token revoked") ||
-    msg.includes("token expired") ||
-    msg.includes("token refresh failed") ||
-    msg.includes("missing access_token")
-  );
+  if (err instanceof OAuthTokenError) {
+    return err.statusCode >= 400 && err.statusCode < 500;
+  }
+  return false;
 }
 
 function sleep(ms: number): Promise<void> {

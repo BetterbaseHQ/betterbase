@@ -11,6 +11,7 @@
 import {
   createContext,
   createElement,
+  Fragment,
   useState,
   useEffect,
   useCallback,
@@ -317,8 +318,8 @@ export function LessProvider(props: LessProviderProps): ReactElement {
   }, [domain]);
 
   // Derive URLs from discovery or fall back to same-origin defaults
-  const syncBaseUrl = metadata?.sync_endpoint ?? "/api/v1";
-  const accountsBaseUrl = metadata?.accounts_endpoint ?? "";
+  const syncBaseUrl = metadata?.syncEndpoint ?? "/api/v1";
+  const accountsBaseUrl = metadata?.accountsEndpoint ?? "";
 
   // -------------------------------------------------------------------
   // Session resolution: resolve async session fields into local state
@@ -757,6 +758,31 @@ function LessProviderInner(props: LessProviderInnerProps) {
  */
 export function useSyncReady(): boolean {
   return useContext(SyncReadyContext);
+}
+
+/**
+ * Renders children only when sync infrastructure is ready.
+ *
+ * Eliminates the `SyncGuard` boilerplate that every app otherwise needs:
+ * ```tsx
+ * <LessProvider ...>
+ *   <SyncReady fallback={<Loading />}>
+ *     <MyApp />
+ *   </SyncReady>
+ * </LessProvider>
+ * ```
+ *
+ * @param fallback - Optional element to render while sync is initializing. Defaults to `null`.
+ */
+export function SyncReady({
+  children,
+  fallback = null,
+}: {
+  children: ReactNode;
+  fallback?: ReactNode;
+}): ReactElement {
+  const ready = useSyncReady();
+  return createElement(Fragment, null, ready ? children : fallback);
 }
 
 // ---------------------------------------------------------------------------

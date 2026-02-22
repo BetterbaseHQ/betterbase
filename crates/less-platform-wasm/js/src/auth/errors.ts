@@ -13,6 +13,23 @@ export class TokenRefreshError extends AuthError {
   override name = "TokenRefreshError";
 }
 
+/**
+ * OAuth token endpoint returned an error response.
+ *
+ * Carries the HTTP status code for reliable server-vs-network error detection.
+ * 4xx errors indicate the token is invalid (re-login required).
+ * 5xx errors may be transient (retriable).
+ */
+export class OAuthTokenError extends AuthError {
+  override name = "OAuthTokenError";
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+  ) {
+    super(message);
+  }
+}
+
 /** OAuth callback processing failed. */
 export class CallbackError extends AuthError {
   override name = "CallbackError";

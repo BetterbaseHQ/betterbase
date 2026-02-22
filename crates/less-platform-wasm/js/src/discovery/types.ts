@@ -2,13 +2,13 @@
 export interface ServerMetadata {
   version: number;
   federation: boolean;
-  accounts_endpoint: string;
-  sync_endpoint: string;
-  federation_ws: string;
-  jwks_uri: string;
+  accountsEndpoint: string;
+  syncEndpoint: string;
+  federationWs: string;
+  jwksUri: string;
   webfinger: string;
   protocols: string[];
-  pow_required: boolean;
+  powRequired: boolean;
 }
 
 /** RFC 7033 WebFinger JRD response. */

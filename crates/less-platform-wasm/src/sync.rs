@@ -4,7 +4,7 @@ use crate::error::{to_js_error, to_js_value};
 use less_sync_core::{
     build_membership_signing_message, decrypt_inbound, decrypt_membership_payload, derive_forward,
     encrypt_membership_payload, encrypt_outbound, pad_to_bucket, parse_membership_entry,
-    peek_epoch, rewrap_deks, serialize_membership_entry, sha256_hash, unpad,
+    peek_epoch, rewrap_deks, serialize_membership_entry, unpad,
     verify_membership_entry, BlobEnvelope, EpochKeyCache, MembershipEntryType,
     DEFAULT_PADDING_BUCKETS,
 };
@@ -251,11 +251,6 @@ pub fn wasm_decrypt_membership_payload(
     seq: u32,
 ) -> Result<String, JsValue> {
     decrypt_membership_payload(encrypted, key, space_id, seq).map_err(to_js_error)
-}
-
-#[wasm_bindgen(js_name = "sha256Hash")]
-pub fn wasm_sha256_hash(data: &[u8]) -> Vec<u8> {
-    sha256_hash(data)
 }
 
 fn parse_entry_type(s: &str) -> Result<MembershipEntryType, JsValue> {

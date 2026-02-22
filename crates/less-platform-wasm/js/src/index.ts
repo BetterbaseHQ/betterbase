@@ -11,12 +11,4 @@
  */
 
 export { initWasm, ensureWasm, setWasmForTesting } from "./wasm-init.js";
-export type {
-  WasmModule,
-  EditDiff,
-  EditEntry,
-  AppKeypairJwk,
-  ServerMetadata,
-  UserResolution,
-  MembershipEntryPayload,
-} from "./wasm-init.js";
+export type { WasmModule } from "./wasm-init.js";

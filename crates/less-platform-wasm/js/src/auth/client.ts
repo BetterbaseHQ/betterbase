@@ -17,24 +17,10 @@ import {
   extractAppKeypair,
   deriveMailboxId,
 } from "./crypto.js";
-import { CallbackError, CSRFError } from "./errors.js";
+import { CallbackError, CSRFError, OAuthTokenError } from "./errors.js";
+import { decodeJwtClaim } from "./jwt.js";
 import { fetchServerMetadata } from "../discovery/metadata.js";
 import type { ServerMetadata } from "../discovery/types.js";
-
-/** Decode a JWT payload without verification (token is already validated by server). */
-function decodeJwtClaim(token: string, claim: string): string | undefined {
-  try {
-    const payload = token.split(".")[1];
-    if (!payload) return undefined;
-    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
-    const claims = JSON.parse(json);
-    const value = claims[claim];
-    return typeof value === "string" ? value : undefined;
-  } catch (err) {
-    console.error("[less-auth] Failed to decode JWT claim:", err);
-    return undefined;
-  }
-}
 
 export class OAuthClient {
   private config: OAuthConfig;
@@ -55,7 +41,7 @@ export class OAuthClient {
   /** Resolve the accounts server URL from discovery. */
   private async accountsUrl(): Promise<string> {
     const meta = await this.getMetadata();
-    return meta.accounts_endpoint;
+    return meta.accountsEndpoint;
   }
 
   /** Check if the configured scope includes sync capability. */
@@ -317,13 +303,13 @@ export class OAuthClient {
       } catch {
         // Response wasn't JSON
       }
-      throw new Error(errorMessage);
+      throw new OAuthTokenError(errorMessage, response.status);
     }
 
     const data = await response.json();
 
     if (typeof data.access_token !== "string" || !data.access_token) {
-      throw new Error("Invalid token response: missing access_token");
+      throw new OAuthTokenError("Invalid token response: missing access_token", 0);
     }
 
     return data as TokenResponse;
@@ -349,13 +335,13 @@ export class OAuthClient {
       } catch {
         // Response wasn't JSON
       }
-      throw new Error(errorMessage);
+      throw new OAuthTokenError(errorMessage, response.status);
     }
 
     const data = await response.json();
 
     if (typeof data.access_token !== "string" || !data.access_token) {
-      throw new Error("Invalid token response: missing access_token");
+      throw new OAuthTokenError("Invalid token response: missing access_token", 0);
     }
 
     return data as TokenResponse;
