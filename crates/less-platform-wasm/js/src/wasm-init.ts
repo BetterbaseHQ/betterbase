@@ -106,6 +106,18 @@ export interface WasmModule {
     upToIndex: number,
   ): Record<string, unknown>;
   canonicalJSON(value: unknown): string;
+  hkdfDerive(ikm: Uint8Array, salt: string, info: string): Uint8Array;
+  sha256(data: Uint8Array): Uint8Array;
+  encryptWithAad(
+    key: Uint8Array,
+    data: Uint8Array,
+    aad: Uint8Array,
+  ): Uint8Array;
+  decryptWithAad(
+    key: Uint8Array,
+    encrypted: Uint8Array,
+    aad: Uint8Array,
+  ): Uint8Array;
 
   // --- auth ---
   generateCodeVerifier(): string;
@@ -202,6 +214,7 @@ export interface EditDiff {
   path: string;
   from: unknown;
   to: unknown;
+  del?: boolean;
 }
 
 export interface EditEntry {

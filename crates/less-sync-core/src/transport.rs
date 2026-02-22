@@ -34,7 +34,7 @@ pub fn encrypt_outbound(
         record_id: record_id.to_string(),
     };
 
-    let mut dek = generate_dek();
+    let mut dek = generate_dek()?;
     let epoch = epoch_cache.current_epoch();
     let kek = epoch_cache.get_kek(epoch)?;
 

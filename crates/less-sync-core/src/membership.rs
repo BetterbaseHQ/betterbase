@@ -2,8 +2,8 @@
 
 use crate::error::SyncError;
 use less_crypto::{
-    base64url_decode, base64url_encode, decrypt_v4, encode_did_key_from_jwk, encrypt_v4, verify,
-    EncryptionContext,
+    base64url_decode, base64url_encode, decode_did_key_to_jwk, decrypt_v4,
+    encode_did_key_from_jwk, encrypt_v4, verify, EncryptionContext,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -149,7 +149,7 @@ const MAX_HANDLE_LENGTH: usize = 320;
 fn validate_handle(value: Option<&serde_json::Value>) -> Option<String> {
     value
         .and_then(|v| v.as_str())
-        .filter(|s| s.len() <= MAX_HANDLE_LENGTH)
+        .filter(|s| !s.is_empty() && s.len() <= MAX_HANDLE_LENGTH)
         .map(|s| s.to_string())
 }
 
@@ -194,7 +194,7 @@ pub fn serialize_membership_entry(entry: &MembershipEntryPayload) -> String {
 ///
 /// 1. Verify signer's public key DID matches expected signer role
 /// 2. Verify ECDSA signature over canonical message
-/// 3. For self-issued UCANs (iss == aud), also verify the UCAN's JWT signature
+/// 3. Verify the UCAN's JWT signature against the issuer's public key
 pub fn verify_membership_entry(
     entry: &MembershipEntryPayload,
     space_id: &str,
@@ -214,7 +214,7 @@ pub fn verify_membership_entry(
         return Ok(false);
     }
 
-    // Verify ECDSA signature
+    // Verify ECDSA signature over the membership entry message
     let message = build_membership_signing_message(
         entry.entry_type,
         space_id,
@@ -228,12 +228,17 @@ pub fn verify_membership_entry(
         return Ok(false);
     }
 
-    // For self-issued UCANs, verify the UCAN's JWT signature too
-    if parsed.issuer_did == parsed.audience_did {
-        let ucan_valid = verify_ucan_signature(&entry.ucan, &entry.signer_public_key)?;
-        if !ucan_valid {
-            return Ok(false);
-        }
+    // Verify the UCAN JWT's signature against the issuer's public key.
+    // For self-issued UCANs the signer_public_key is the issuer; for
+    // delegated UCANs we resolve the issuer DID to its public key.
+    let issuer_jwk = if parsed.issuer_did == signer_did {
+        entry.signer_public_key.clone()
+    } else {
+        decode_did_key_to_jwk(&parsed.issuer_did)?
+    };
+    let ucan_valid = verify_ucan_signature(&entry.ucan, &issuer_jwk)?;
+    if !ucan_valid {
+        return Ok(false);
     }
 
     Ok(true)

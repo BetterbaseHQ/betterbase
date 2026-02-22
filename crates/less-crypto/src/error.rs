@@ -58,4 +58,7 @@ pub enum CryptoError {
 
     #[error("Refusing to traverse dangerous path segment: \"{0}\"")]
     DangerousPathSegment(String),
+
+    #[error("Random number generation failed: {0}")]
+    RngFailed(String),
 }

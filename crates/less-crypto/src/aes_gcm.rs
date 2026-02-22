@@ -26,10 +26,10 @@ fn build_aad(context: &EncryptionContext) -> Vec<u8> {
 }
 
 /// Generate a random 12-byte IV for AES-GCM.
-pub fn generate_iv() -> [u8; AES_GCM_IV_LENGTH] {
+pub fn generate_iv() -> Result<[u8; AES_GCM_IV_LENGTH], CryptoError> {
     let mut iv = [0u8; AES_GCM_IV_LENGTH];
-    getrandom::getrandom(&mut iv).expect("getrandom failed");
-    iv
+    getrandom::getrandom(&mut iv).map_err(|e| CryptoError::RngFailed(e.to_string()))?;
+    Ok(iv)
 }
 
 /// AES-256-GCM encryption using scoped keys.
@@ -65,7 +65,7 @@ impl SyncCrypto {
         data: &[u8],
         context: Option<&EncryptionContext>,
     ) -> Result<Vec<u8>, CryptoError> {
-        let iv = generate_iv();
+        let iv = generate_iv()?;
         let nonce = Nonce::from_slice(&iv);
 
         let ciphertext = match context {
@@ -145,7 +145,7 @@ pub fn encrypt_v4(
     }
     let cipher =
         Aes256Gcm::new_from_slice(dek).map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-    let iv = generate_iv();
+    let iv = generate_iv()?;
     let nonce = Nonce::from_slice(&iv);
 
     let ciphertext = match context {
@@ -228,7 +228,7 @@ pub fn aes_gcm_encrypt(key: &[u8], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u
     }
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-    let iv = generate_iv();
+    let iv = generate_iv()?;
     let nonce = Nonce::from_slice(&iv);
 
     let ciphertext = cipher

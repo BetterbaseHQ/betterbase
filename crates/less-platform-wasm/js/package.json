@@ -11,21 +11,41 @@
       "import": "./src/index.ts",
       "types": "./src/index.ts"
     },
-    "./crypto": {
-      "import": "./src/crypto.ts",
-      "types": "./src/crypto.ts"
-    },
     "./auth": {
-      "import": "./src/auth.ts",
-      "types": "./src/auth.ts"
+      "import": "./src/auth/index.ts",
+      "types": "./src/auth/index.ts"
+    },
+    "./auth/react": {
+      "import": "./src/auth/react.ts",
+      "types": "./src/auth/react.ts"
+    },
+    "./auth/internals": {
+      "import": "./src/auth/internals.ts",
+      "types": "./src/auth/internals.ts"
+    },
+    "./crypto": {
+      "import": "./src/crypto/index.ts",
+      "types": "./src/crypto/index.ts"
+    },
+    "./crypto/internals": {
+      "import": "./src/crypto/internals.ts",
+      "types": "./src/crypto/internals.ts"
     },
     "./discovery": {
-      "import": "./src/discovery.ts",
-      "types": "./src/discovery.ts"
+      "import": "./src/discovery/index.ts",
+      "types": "./src/discovery/index.ts"
     },
     "./sync": {
-      "import": "./src/sync.ts",
-      "types": "./src/sync.ts"
+      "import": "./src/sync/index.ts",
+      "types": "./src/sync/index.ts"
+    },
+    "./sync/react": {
+      "import": "./src/sync/react.ts",
+      "types": "./src/sync/react.ts"
+    },
+    "./sync/protocol": {
+      "import": "./src/sync/protocol.ts",
+      "types": "./src/sync/protocol.ts"
     }
   },
   "license": "MIT",
@@ -39,8 +59,24 @@
     "format": "prettier --write .",
     "check": "pnpm build:wasm && prettier --write . && pnpm typecheck"
   },
+  "peerDependencies": {
+    "@less-platform/db": "*",
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "cborg": "^4.5.8",
+    "json-joy": "^17.67.0"
+  },
   "devDependencies": {
+    "@less-platform/db": "link:../../../../less-db-rs/crates/less-db-wasm/js",
+    "@types/react": "^19.2.14",
     "prettier": "^3.8.1",
+    "react": "^19.2.4",
     "typescript": "^5.9.3",
     "vite-plugin-top-level-await": "^1.6.0",
     "vite-plugin-wasm": "^3.5.0",

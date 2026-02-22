@@ -1,15 +1,15 @@
 //! WASM bindings for less-crypto.
 
-use crate::error::to_js_error;
+use crate::error::{to_js_error, to_js_value};
 use less_crypto::{
-    base64url_decode, base64url_encode, build_event_aad, build_presence_aad, canonical_json,
-    compress_p256_public_key, decrypt_v4, delegate_ucan, derive_channel_key,
-    derive_epoch_key_from_root, derive_next_epoch_key, encode_did_key, encode_did_key_from_jwk,
-    encrypt_v4, export_private_key_jwk, export_public_key_jwk, generate_dek, generate_p256_keypair,
-    import_private_key_jwk, issue_root_ucan, parse_edit_chain, reconstruct_state,
-    serialize_edit_chain, sign, sign_edit_entry, unwrap_dek, value_diff, verify, verify_edit_chain,
-    verify_edit_entry, wrap_dek, EditDiff, EditEntry, EncryptionContext, UCANPermission,
-    CURRENT_VERSION, SUPPORTED_VERSIONS,
+    aes_gcm_decrypt, aes_gcm_encrypt, base64url_decode, base64url_encode, build_event_aad,
+    build_presence_aad, canonical_json, compress_p256_public_key, decrypt_v4, delegate_ucan,
+    derive_channel_key, derive_epoch_key_from_root, derive_next_epoch_key, encode_did_key,
+    encode_did_key_from_jwk, encrypt_v4, export_private_key_jwk, export_public_key_jwk,
+    generate_dek, generate_p256_keypair, hkdf_derive, import_private_key_jwk, issue_root_ucan,
+    parse_edit_chain, reconstruct_state, serialize_edit_chain, sign, sign_edit_entry, unwrap_dek,
+    value_diff, verify, verify_edit_chain, verify_edit_entry, wrap_dek, EditDiff, EditEntry,
+    EncryptionContext, UCANPermission, CURRENT_VERSION, SUPPORTED_VERSIONS,
 };
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
@@ -78,8 +78,8 @@ pub fn wasm_decrypt_v4(
 // --- DEK ---
 
 #[wasm_bindgen(js_name = "generateDEK")]
-pub fn wasm_generate_dek() -> Vec<u8> {
-    generate_dek().to_vec()
+pub fn wasm_generate_dek() -> Result<Vec<u8>, JsValue> {
+    Ok(generate_dek().map_err(to_js_error)?.to_vec())
 }
 
 #[wasm_bindgen(js_name = "wrapDEK")]
@@ -92,6 +92,7 @@ pub fn wasm_wrap_dek(dek: &[u8], kek: &[u8], epoch: u32) -> Result<Vec<u8>, JsVa
 #[wasm_bindgen(js_name = "unwrapDEK")]
 pub fn wasm_unwrap_dek(wrapped_dek: &[u8], kek: &[u8]) -> Result<JsValue, JsValue> {
     let (mut dek, epoch) = unwrap_dek(wrapped_dek, kek).map_err(to_js_error)?;
+    // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
     let result = js_sys::Object::new();
     js_sys::Reflect::set(
         &result,
@@ -154,17 +155,18 @@ pub fn wasm_generate_p256_keypair() -> Result<JsValue, JsValue> {
     let signing_key = generate_p256_keypair();
     let private_jwk = export_private_key_jwk(&signing_key);
     let public_jwk = export_public_key_jwk(signing_key.verifying_key());
+    // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
     let result = js_sys::Object::new();
     js_sys::Reflect::set(
         &result,
         &"privateKeyJwk".into(),
-        &serde_wasm_bindgen::to_value(&private_jwk).map_err(to_js_error)?,
+        &to_js_value(&private_jwk)?,
     )
     .unwrap();
     js_sys::Reflect::set(
         &result,
         &"publicKeyJwk".into(),
-        &serde_wasm_bindgen::to_value(&public_jwk).map_err(to_js_error)?,
+        &to_js_value(&public_jwk)?,
     )
     .unwrap();
     Ok(result.into())
@@ -219,17 +221,8 @@ pub fn wasm_issue_root_ucan(
 ) -> Result<String, JsValue> {
     let jwk: Value = serde_wasm_bindgen::from_value(private_key_jwk).map_err(to_js_error)?;
     let signing_key = import_private_key_jwk(&jwk).map_err(to_js_error)?;
-    let perm = match permission {
-        "admin" => UCANPermission::Admin,
-        "write" => UCANPermission::Write,
-        "read" => UCANPermission::Read,
-        _ => {
-            return Err(JsValue::from_str(&format!(
-                "invalid permission: {}",
-                permission
-            )))
-        }
-    };
+    let perm = parse_permission(permission)?;
+    let now_seconds = (js_sys::Date::now() / 1000.0) as u64;
     issue_root_ucan(
         &signing_key,
         issuer_did,
@@ -237,6 +230,7 @@ pub fn wasm_issue_root_ucan(
         space_id,
         perm,
         expires_in_seconds as u64,
+        now_seconds,
     )
     .map_err(to_js_error)
 }
@@ -253,17 +247,8 @@ pub fn wasm_delegate_ucan(
 ) -> Result<String, JsValue> {
     let jwk: Value = serde_wasm_bindgen::from_value(private_key_jwk).map_err(to_js_error)?;
     let signing_key = import_private_key_jwk(&jwk).map_err(to_js_error)?;
-    let perm = match permission {
-        "admin" => UCANPermission::Admin,
-        "write" => UCANPermission::Write,
-        "read" => UCANPermission::Read,
-        _ => {
-            return Err(JsValue::from_str(&format!(
-                "invalid permission: {}",
-                permission
-            )))
-        }
-    };
+    let perm = parse_permission(permission)?;
+    let now_seconds = (js_sys::Date::now() / 1000.0) as u64;
     delegate_ucan(
         &signing_key,
         issuer_did,
@@ -272,6 +257,7 @@ pub fn wasm_delegate_ucan(
         perm,
         expires_in_seconds as u64,
         proof,
+        now_seconds,
     )
     .map_err(to_js_error)
 }
@@ -287,7 +273,7 @@ pub fn wasm_value_diff(
     let old: Value = serde_wasm_bindgen::from_value(old_view).map_err(to_js_error)?;
     let new: Value = serde_wasm_bindgen::from_value(new_view).map_err(to_js_error)?;
     let diffs = value_diff(&old, &new, prefix.as_deref());
-    serde_wasm_bindgen::to_value(&diffs).map_err(to_js_error)
+    to_js_value(&diffs)
 }
 
 #[wasm_bindgen(js_name = "signEditEntry")]
@@ -321,7 +307,7 @@ pub fn wasm_sign_edit_entry(
         prev.as_ref(),
     )
     .map_err(to_js_error)?;
-    serde_wasm_bindgen::to_value(&entry).map_err(to_js_error)
+    to_js_value(&entry)
 }
 
 #[wasm_bindgen(js_name = "verifyEditEntry")]
@@ -353,18 +339,84 @@ pub fn wasm_serialize_edit_chain(entries: JsValue) -> Result<String, JsValue> {
 #[wasm_bindgen(js_name = "parseEditChain")]
 pub fn wasm_parse_edit_chain(serialized: &str) -> Result<JsValue, JsValue> {
     let entries = parse_edit_chain(serialized).map_err(to_js_error)?;
-    serde_wasm_bindgen::to_value(&entries).map_err(to_js_error)
+    to_js_value(&entries)
 }
 
 #[wasm_bindgen(js_name = "reconstructState")]
 pub fn wasm_reconstruct_state(entries: JsValue, up_to_index: usize) -> Result<JsValue, JsValue> {
     let entries: Vec<EditEntry> = serde_wasm_bindgen::from_value(entries).map_err(to_js_error)?;
     let state = reconstruct_state(&entries, up_to_index).map_err(to_js_error)?;
-    serde_wasm_bindgen::to_value(&state).map_err(to_js_error)
+    to_js_value(&state)
 }
 
 #[wasm_bindgen(js_name = "canonicalJSON")]
 pub fn wasm_canonical_json(value: JsValue) -> Result<String, JsValue> {
     let val: Value = serde_wasm_bindgen::from_value(value).map_err(to_js_error)?;
     canonical_json(&val).map_err(to_js_error)
+}
+
+// --- HKDF ---
+
+#[wasm_bindgen(js_name = "hkdfDerive")]
+pub fn wasm_hkdf_derive(ikm: &[u8], salt: &str, info: &str) -> Result<Vec<u8>, JsValue> {
+    // Note: zeroizing before returning to JS is not meaningful at the WASM boundary —
+    // the returned Vec is copied into linear memory for the JS host regardless.
+    hkdf_derive(ikm, salt.as_bytes(), info.as_bytes())
+        .map(|k| k.to_vec())
+        .map_err(to_js_error)
+}
+
+// --- SHA-256 ---
+
+#[wasm_bindgen(js_name = "sha256")]
+pub fn wasm_sha256(data: &[u8]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().to_vec()
+}
+
+// --- Channel encrypt/decrypt (AES-256-GCM with arbitrary AAD, v4 wire format) ---
+
+#[wasm_bindgen(js_name = "encryptWithAad")]
+pub fn wasm_encrypt_with_aad(
+    key: &[u8],
+    data: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, JsValue> {
+    // Use low-level AES-GCM with arbitrary AAD, then wrap in v4 format
+    let inner = aes_gcm_encrypt(key, data, aad).map_err(to_js_error)?;
+    // inner = [IV:12][ciphertext+tag], wrap as [0x04][IV:12][ciphertext+tag]
+    let mut result = Vec::with_capacity(1 + inner.len());
+    result.push(CURRENT_VERSION);
+    result.extend_from_slice(&inner);
+    Ok(result)
+}
+
+#[wasm_bindgen(js_name = "decryptWithAad")]
+pub fn wasm_decrypt_with_aad(
+    key: &[u8],
+    encrypted: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, JsValue> {
+    // Strip v4 version prefix, then decrypt with arbitrary AAD
+    if encrypted.is_empty() || encrypted[0] != CURRENT_VERSION {
+        return Err(to_js_error(less_crypto::CryptoError::UnsupportedVersion(
+            encrypted.first().copied().unwrap_or(0),
+        )));
+    }
+    aes_gcm_decrypt(key, &encrypted[1..], aad).map_err(to_js_error)
+}
+
+/// Parse a permission string, accepting both short ("admin") and path ("/space/admin") forms.
+fn parse_permission(permission: &str) -> Result<UCANPermission, JsValue> {
+    match permission {
+        "admin" | "/space/admin" => Ok(UCANPermission::Admin),
+        "write" | "/space/write" => Ok(UCANPermission::Write),
+        "read" | "/space/read" => Ok(UCANPermission::Read),
+        _ => Err(JsValue::from_str(&format!(
+            "invalid permission: {}",
+            permission
+        ))),
+    }
 }

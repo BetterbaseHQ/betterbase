@@ -1,6 +1,6 @@
 //! WASM bindings for less-auth.
 
-use crate::error::to_js_error;
+use crate::error::{to_js_error, to_js_value};
 use less_auth::{
     compute_code_challenge, compute_jwk_thumbprint, decrypt_jwe, derive_mailbox_id, encrypt_jwe,
     extract_app_keypair, extract_encryption_key, generate_code_verifier, generate_state,
@@ -11,8 +11,8 @@ use wasm_bindgen::prelude::*;
 // --- PKCE ---
 
 #[wasm_bindgen(js_name = "generateCodeVerifier")]
-pub fn wasm_generate_code_verifier() -> String {
-    generate_code_verifier()
+pub fn wasm_generate_code_verifier() -> Result<String, JsValue> {
+    generate_code_verifier().map_err(to_js_error)
 }
 
 #[wasm_bindgen(js_name = "computeCodeChallenge")]
@@ -21,8 +21,8 @@ pub fn wasm_compute_code_challenge(verifier: &str, thumbprint: Option<String>) -
 }
 
 #[wasm_bindgen(js_name = "generateState")]
-pub fn wasm_generate_state() -> String {
-    generate_state()
+pub fn wasm_generate_state() -> Result<String, JsValue> {
+    generate_state().map_err(to_js_error)
 }
 
 // --- JWK thumbprint ---
@@ -74,6 +74,7 @@ pub fn wasm_extract_encryption_key(scoped_keys_json: &str) -> Result<JsValue, Js
     let scoped_keys: ScopedKeys = serde_json::from_str(scoped_keys_json).map_err(to_js_error)?;
     match extract_encryption_key(&scoped_keys).map_err(to_js_error)? {
         Some(result) => {
+            // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
             let obj = js_sys::Object::new();
             js_sys::Reflect::set(
                 &obj,
@@ -93,7 +94,7 @@ pub fn wasm_extract_encryption_key(scoped_keys_json: &str) -> Result<JsValue, Js
 pub fn wasm_extract_app_keypair(scoped_keys_json: &str) -> Result<JsValue, JsValue> {
     let scoped_keys: ScopedKeys = serde_json::from_str(scoped_keys_json).map_err(to_js_error)?;
     match extract_app_keypair(&scoped_keys).map_err(to_js_error)? {
-        Some(keypair) => serde_wasm_bindgen::to_value(&keypair).map_err(to_js_error),
+        Some(keypair) => to_js_value(&keypair),
         None => Ok(JsValue::NULL),
     }
 }

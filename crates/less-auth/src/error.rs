@@ -37,4 +37,7 @@ pub enum AuthError {
 
     #[error("Crypto error: {0}")]
     Crypto(#[from] less_crypto::CryptoError),
+
+    #[error("Random number generation failed: {0}")]
+    RngFailed(String),
 }

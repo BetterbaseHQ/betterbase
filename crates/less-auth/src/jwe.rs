@@ -18,6 +18,8 @@ use p256::{EncodedPoint, PublicKey};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
+/// Algorithm identifier for Concat KDF (RFC 7518 §4.6.2).
+const ALG_ID: &str = "ECDH-ES+A256KW";
 /// AES-256-GCM content encryption key length.
 const CEK_LENGTH: usize = 32;
 /// AES-KW output for 32-byte key: 32 + 8 = 40 bytes.
@@ -94,7 +96,7 @@ pub fn decrypt_jwe(
     );
 
     // 7. Concat KDF to derive KEK
-    let mut kek_bytes = concat_kdf(shared_secret.raw_secret_bytes().as_slice(), "A256KW", 256);
+    let mut kek_bytes = concat_kdf(shared_secret.raw_secret_bytes().as_slice(), ALG_ID, 256);
 
     // 8. AES-KW unwrap CEK
     let encrypted_key =
@@ -161,11 +163,12 @@ pub fn encrypt_jwe(
     let shared_secret = ephemeral_secret.diffie_hellman(&recipient_public_key);
 
     // Concat KDF to derive KEK
-    let mut kek_bytes = concat_kdf(shared_secret.raw_secret_bytes().as_slice(), "A256KW", 256);
+    let mut kek_bytes = concat_kdf(shared_secret.raw_secret_bytes().as_slice(), ALG_ID, 256);
 
     // Generate random CEK
     let mut cek = [0u8; CEK_LENGTH];
-    getrandom::getrandom(&mut cek).expect("getrandom failed");
+    getrandom::getrandom(&mut cek)
+        .map_err(|e| AuthError::JweEncryptionFailed(format!("RNG failed: {}", e)))?;
 
     // AES-KW wrap CEK
     let kek = Kek::from(
@@ -185,11 +188,17 @@ pub fn encrypt_jwe(
         "enc": "A256GCM",
         "epk": epk_jwk
     });
-    let header_b64 = base64url_encode(header.to_string().as_bytes());
+    // AAD for AES-GCM is the base64url-encoded header (RFC 7516 §5.1 step 14).
+    // Use canonical_json for deterministic key ordering — header contains the
+    // nested `epk` object, so serde_json insertion order is not sufficient.
+    let header_json = less_crypto::canonical_json(&header)
+        .map_err(|e| AuthError::JweEncryptionFailed(format!("header serialization: {}", e)))?;
+    let header_b64 = base64url_encode(header_json.as_bytes());
 
     // AES-256-GCM encrypt
     let mut iv = [0u8; 12];
-    getrandom::getrandom(&mut iv).expect("getrandom failed");
+    getrandom::getrandom(&mut iv)
+        .map_err(|e| AuthError::JweEncryptionFailed(format!("RNG failed: {}", e)))?;
 
     let cipher = Aes256Gcm::new_from_slice(&cek)
         .map_err(|e| AuthError::JweEncryptionFailed(format!("AES-GCM init: {:?}", e)))?;
@@ -268,10 +277,17 @@ fn import_p256_public_jwk(jwk: &serde_json::Value) -> Result<PublicKey, AuthErro
     let x_bytes = base64url_decode(x_b64).map_err(|e| AuthError::InvalidJwk(e.to_string()))?;
     let y_bytes = base64url_decode(y_b64).map_err(|e| AuthError::InvalidJwk(e.to_string()))?;
 
-    // Build uncompressed SEC1 point: 0x04 || x || y
-    let mut uncompressed = Vec::with_capacity(1 + x_bytes.len() + y_bytes.len());
+    // Build uncompressed SEC1 point: 0x04 || x(32) || y(32)
+    // Left-pad coordinates to 32 bytes — JWKs may omit leading zeros.
+    let mut uncompressed = Vec::with_capacity(65);
     uncompressed.push(0x04);
+    if x_bytes.len() < 32 {
+        uncompressed.extend(std::iter::repeat_n(0u8, 32 - x_bytes.len()));
+    }
     uncompressed.extend_from_slice(&x_bytes);
+    if y_bytes.len() < 32 {
+        uncompressed.extend(std::iter::repeat_n(0u8, 32 - y_bytes.len()));
+    }
     uncompressed.extend_from_slice(&y_bytes);
 
     let point = EncodedPoint::from_bytes(&uncompressed)

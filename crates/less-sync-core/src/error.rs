@@ -14,8 +14,8 @@ pub enum SyncError {
     #[error("Padding error: {0}")]
     PaddingError(String),
 
-    #[error("No KEK available for epoch {0}")]
-    NoKek(u32),
+    #[error("No KEK available for epoch {epoch} (record: {record_id})")]
+    NoKek { epoch: u32, record_id: String },
 
     #[error("Cannot derive backward: epoch {target} < base epoch {base}")]
     BackwardDerivation { target: u32, base: u32 },

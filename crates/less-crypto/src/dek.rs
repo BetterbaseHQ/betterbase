@@ -16,10 +16,10 @@ pub const WRAPPED_DEK_SIZE: usize = 44;
 const AES_KW_OUTPUT_SIZE: usize = 40;
 
 /// Generate a random 256-bit Data Encryption Key.
-pub fn generate_dek() -> [u8; AES_KEY_LENGTH] {
+pub fn generate_dek() -> Result<[u8; AES_KEY_LENGTH], CryptoError> {
     let mut dek = [0u8; AES_KEY_LENGTH];
-    getrandom::getrandom(&mut dek).expect("getrandom failed");
-    dek
+    getrandom::getrandom(&mut dek).map_err(|e| CryptoError::RngFailed(e.to_string()))?;
+    Ok(dek)
 }
 
 /// Wrap a DEK with a KEK using AES-KW, prefixed with the epoch number.
@@ -117,20 +117,20 @@ mod tests {
 
     #[test]
     fn generate_dek_is_32_bytes() {
-        let dek = generate_dek();
+        let dek = generate_dek().unwrap();
         assert_eq!(dek.len(), 32);
     }
 
     #[test]
     fn generate_dek_is_unique() {
-        let dek1 = generate_dek();
-        let dek2 = generate_dek();
+        let dek1 = generate_dek().unwrap();
+        let dek2 = generate_dek().unwrap();
         assert_ne!(dek1, dek2);
     }
 
     #[test]
     fn wrap_unwrap_round_trip() {
-        let dek = generate_dek();
+        let dek = generate_dek().unwrap();
         let kek = random_key();
         let epoch = 5u32;
 
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn wrapped_dek_is_44_bytes() {
-        let dek = generate_dek();
+        let dek = generate_dek().unwrap();
         let kek = random_key();
         let wrapped = wrap_dek(&dek, &kek, 1).unwrap();
         assert_eq!(wrapped.len(), WRAPPED_DEK_SIZE);
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn epoch_big_endian_prefix() {
-        let dek = generate_dek();
+        let dek = generate_dek().unwrap();
         let kek = random_key();
         let epoch = 0x01020304u32;
 
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn wrong_kek_fails() {
-        let dek = generate_dek();
+        let dek = generate_dek().unwrap();
         let kek1 = random_key();
         let kek2 = random_key();
         let wrapped = wrap_dek(&dek, &kek1, 1).unwrap();
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn tampered_data_fails() {
-        let dek = generate_dek();
+        let dek = generate_dek().unwrap();
         let kek = random_key();
         let mut wrapped = wrap_dek(&dek, &kek, 1).unwrap();
         let last = wrapped.len() - 1;
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn epoch_zero() {
-        let dek = generate_dek();
+        let dek = generate_dek().unwrap();
         let kek = random_key();
         let wrapped = wrap_dek(&dek, &kek, 0).unwrap();
         let (unwrapped, epoch) = unwrap_dek(&wrapped, &kek).unwrap();
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn large_epoch() {
-        let dek = generate_dek();
+        let dek = generate_dek().unwrap();
         let kek = random_key();
         let epoch = 0xFFFFFFFEu32;
         let wrapped = wrap_dek(&dek, &kek, epoch).unwrap();

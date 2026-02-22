@@ -1,6 +1,6 @@
 //! WASM bindings for less-sync-core.
 
-use crate::error::to_js_error;
+use crate::error::{to_js_error, to_js_value};
 use less_sync_core::{
     build_membership_signing_message, decrypt_inbound, decrypt_membership_payload, derive_forward,
     encrypt_membership_payload, encrypt_outbound, pad_to_bucket, parse_membership_entry,
@@ -49,6 +49,7 @@ pub fn wasm_encrypt_outbound(
         encrypt_outbound(&envelope, record_id, &mut cache, DEFAULT_PADDING_BUCKETS)
             .map_err(to_js_error)?;
 
+    // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
     let result = js_sys::Object::new();
     js_sys::Reflect::set(
         &result,
@@ -85,6 +86,7 @@ pub fn wasm_decrypt_inbound(
     )
     .map_err(to_js_error)?;
 
+    // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
     let result = js_sys::Object::new();
     js_sys::Reflect::set(
         &result,
@@ -175,6 +177,7 @@ pub fn wasm_build_membership_signing_message(
 #[wasm_bindgen(js_name = "parseMembershipEntry")]
 pub fn wasm_parse_membership_entry(payload: &str) -> Result<JsValue, JsValue> {
     let entry = parse_membership_entry(payload).map_err(to_js_error)?;
+    // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
     let obj = js_sys::Object::new();
     js_sys::Reflect::set(&obj, &"ucan".into(), &JsValue::from_str(&entry.ucan)).unwrap();
     js_sys::Reflect::set(
@@ -192,7 +195,7 @@ pub fn wasm_parse_membership_entry(payload: &str) -> Result<JsValue, JsValue> {
     js_sys::Reflect::set(
         &obj,
         &"signerPublicKey".into(),
-        &serde_wasm_bindgen::to_value(&entry.signer_public_key).map_err(to_js_error)?,
+        &to_js_value(&entry.signer_public_key)?,
     )
     .unwrap();
     if let Some(epoch) = entry.epoch {
@@ -205,7 +208,7 @@ pub fn wasm_parse_membership_entry(payload: &str) -> Result<JsValue, JsValue> {
         js_sys::Reflect::set(
             &obj,
             &"publicKeyJwk".into(),
-            &serde_wasm_bindgen::to_value(pk).map_err(to_js_error)?,
+            &to_js_value(pk)?,
         )
         .unwrap();
     }

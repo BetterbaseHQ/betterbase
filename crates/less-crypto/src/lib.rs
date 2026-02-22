@@ -10,7 +10,7 @@ pub mod signing;
 pub mod types;
 pub mod ucan;
 
-pub use aes_gcm::{decrypt_v4, encrypt_v4, SyncCrypto};
+pub use aes_gcm::{aes_gcm_decrypt, aes_gcm_encrypt, decrypt_v4, encrypt_v4, SyncCrypto};
 pub use base64url::{base64url_decode, base64url_encode};
 pub use channel::{build_event_aad, build_presence_aad, derive_channel_key};
 pub use dek::{generate_dek, unwrap_dek, wrap_dek, WRAPPED_DEK_SIZE};
@@ -19,6 +19,7 @@ pub use edit_chain::{
     value_diff, verify_edit_chain, verify_edit_entry, EditDiff, EditEntry,
 };
 pub use epoch::{derive_epoch_key_from_root, derive_next_epoch_key};
+pub use hkdf::hkdf_derive;
 pub use error::CryptoError;
 pub use signing::{
     export_private_key_jwk, export_public_key_jwk, generate_p256_keypair, import_private_key_jwk,
@@ -26,6 +27,6 @@ pub use signing::{
 };
 pub use types::{EncryptionContext, CURRENT_VERSION, SUPPORTED_VERSIONS};
 pub use ucan::{
-    compress_p256_public_key, delegate_ucan, encode_did_key, encode_did_key_from_jwk,
-    issue_root_ucan, UCANPermission,
+    compress_p256_public_key, decode_did_key_to_jwk, delegate_ucan, encode_did_key,
+    encode_did_key_from_jwk, issue_root_ucan, UCANPermission,
 };

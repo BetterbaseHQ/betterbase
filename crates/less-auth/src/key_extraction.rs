@@ -5,6 +5,7 @@ use crate::types::{AppKeypairJwk, ScopedKeys};
 use less_crypto::base64url_decode;
 
 /// Result of extracting an encryption key from scoped keys.
+#[derive(Debug)]
 pub struct EncryptionKeyResult {
     /// The raw key bytes (32 bytes for AES-256).
     pub key: Vec<u8>,
@@ -27,6 +28,12 @@ pub fn extract_encryption_key(
                 if !k.is_empty() {
                     let key_bytes =
                         base64url_decode(k).map_err(|e| AuthError::Base64Decode(e.to_string()))?;
+                    if key_bytes.len() != 32 {
+                        return Err(AuthError::InvalidKeyLength {
+                            expected: 32,
+                            got: key_bytes.len(),
+                        });
+                    }
                     return Ok(Some(EncryptionKeyResult {
                         key: key_bytes,
                         key_id: key_id.clone(),
@@ -219,6 +226,26 @@ mod tests {
             },
         );
         assert!(extract_app_keypair(&keys).unwrap().is_none());
+    }
+
+    #[test]
+    fn rejects_wrong_key_length() {
+        let mut keys = ScopedKeys::new();
+        keys.insert(
+            "sync-v1".to_string(),
+            ScopedKeyEntry {
+                kty: "oct".to_string(),
+                k: Some(less_crypto::base64url_encode(&[0u8; 16])), // 16 bytes, not 32
+                alg: Some("A256GCM".to_string()),
+                kid: None,
+                crv: None,
+                x: None,
+                y: None,
+                d: None,
+            },
+        );
+        let err = extract_encryption_key(&keys).unwrap_err();
+        assert!(err.to_string().contains("Invalid key length"));
     }
 
     #[test]

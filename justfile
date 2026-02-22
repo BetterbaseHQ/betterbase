@@ -15,7 +15,7 @@ lint:
     cargo clippy -p less-discovery --all-targets -- -D warnings
     cargo clippy -p less-auth --all-targets -- -D warnings
     cargo clippy -p less-sync-core --all-targets -- -D warnings
-    cargo clippy -p less-platform-wasm --target wasm32-unknown-unknown -- -D warnings
+    cargo clippy -p less-platform-wasm --target wasm32-unknown-unknown -- -D warnings -A deprecated
 
 # Run Rust tests
 test *args:

@@ -87,12 +87,15 @@ pub fn rewrap_deks(
     for (id, wrapped_dek) in wrapped_deks {
         let dek_epoch = peek_epoch(wrapped_dek)?;
         if dek_epoch == new_epoch {
-            continue; // Already at target epoch
+            // Already at target epoch — pass through unchanged.
+            result.push((id.clone(), wrapped_dek.clone()));
+            continue;
         }
 
-        let unwrap_key = key_cache
-            .get(&dek_epoch)
-            .ok_or(SyncError::NoKek(dek_epoch))?;
+        let unwrap_key = key_cache.get(&dek_epoch).ok_or(SyncError::NoKek {
+            epoch: dek_epoch,
+            record_id: id.clone(),
+        })?;
 
         let (mut dek, _epoch) = unwrap_dek(wrapped_dek, unwrap_key)?;
         let rewrapped = wrap_dek(&dek, new_key, new_epoch)?;
@@ -164,8 +167,8 @@ mod tests {
         let space_id = "space-1";
 
         // Create some DEKs wrapped at epoch 1
-        let dek1 = generate_dek();
-        let dek2 = generate_dek();
+        let dek1 = generate_dek().unwrap();
+        let dek2 = generate_dek().unwrap();
         let wrapped1 = crypto_wrap_dek(&dek1, &key1, 1).unwrap();
         let wrapped2 = crypto_wrap_dek(&dek2, &key1, 1).unwrap();
 
@@ -199,12 +202,12 @@ mod tests {
         let space_id = "space-1";
 
         // DEK at epoch 1
-        let dek_a = generate_dek();
+        let dek_a = generate_dek().unwrap();
         let wrapped_a = crypto_wrap_dek(&dek_a, &key1, 1).unwrap();
 
         // DEK at epoch 2
         let key2 = derive_next_epoch_key(&key1, space_id, 2).unwrap();
-        let dek_b = generate_dek();
+        let dek_b = generate_dek().unwrap();
         let wrapped_b = crypto_wrap_dek(&dek_b, &key2, 2).unwrap();
 
         let wrapped_deks = vec![
@@ -229,11 +232,11 @@ mod tests {
     }
 
     #[test]
-    fn rewrap_skips_already_at_target() {
+    fn rewrap_passes_through_already_at_target() {
         let key = random_key();
         let space_id = "space-1";
 
-        let dek = generate_dek();
+        let dek = generate_dek().unwrap();
         let wrapped = crypto_wrap_dek(&dek, &key, 2).unwrap(); // Already at epoch 2
 
         let key2 = derive_next_epoch_key(&key, space_id, 2).unwrap();
@@ -247,6 +250,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.is_empty()); // Skipped
+        assert_eq!(result.len(), 1); // Passed through unchanged
+        assert_eq!(result[0].1, wrapped.to_vec());
     }
 }

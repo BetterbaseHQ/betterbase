@@ -3,6 +3,7 @@
 //! Provides DID key encoding and UCAN token issuance for P-256 keys.
 
 use p256::ecdsa::SigningKey;
+use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
 use serde_json::Value;
 
 use crate::base64url::{base64url_decode, base64url_encode};
@@ -101,11 +102,82 @@ pub fn encode_did_key(signing_key: &SigningKey) -> Result<String, CryptoError> {
     encode_did_key_from_jwk(&jwk)
 }
 
+/// Decode a `did:key:z...` string back to a P-256 public key JWK.
+///
+/// Reverses `encode_did_key_from_jwk`: strips the `did:key:z` prefix,
+/// base58-decodes, parses the P-256 multicodec varint (0x1200), and
+/// decompresses the SEC1 compressed point to an uncompressed JWK.
+pub fn decode_did_key_to_jwk(did: &str) -> Result<Value, CryptoError> {
+    let encoded = did
+        .strip_prefix("did:key:z")
+        .ok_or_else(|| CryptoError::InvalidJwk("expected did:key:z prefix".to_string()))?;
+
+    let payload = bs58::decode(encoded)
+        .into_vec()
+        .map_err(|e| CryptoError::InvalidJwk(format!("base58 decode: {}", e)))?;
+
+    // Parse varint — P-256 multicodec is 0x1200, encoded as [0x80, 0x24]
+    if payload.len() < 2 {
+        return Err(CryptoError::InvalidJwk("DID payload too short".to_string()));
+    }
+    let (codec, varint_len) = varint_decode(&payload)?;
+    if codec != 0x1200 {
+        return Err(CryptoError::InvalidJwk(format!(
+            "expected P-256 multicodec 0x1200, got 0x{:04x}",
+            codec
+        )));
+    }
+
+    let compressed = &payload[varint_len..];
+    if compressed.len() != 33 {
+        return Err(CryptoError::InvalidJwk(format!(
+            "expected 33-byte compressed point, got {}",
+            compressed.len()
+        )));
+    }
+
+    // Decompress SEC1 point using p256
+    let point = p256::EncodedPoint::from_bytes(compressed)
+        .map_err(|e| CryptoError::InvalidJwk(format!("invalid compressed point: {}", e)))?;
+    let public_key = p256::PublicKey::from_encoded_point(&point)
+        .into_option()
+        .ok_or_else(|| CryptoError::InvalidJwk("point not on P-256 curve".to_string()))?;
+    let uncompressed = public_key.to_encoded_point(false);
+
+    let x = base64url_encode(uncompressed.x().unwrap().as_slice());
+    let y = base64url_encode(uncompressed.y().unwrap().as_slice());
+
+    Ok(serde_json::json!({
+        "kty": "EC",
+        "crv": "P-256",
+        "x": x,
+        "y": y,
+    }))
+}
+
+/// Decode an unsigned varint (LEB128). Returns (value, bytes_consumed).
+fn varint_decode(bytes: &[u8]) -> Result<(u32, usize), CryptoError> {
+    let mut value: u32 = 0;
+    let mut shift: u32 = 0;
+    for (i, &byte) in bytes.iter().enumerate() {
+        if shift >= 32 {
+            return Err(CryptoError::InvalidJwk("varint overflow".to_string()));
+        }
+        value |= ((byte & 0x7f) as u32) << shift;
+        shift += 7;
+        if byte & 0x80 == 0 {
+            return Ok((value, i + 1));
+        }
+    }
+    Err(CryptoError::InvalidJwk("unterminated varint".to_string()))
+}
+
 /// Generate a random nonce (16 bytes, base64url).
-fn generate_nonce() -> String {
+fn generate_nonce() -> Result<String, CryptoError> {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).expect("getrandom failed");
-    base64url_encode(&bytes)
+    getrandom::getrandom(&mut bytes)
+        .map_err(|e| CryptoError::RngFailed(e.to_string()))?;
+    Ok(base64url_encode(&bytes))
 }
 
 /// Sign a JWT with ES256 (ECDSA P-256 + SHA-256).
@@ -123,6 +195,10 @@ fn sign_es256_jwt(private_key: &SigningKey, payload: &Value) -> Result<String, C
 }
 
 /// Issue a root UCAN (no proof chain).
+///
+/// `now_seconds` is the current time as seconds since UNIX epoch.
+/// Callers should obtain this from an appropriate platform-specific source
+/// (e.g. `js_sys::Date::now()` in WASM, `SystemTime::now()` on native).
 pub fn issue_root_ucan(
     private_key: &SigningKey,
     issuer_did: &str,
@@ -130,19 +206,15 @@ pub fn issue_root_ucan(
     space_id: &str,
     permission: UCANPermission,
     expires_in_seconds: u64,
+    now_seconds: u64,
 ) -> Result<String, CryptoError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
     let payload = serde_json::json!({
         "iss": issuer_did,
         "aud": [audience_did],
         "cmd": permission.as_str(),
         "with": format!("space:{}", space_id),
-        "nonce": generate_nonce(),
-        "exp": now + expires_in_seconds,
+        "nonce": generate_nonce()?,
+        "exp": now_seconds + expires_in_seconds,
         "prf": [],
     });
 
@@ -150,6 +222,8 @@ pub fn issue_root_ucan(
 }
 
 /// Delegate a UCAN by issuing a new token with a proof chain.
+///
+/// `now_seconds` is the current time as seconds since UNIX epoch.
 pub fn delegate_ucan(
     private_key: &SigningKey,
     issuer_did: &str,
@@ -158,14 +232,14 @@ pub fn delegate_ucan(
     permission: UCANPermission,
     expires_in_seconds: u64,
     proof: &str,
+    now_seconds: u64,
 ) -> Result<String, CryptoError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let mut exp = now + expires_in_seconds;
+    let mut exp = now_seconds + expires_in_seconds;
 
-    // Cap expiry to not exceed the parent UCAN's exp
+    // Best-effort: cap expiry to not exceed the parent UCAN's exp.
+    // Silently ignores malformed proofs — the delegation is still valid,
+    // it just won't have its expiry capped. Proof verification happens
+    // on the consuming side, not here.
     if let Some(parent_payload_b64) = proof.split('.').nth(1) {
         if let Ok(parent_bytes) = base64url_decode(parent_payload_b64) {
             if let Ok(parent_payload) = serde_json::from_slice::<Value>(&parent_bytes) {
@@ -183,7 +257,7 @@ pub fn delegate_ucan(
         "aud": [audience_did],
         "cmd": permission.as_str(),
         "with": format!("space:{}", space_id),
-        "nonce": generate_nonce(),
+        "nonce": generate_nonce()?,
         "exp": exp,
         "prf": [proof],
     });
@@ -195,6 +269,13 @@ pub fn delegate_ucan(
 mod tests {
     use super::*;
     use crate::signing::generate_p256_keypair;
+
+    fn now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
 
     fn parse_jwt(token: &str) -> (Value, Value) {
         let parts: Vec<&str> = token.split('.').collect();
@@ -279,6 +360,40 @@ mod tests {
     }
 
     #[test]
+    fn decode_did_key_round_trips() {
+        let key = generate_p256_keypair();
+        let jwk = export_public_key_jwk(key.verifying_key());
+        let did = encode_did_key_from_jwk(&jwk).unwrap();
+        let decoded_jwk = decode_did_key_to_jwk(&did).unwrap();
+        assert_eq!(jwk, decoded_jwk);
+    }
+
+    #[test]
+    fn decode_did_key_go_test_vector() {
+        let did = "did:key:zDnaerx9CtbPJ1q36T5Ln5wYt3MQYeGRG5ehnPAmxcf5mDZpv";
+        let jwk = decode_did_key_to_jwk(did).unwrap();
+        assert_eq!(jwk["kty"], "EC");
+        assert_eq!(jwk["crv"], "P-256");
+        assert_eq!(jwk["x"], "igrFmi0whuihKnj9R3Om1SoMph72wUGeFaBbzG2vzns");
+        assert_eq!(jwk["y"], "efsX5b10x8yjyrj4ny3pGfLcY7Xby1KzgqOdqnsrJIM");
+    }
+
+    #[test]
+    fn decode_did_key_rejects_bad_prefix() {
+        assert!(decode_did_key_to_jwk("did:web:example.com").is_err());
+        assert!(decode_did_key_to_jwk("not-a-did").is_err());
+    }
+
+    #[test]
+    fn decode_did_key_rejects_wrong_codec() {
+        // Construct a did:key with Ed25519 multicodec (0xed)
+        let mut payload = vec![0xed, 0x01]; // varint for 0xed
+        payload.extend_from_slice(&[0u8; 32]); // dummy 32-byte key
+        let encoded = format!("did:key:z{}", bs58::encode(&payload).into_string());
+        assert!(decode_did_key_to_jwk(&encoded).is_err());
+    }
+
+    #[test]
     fn issue_root_ucan_structure() {
         let key = generate_p256_keypair();
         let issuer_did = encode_did_key(&key).unwrap();
@@ -290,6 +405,7 @@ mod tests {
             "550e8400-e29b-41d4-a716-446655440000",
             UCANPermission::Admin,
             3600,
+            now_secs(),
         )
         .unwrap();
 
@@ -321,6 +437,7 @@ mod tests {
             "test-space",
             UCANPermission::Admin,
             3600,
+            now_secs(),
         )
         .unwrap();
 
@@ -341,6 +458,7 @@ mod tests {
         let owner_did = encode_did_key(&owner).unwrap();
         let delegate_did = encode_did_key(&delegate).unwrap();
 
+        let now = now_secs();
         let root_ucan = issue_root_ucan(
             &owner,
             &owner_did,
@@ -348,6 +466,7 @@ mod tests {
             "test-space",
             UCANPermission::Write,
             3600,
+            now,
         )
         .unwrap();
 
@@ -359,6 +478,7 @@ mod tests {
             UCANPermission::Read,
             1800,
             &root_ucan,
+            now,
         )
         .unwrap();
 
@@ -379,6 +499,7 @@ mod tests {
         let owner_did = encode_did_key(&owner).unwrap();
         let delegate_did = encode_did_key(&delegate).unwrap();
 
+        let now = now_secs();
         let root_ucan = issue_root_ucan(
             &owner,
             &owner_did,
@@ -386,6 +507,7 @@ mod tests {
             "test-space",
             UCANPermission::Admin,
             3600,
+            now,
         )
         .unwrap();
 
@@ -397,6 +519,7 @@ mod tests {
             UCANPermission::Write,
             1800,
             &root_ucan,
+            now,
         )
         .unwrap();
 
@@ -415,6 +538,7 @@ mod tests {
         let owner_did = encode_did_key(&owner).unwrap();
         let delegate_did = encode_did_key(&delegate).unwrap();
 
+        let now = now_secs();
         let root_ucan = issue_root_ucan(
             &owner,
             &owner_did,
@@ -422,6 +546,7 @@ mod tests {
             "test-space",
             UCANPermission::Admin,
             60, // Short expiry
+            now,
         )
         .unwrap();
 
@@ -436,6 +561,7 @@ mod tests {
             UCANPermission::Read,
             3600, // Requests longer expiry
             &root_ucan,
+            now,
         )
         .unwrap();
 
@@ -458,6 +584,7 @@ mod tests {
             UCANPermission::Read,
             1800,
             "not.a-valid-jwt.token",
+            now_secs(),
         );
         assert!(result.is_ok());
 
