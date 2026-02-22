@@ -246,4 +246,81 @@ mod tests {
         .unwrap();
         assert_eq!(decoded.h.as_deref(), Some("chain-data"));
     }
+
+    #[test]
+    fn no_padding_round_trip() {
+        let key = random_key();
+        let mut enc_cache = EpochKeyCache::new(&key, 0, "space-1");
+        let mut dec_cache = EpochKeyCache::new(&key, 0, "space-1");
+
+        let envelope = BlobEnvelope {
+            c: "tasks".to_string(),
+            v: 1,
+            crdt: vec![1, 2, 3],
+            h: None,
+        };
+
+        // Empty padding_buckets = no padding
+        let (blob, wrapped_dek) =
+            encrypt_outbound(&envelope, "rec-1", &mut enc_cache, &[]).unwrap();
+
+        let decoded = decrypt_inbound(&blob, &wrapped_dek, "rec-1", &mut dec_cache, &[]).unwrap();
+
+        assert_eq!(decoded.c, "tasks");
+        assert_eq!(decoded.crdt, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn wrong_space_id_fails() {
+        let key = random_key();
+        let mut enc_cache = EpochKeyCache::new(&key, 0, "space-1");
+        let mut dec_cache = EpochKeyCache::new(&key, 0, "space-WRONG");
+
+        let envelope = BlobEnvelope {
+            c: "tasks".to_string(),
+            v: 1,
+            crdt: vec![1, 2, 3],
+            h: None,
+        };
+
+        let (blob, wrapped_dek) =
+            encrypt_outbound(&envelope, "rec-1", &mut enc_cache, DEFAULT_PADDING_BUCKETS).unwrap();
+
+        assert!(decrypt_inbound(
+            &blob,
+            &wrapped_dek,
+            "rec-1",
+            &mut dec_cache,
+            DEFAULT_PADDING_BUCKETS,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn empty_crdt_round_trip() {
+        let key = random_key();
+        let mut enc_cache = EpochKeyCache::new(&key, 0, "space-1");
+        let mut dec_cache = EpochKeyCache::new(&key, 0, "space-1");
+
+        let envelope = BlobEnvelope {
+            c: "tasks".to_string(),
+            v: 1,
+            crdt: vec![],
+            h: None,
+        };
+
+        let (blob, wrapped_dek) =
+            encrypt_outbound(&envelope, "rec-1", &mut enc_cache, DEFAULT_PADDING_BUCKETS).unwrap();
+
+        let decoded = decrypt_inbound(
+            &blob,
+            &wrapped_dek,
+            "rec-1",
+            &mut dec_cache,
+            DEFAULT_PADDING_BUCKETS,
+        )
+        .unwrap();
+
+        assert!(decoded.crdt.is_empty());
+    }
 }

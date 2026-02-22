@@ -1301,4 +1301,105 @@ mod tests {
             serde_json::json!({"a": {"b": {"c": 42}}})
         );
     }
+
+    #[test]
+    fn value_diff_type_change_primitive_to_object() {
+        let diffs = value_diff(
+            &serde_json::json!({"x": 42}),
+            &serde_json::json!({"x": {"nested": true}}),
+            None,
+        );
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, "x");
+        assert_eq!(diffs[0].from, serde_json::json!(42));
+        assert_eq!(diffs[0].to, serde_json::json!({"nested": true}));
+    }
+
+    #[test]
+    fn value_diff_type_change_object_to_primitive() {
+        let diffs = value_diff(
+            &serde_json::json!({"x": {"nested": true}}),
+            &serde_json::json!({"x": 42}),
+            None,
+        );
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, "x");
+    }
+
+    #[test]
+    fn value_diff_type_change_array_to_object() {
+        let diffs = value_diff(
+            &serde_json::json!({"x": [1, 2, 3]}),
+            &serde_json::json!({"x": {"a": 1}}),
+            None,
+        );
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, "x");
+    }
+
+    #[test]
+    fn value_diff_deeply_nested() {
+        let diffs = value_diff(
+            &serde_json::json!({"a": {"b": {"c": {"d": 1}}}}),
+            &serde_json::json!({"a": {"b": {"c": {"d": 2}}}}),
+            None,
+        );
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, "a.b.c.d");
+    }
+
+    #[test]
+    fn value_diff_empty_objects() {
+        let diffs = value_diff(&serde_json::json!({}), &serde_json::json!({}), None);
+        assert!(diffs.is_empty());
+    }
+
+    #[test]
+    fn value_diff_with_prefix() {
+        let diffs = value_diff(
+            &serde_json::json!({"x": 1}),
+            &serde_json::json!({"x": 2}),
+            Some("root"),
+        );
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, "root.x");
+    }
+
+    #[test]
+    fn value_diff_non_object_inputs() {
+        // Both non-objects should return empty diffs
+        let diffs = value_diff(&serde_json::json!(42), &serde_json::json!(43), None);
+        assert!(diffs.is_empty());
+        let diffs = value_diff(&serde_json::json!([1]), &serde_json::json!([2]), None);
+        assert!(diffs.is_empty());
+    }
+
+    #[test]
+    fn canonical_json_empty_object() {
+        assert_eq!(canonical_json(&serde_json::json!({})).unwrap(), "{}");
+    }
+
+    #[test]
+    fn canonical_json_empty_array() {
+        assert_eq!(canonical_json(&serde_json::json!([])).unwrap(), "[]");
+    }
+
+    #[test]
+    fn canonical_json_special_chars_in_strings() {
+        let result =
+            canonical_json(&serde_json::json!({"key": "hello\nworld\t\"quoted\""})).unwrap();
+        assert!(result.contains("\\n"));
+        assert!(result.contains("\\t"));
+        assert!(result.contains("\\\""));
+    }
+
+    #[test]
+    fn canonical_json_deeply_nested_sort() {
+        let result = canonical_json(&serde_json::json!({
+            "z": {"b": {"d": 1, "c": 2}, "a": 3},
+            "a": 4
+        }))
+        .unwrap();
+        assert_eq!(result, r#"{"a":4,"z":{"a":3,"b":{"c":2,"d":1}}}"#);
+    }
 }

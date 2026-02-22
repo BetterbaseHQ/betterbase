@@ -253,4 +253,31 @@ mod tests {
         assert_eq!(result.len(), 1); // Passed through unchanged
         assert_eq!(result[0].1, wrapped.to_vec());
     }
+
+    #[test]
+    fn empty_dek_list_returns_empty() {
+        let key1 = random_key();
+        let space_id = "space-1";
+        let key2 = derive_next_epoch_key(&key1, space_id, 2).unwrap();
+
+        let result = rewrap_deks(&[], &key1, 1, &key2, 2, space_id).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn derive_forward_matches_epoch_cache() {
+        use crate::epoch_cache::EpochKeyCache;
+
+        let root = random_key();
+        let space_id = "space-test";
+
+        // derive_forward from epoch 0 to epoch 5
+        let forward_key = derive_forward(&root, space_id, 0, 5).unwrap();
+
+        // EpochKeyCache.get_kek should produce the same key
+        let mut cache = EpochKeyCache::new(&root, 0, space_id);
+        let cache_key = cache.get_kek(5).unwrap();
+
+        assert_eq!(forward_key, cache_key.to_vec());
+    }
 }

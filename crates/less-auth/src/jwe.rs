@@ -444,7 +444,7 @@ mod tests {
         let jwe = encrypt_jwe(b"secret", &public_jwk).unwrap();
 
         // Tamper with ciphertext part
-        let mut parts: Vec<&str> = jwe.split('.').collect();
+        let parts: Vec<&str> = jwe.split('.').collect();
         let mut ct_bytes = base64url_decode(parts[3]).unwrap();
         if !ct_bytes.is_empty() {
             ct_bytes[0] ^= 0xff;
@@ -479,5 +479,95 @@ mod tests {
         let jwe = encrypt_jwe(b"", &public_jwk).unwrap();
         let decrypted = decrypt_jwe(&jwe, &private_jwk).unwrap();
         assert!(decrypted.is_empty());
+    }
+
+    #[test]
+    fn wrong_alg_rejected() {
+        let (public_jwk, private_jwk) = generate_test_keypair();
+        let jwe = encrypt_jwe(b"test", &public_jwk).unwrap();
+
+        // Replace the header with wrong alg
+        let parts: Vec<&str> = jwe.split('.').collect();
+        let bad_header = serde_json::json!({"alg": "RSA-OAEP", "enc": "A256GCM", "epk": {}});
+        let bad_header_b64 = base64url_encode(bad_header.to_string().as_bytes());
+        let bad_jwe = format!(
+            "{}.{}.{}.{}.{}",
+            bad_header_b64, parts[1], parts[2], parts[3], parts[4]
+        );
+
+        let result = decrypt_jwe(&bad_jwe, &private_jwk);
+        assert!(
+            matches!(result, Err(AuthError::JweUnsupportedAlgorithm(_))),
+            "Expected JweUnsupportedAlgorithm, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn wrong_enc_rejected() {
+        let (public_jwk, private_jwk) = generate_test_keypair();
+        let jwe = encrypt_jwe(b"test", &public_jwk).unwrap();
+
+        let parts: Vec<&str> = jwe.split('.').collect();
+        let header_bytes = base64url_decode(parts[0]).unwrap();
+        let mut header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
+        header["enc"] = serde_json::json!("A128GCM");
+        let bad_header_b64 = base64url_encode(serde_json::to_string(&header).unwrap().as_bytes());
+        let bad_jwe = format!(
+            "{}.{}.{}.{}.{}",
+            bad_header_b64, parts[1], parts[2], parts[3], parts[4]
+        );
+
+        let result = decrypt_jwe(&bad_jwe, &private_jwk);
+        assert!(
+            matches!(result, Err(AuthError::JweUnsupportedAlgorithm(_))),
+            "Expected JweUnsupportedAlgorithm, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn large_payload_round_trip() {
+        let (public_jwk, private_jwk) = generate_test_keypair();
+        let mut large = vec![0u8; 64 * 1024]; // 64KB
+        getrandom::getrandom(&mut large).unwrap();
+
+        let jwe = encrypt_jwe(&large, &public_jwk).unwrap();
+        let decrypted = decrypt_jwe(&jwe, &private_jwk).unwrap();
+        assert_eq!(decrypted, large);
+    }
+
+    #[test]
+    fn rejects_tampered_tag() {
+        let (public_jwk, private_jwk) = generate_test_keypair();
+        let jwe = encrypt_jwe(b"secret", &public_jwk).unwrap();
+
+        let parts: Vec<&str> = jwe.split('.').collect();
+        let mut tag = base64url_decode(parts[4]).unwrap();
+        if !tag.is_empty() {
+            tag[0] ^= 0xff;
+        }
+        let tampered_jwe = format!(
+            "{}.{}.{}.{}.{}",
+            parts[0],
+            parts[1],
+            parts[2],
+            parts[3],
+            base64url_encode(&tag)
+        );
+
+        assert!(decrypt_jwe(&tampered_jwe, &private_jwk).is_err());
+    }
+
+    #[test]
+    fn each_encryption_unique_ciphertext() {
+        let (public_jwk, _) = generate_test_keypair();
+        let plaintext = b"same plaintext";
+
+        let jwe1 = encrypt_jwe(plaintext, &public_jwk).unwrap();
+        let jwe2 = encrypt_jwe(plaintext, &public_jwk).unwrap();
+
+        // Different ephemeral keys and IVs mean different output
+        assert_ne!(jwe1, jwe2);
     }
 }

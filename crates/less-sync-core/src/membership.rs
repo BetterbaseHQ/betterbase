@@ -2,8 +2,8 @@
 
 use crate::error::SyncError;
 use less_crypto::{
-    base64url_decode, base64url_encode, decode_did_key_to_jwk, decrypt_v4,
-    encode_did_key_from_jwk, encrypt_v4, verify, EncryptionContext,
+    base64url_decode, base64url_encode, decode_did_key_to_jwk, decrypt_v4, encode_did_key_from_jwk,
+    encrypt_v4, verify, EncryptionContext,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -438,5 +438,165 @@ mod tests {
             let et = MembershipEntryType::from_str(t).unwrap();
             assert_eq!(et.as_str(), *t);
         }
+    }
+
+    #[test]
+    fn verify_membership_entry_end_to_end() {
+        use less_crypto::signing::{export_public_key_jwk, generate_p256_keypair};
+        use less_crypto::ucan::{encode_did_key, issue_root_ucan, UCANPermission};
+
+        let issuer_key = generate_p256_keypair();
+        let issuer_jwk = export_public_key_jwk(issuer_key.verifying_key());
+        let issuer_did = encode_did_key(&issuer_key).unwrap();
+
+        let audience_key = generate_p256_keypair();
+        let audience_did = encode_did_key(&audience_key).unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let ucan = issue_root_ucan(
+            &issuer_key,
+            &issuer_did,
+            &audience_did,
+            "space-1",
+            UCANPermission::Admin,
+            3600,
+            now,
+        )
+        .unwrap();
+
+        let space_id = "space-1";
+        let signer_handle = "alice@example.com";
+        let recipient_handle = "bob@example.com";
+
+        let message = build_membership_signing_message(
+            MembershipEntryType::Delegation,
+            space_id,
+            &issuer_did,
+            &ucan,
+            signer_handle,
+            recipient_handle,
+        );
+        let signature = less_crypto::sign(&issuer_key, &message).unwrap();
+
+        let entry = MembershipEntryPayload {
+            ucan,
+            entry_type: MembershipEntryType::Delegation,
+            signature,
+            signer_public_key: issuer_jwk,
+            epoch: Some(1),
+            mailbox_id: None,
+            public_key_jwk: None,
+            signer_handle: Some(signer_handle.to_string()),
+            recipient_handle: Some(recipient_handle.to_string()),
+        };
+
+        let result = verify_membership_entry(&entry, space_id).unwrap();
+        assert!(result, "Valid membership entry should verify");
+    }
+
+    #[test]
+    fn verify_rejects_wrong_signer() {
+        use less_crypto::signing::{export_public_key_jwk, generate_p256_keypair};
+        use less_crypto::ucan::{encode_did_key, issue_root_ucan, UCANPermission};
+
+        let issuer_key = generate_p256_keypair();
+        let issuer_did = encode_did_key(&issuer_key).unwrap();
+
+        let audience_key = generate_p256_keypair();
+        let audience_did = encode_did_key(&audience_key).unwrap();
+
+        let wrong_key = generate_p256_keypair();
+        let wrong_jwk = export_public_key_jwk(wrong_key.verifying_key());
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let ucan = issue_root_ucan(
+            &issuer_key,
+            &issuer_did,
+            &audience_did,
+            "space-1",
+            UCANPermission::Admin,
+            3600,
+            now,
+        )
+        .unwrap();
+
+        let message = build_membership_signing_message(
+            MembershipEntryType::Delegation,
+            "space-1",
+            &issuer_did,
+            &ucan,
+            "",
+            "",
+        );
+        let signature = less_crypto::sign(&issuer_key, &message).unwrap();
+
+        let entry = MembershipEntryPayload {
+            ucan,
+            entry_type: MembershipEntryType::Delegation,
+            signature,
+            signer_public_key: wrong_jwk, // Wrong signer
+            epoch: None,
+            mailbox_id: None,
+            public_key_jwk: None,
+            signer_handle: None,
+            recipient_handle: None,
+        };
+
+        let result = verify_membership_entry(&entry, "space-1").unwrap();
+        assert!(!result, "Wrong signer should fail verification");
+    }
+
+    #[test]
+    fn handle_validation_edge_cases() {
+        // Empty string returns None
+        assert!(validate_handle(Some(&serde_json::json!(""))).is_none());
+        // Oversized handle returns None
+        let long = "x".repeat(321);
+        assert!(validate_handle(Some(&serde_json::json!(long))).is_none());
+        // Valid handle returns Some
+        assert_eq!(
+            validate_handle(Some(&serde_json::json!("alice@example.com"))),
+            Some("alice@example.com".to_string())
+        );
+        // Non-string returns None
+        assert!(validate_handle(Some(&serde_json::json!(42))).is_none());
+        // None returns None
+        assert!(validate_handle(None).is_none());
+    }
+
+    #[test]
+    fn serialize_parse_all_optional_fields() {
+        let entry = MembershipEntryPayload {
+            ucan: "eyJ...".to_string(),
+            entry_type: MembershipEntryType::Delegation,
+            signature: vec![1, 2, 3],
+            signer_public_key: serde_json::json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}),
+            epoch: Some(5),
+            mailbox_id: Some("mailbox-123".to_string()),
+            public_key_jwk: Some(serde_json::json!({"kty": "EC"})),
+            signer_handle: Some("alice@example.com".to_string()),
+            recipient_handle: Some("bob@example.com".to_string()),
+        };
+
+        let serialized = serialize_membership_entry(&entry);
+        let reparsed = parse_membership_entry(&serialized).unwrap();
+
+        assert_eq!(reparsed.epoch, Some(5));
+        assert_eq!(reparsed.mailbox_id.as_deref(), Some("mailbox-123"));
+        assert_eq!(
+            reparsed.public_key_jwk,
+            Some(serde_json::json!({"kty": "EC"}))
+        );
+        assert_eq!(reparsed.signer_handle.as_deref(), Some("alice@example.com"));
+        assert_eq!(
+            reparsed.recipient_handle.as_deref(),
+            Some("bob@example.com")
+        );
     }
 }
