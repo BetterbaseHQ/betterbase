@@ -60,6 +60,8 @@ export interface SyncEventData {
 export interface SyncCryptoInterface {
   encrypt(data: Uint8Array, context?: EncryptionContext): Uint8Array;
   decrypt(encrypted: Uint8Array, context?: EncryptionContext): Uint8Array;
+  /** Zero key material. Implementations should be idempotent. */
+  destroy(): void;
 }
 
 /**

@@ -13,21 +13,10 @@
  */
 
 import type { TypedAdapter, CollectionRead } from "@less-platform/db";
-import {
-  SyncCrypto,
-  DEFAULT_EPOCH_ADVANCE_INTERVAL_MS,
-} from "../crypto/index.js";
-import {
-  delegateUCAN,
-  sign,
-  type UCANPermission,
-} from "../crypto/internals.js";
+import { SyncCrypto, DEFAULT_EPOCH_ADVANCE_INTERVAL_MS } from "../crypto/index.js";
+import { delegateUCAN, sign, type UCANPermission } from "../crypto/internals.js";
 import { encryptJwe, decryptJwe } from "../auth/internals.js";
-import {
-  createSharedSpace,
-  UCAN_LIFETIME_SECONDS,
-  type SpaceCredentials,
-} from "./spaces.js";
+import { createSharedSpace, UCAN_LIFETIME_SECONDS, type SpaceCredentials } from "./spaces.js";
 import { InvitationClient, type InvitationPayload } from "./invitations.js";
 import { SyncClient, AuthenticationError } from "./client.js";
 import { base64ToBytes, bytesToBase64 } from "./encoding.js";
@@ -46,22 +35,9 @@ import {
   type MembershipEntryType,
   type MembershipEntryPayload,
 } from "./membership.js";
-import {
-  advanceEpoch,
-  rewrapAllDEKs,
-  deriveForward,
-  EpochMismatchError,
-} from "./reencrypt.js";
-import {
-  spaces,
-  type SpaceRole,
-  type SpaceStatus,
-} from "./spaces-collection.js";
-import type {
-  SpaceFields,
-  SpaceWriteOptions,
-  SpaceQueryOptions,
-} from "./spaces-middleware.js";
+import { advanceEpoch, rewrapAllDEKs, deriveForward, EpochMismatchError } from "./reencrypt.js";
+import { spaces, type SpaceRole, type SpaceStatus } from "./spaces-collection.js";
+import type { SpaceFields, SpaceWriteOptions, SpaceQueryOptions } from "./spaces-middleware.js";
 import type { SyncCryptoInterface, TokenProvider } from "./types.js";
 import type { WSClient } from "./ws-client.js";
 
@@ -150,8 +126,7 @@ export class SpaceManager {
    */
   /** Assert that the WSClient has been set, or throw. */
   private get ws(): WSClient {
-    if (!this.config.ws)
-      throw new Error("WSClient not set — call setWSClient() first");
+    if (!this.config.ws) throw new Error("WSClient not set — call setWSClient() first");
     return this.config.ws;
   }
 
@@ -178,11 +153,7 @@ export class SpaceManager {
    * @returns The new space ID
    */
   async createSpace(): Promise<string> {
-    const credentials = await createSharedSpace(
-      this.ws,
-      this.config.keypair,
-      this.config.selfDID,
-    );
+    const credentials = await createSharedSpace(this.ws, this.config.keypair, this.config.selfDID);
 
     // Write credentials to the spaces collection
     await this.writeSpaceRecord(credentials, {
@@ -233,10 +204,7 @@ export class SpaceManager {
   async userExists(handle: string): Promise<boolean> {
     const resolved = this.normalizeHandle(handle); // let config errors propagate
     try {
-      await this.invitationClient.fetchRecipientKey(
-        resolved,
-        this.config.clientId,
-      );
+      await this.invitationClient.fetchRecipientKey(resolved, this.config.clientId);
       return true;
     } catch (err) {
       console.error("[less-sync] Failed to check if user exists:", err);
@@ -287,8 +255,7 @@ export class SpaceManager {
 
     // Look up space credentials by spaceId field
     const spaceRecord = await this.findBySpaceId(spaceId);
-    if (!spaceRecord)
-      throw new Error(`No credentials found for space ${spaceId}`);
+    if (!spaceRecord) throw new Error(`No credentials found for space ${spaceId}`);
     if (spaceRecord.role !== "admin") throw new Error("Only admins can invite");
 
     // Fetch recipient's public key
@@ -341,13 +308,8 @@ export class SpaceManager {
 
     // Send encrypted invitation — address by mailbox ID (client-derived pseudonymous identifier)
     // so the sync server can deliver without learning plaintext identity.
-    if (
-      !recipientKey.mailbox_id ||
-      !/^[0-9a-f]{64}$/.test(recipientKey.mailbox_id)
-    ) {
-      throw new Error(
-        "Recipient has no valid mailbox_id — cannot deliver invitation",
-      );
+    if (!recipientKey.mailbox_id || !/^[0-9a-f]{64}$/.test(recipientKey.mailbox_id)) {
+      throw new Error("Recipient has no valid mailbox_id — cannot deliver invitation");
     }
     await this.invitationClient.sendInvitation(
       recipientKey.mailbox_id,
@@ -483,8 +445,7 @@ export class SpaceManager {
     } catch (err) {
       // Re-throw auth failures — stale cache should not hide revoked access
       if (err instanceof AuthenticationError) throw err;
-      if (err instanceof Error && /forbidden|revoked/i.test(err.message))
-        throw err;
+      if (err instanceof Error && /forbidden|revoked/i.test(err.message)) throw err;
       // Network/transient errors — return cached members for offline access
       const spaceRecord = await this.findBySpaceId(spaceId);
       return (spaceRecord?.members as Member[] | undefined) ?? [];
@@ -502,10 +463,7 @@ export class SpaceManager {
     try {
       await this.dedupFetchMembers(spaceId);
     } catch (err) {
-      console.error(
-        `[less-sync] Failed to refresh members for space ${spaceId}:`,
-        err,
-      );
+      console.error(`[less-sync] Failed to refresh members for space ${spaceId}:`, err);
     }
   }
 
@@ -536,33 +494,20 @@ export class SpaceManager {
   private async fetchAndCacheMembers(spaceId: string): Promise<Member[]> {
     const syncCrypto = this.syncCryptos.get(spaceId)!;
     const spaceRecord = await this.findBySpaceId(spaceId);
-    const cachedSeq =
-      (spaceRecord?.membershipLogSeq as number | undefined) ?? undefined;
+    const cachedSeq = (spaceRecord?.membershipLogSeq as number | undefined) ?? undefined;
     const spaceUCAN = this.spaceUCANs.get(spaceId);
 
     // If we have a cache, use incremental fetch to check for changes
     if (cachedSeq !== undefined) {
-      const incremental = await this.membershipClient.getEntries(
-        spaceId,
-        cachedSeq,
-        spaceUCAN,
-      );
+      const incremental = await this.membershipClient.getEntries(spaceId, cachedSeq, spaceUCAN);
       if (incremental.entries.length === 0 && spaceRecord?.members) {
         return spaceRecord.members as Member[];
       }
     }
 
     // Fetch full log and rebuild member list
-    const fullResponse = await this.membershipClient.getEntries(
-      spaceId,
-      undefined,
-      spaceUCAN,
-    );
-    const members = this.parseMembershipLog(
-      fullResponse.entries,
-      syncCrypto,
-      spaceId,
-    );
+    const fullResponse = await this.membershipClient.getEntries(spaceId, undefined, spaceUCAN);
+    const members = this.parseMembershipLog(fullResponse.entries, syncCrypto, spaceId);
 
     const maxSeq =
       fullResponse.entries.length > 0
@@ -603,12 +548,7 @@ export class SpaceManager {
     for (const raw of entries) {
       let payloadStr: string;
       try {
-        payloadStr = decryptMembershipPayload(
-          raw.payload,
-          syncCrypto,
-          spaceId,
-          raw.chain_seq,
-        );
+        payloadStr = decryptMembershipPayload(raw.payload, syncCrypto, spaceId, raw.chain_seq);
       } catch (err) {
         console.error(
           `[less-sync] Failed to decrypt membership entry (seq ${raw.chain_seq}):`,
@@ -620,10 +560,7 @@ export class SpaceManager {
       try {
         entry = parseMembershipEntry(payloadStr);
       } catch (err) {
-        console.error(
-          `[less-sync] Malformed membership entry (seq ${raw.chain_seq}):`,
-          err,
-        );
+        console.error(`[less-sync] Malformed membership entry (seq ${raw.chain_seq}):`, err);
         continue;
       }
       results.push({ seq: raw.chain_seq, payloadStr, entry });
@@ -655,9 +592,7 @@ export class SpaceManager {
     for (const { seq, entry: memberEntry } of decrypted) {
       const valid = verifyMembershipEntry(memberEntry, spaceId);
       if (!valid) {
-        console.warn(
-          `Invalid signature on membership entry seq=${seq} in space ${spaceId}`,
-        );
+        console.warn(`Invalid signature on membership entry seq=${seq} in space ${spaceId}`);
         continue;
       }
 
@@ -729,12 +664,9 @@ export class SpaceManager {
     try {
       // 1a. Validate preconditions
       const spaceRecord = await this.findBySpaceId(spaceId);
-      if (!spaceRecord)
-        throw new Error(`No credentials found for space ${spaceId}`);
-      if (spaceRecord.role !== "admin")
-        throw new Error("Only admins can remove members");
-      if (memberDID === this.config.selfDID)
-        throw new Error("Cannot remove yourself from a space");
+      if (!spaceRecord) throw new Error(`No credentials found for space ${spaceId}`);
+      if (spaceRecord.role !== "admin") throw new Error("Only admins can remove members");
+      if (memberDID === this.config.selfDID) throw new Error("Cannot remove yourself from a space");
 
       const syncCrypto = this.syncCryptos.get(spaceId);
       if (!syncCrypto) throw new Error(`No sync crypto for space ${spaceId}`);
@@ -760,18 +692,12 @@ export class SpaceManager {
     // Also collect remaining (non-removed) members' entries so we can re-encrypt them
     // under the new key after rotation, and the removed member's contact info for
     // sending a revocation notice.
-    const log = await this.membershipClient.getEntries(
-      spaceId,
-      undefined,
-      spaceUCAN,
-    );
+    const log = await this.membershipClient.getEntries(spaceId, undefined, spaceUCAN);
     const decrypted = this.decryptLogEntries(log.entries, syncCrypto, spaceId);
     const ucanCIDs: string[] = [];
     const remainingEntries: string[] = [];
     const ucansToRevoke: string[] = []; // UCANs needing revocation log entries
-    let memberContact:
-      | { mailboxId: string; publicKeyJwk: JsonWebKey }
-      | undefined;
+    let memberContact: { mailboxId: string; publicKeyJwk: JsonWebKey } | undefined;
     const nowSeconds = Math.floor(Date.now() / 1000);
 
     for (const { payloadStr, entry: memberEntry } of decrypted) {
@@ -832,12 +758,7 @@ export class SpaceManager {
     } catch (err) {
       if (err instanceof EpochMismatchError && err.rewrapEpoch !== null) {
         // Another admin already advanced — help complete the rewrap first
-        const helpKey = deriveForward(
-          currentKey,
-          spaceId,
-          currentEpoch,
-          err.rewrapEpoch,
-        );
+        const helpKey = deriveForward(currentKey, spaceId, currentEpoch, err.rewrapEpoch);
         await rewrapAllDEKs({
           ws: this.ws,
           spaceId,
@@ -857,12 +778,7 @@ export class SpaceManager {
         advanceCurrentKey = helpKey;
         advanceCurrentEpoch = err.rewrapEpoch;
         newEpoch = advanceCurrentEpoch + 1;
-        newKey = deriveForward(
-          advanceCurrentKey,
-          spaceId,
-          advanceCurrentEpoch,
-          newEpoch,
-        );
+        newKey = deriveForward(advanceCurrentKey, spaceId, advanceCurrentEpoch, newEpoch);
 
         await advanceEpoch(
           {
@@ -906,7 +822,9 @@ export class SpaceManager {
       epoch: newEpoch,
     });
 
-    // 1g. Update local crypto state to use new key.
+    // 1g. Update local crypto state to use new key (zero old key material first).
+    this.syncCryptos.get(spaceId)?.destroy();
+    this.spaceKeys.get(spaceId)?.fill(0);
     const newCrypto = new SyncCrypto(newKey);
     this.syncCryptos.set(spaceId, newCrypto);
     this.spaceKeys.set(spaceId, newKey);
@@ -914,12 +832,7 @@ export class SpaceManager {
 
     // 1h. Append signed revocation entries for each revoked UCAN.
     for (const ucan of ucansToRevoke) {
-      const revokeEntry = this.signMembershipEntry(
-        "r",
-        spaceId,
-        ucan,
-        newEpoch,
-      );
+      const revokeEntry = this.signMembershipEntry("r", spaceId, ucan, newEpoch);
       await this.appendMembershipEntryWithRetry(
         spaceId,
         newCrypto,
@@ -933,12 +846,7 @@ export class SpaceManager {
     // Re-encrypting ensures getMembers() can still list active members.
     // Entries keep their original signatures — the admin re-encrypts but doesn't re-sign.
     for (const entryPayload of remainingEntries) {
-      await this.appendMembershipEntryWithRetry(
-        spaceId,
-        newCrypto,
-        entryPayload,
-        spaceUCAN,
-      );
+      await this.appendMembershipEntryWithRetry(spaceId, newCrypto, entryPayload, spaceUCAN);
     }
 
     // 1j. Send revocation notice to the removed member's mailbox (best effort).
@@ -1100,21 +1008,13 @@ export class SpaceManager {
     err: EpochMismatchError,
   ): Promise<void> {
     const currentKey = this.spaceKeys.get(spaceId);
-    if (!currentKey)
-      throw new Error(
-        `No space key for ${spaceId} during epoch mismatch handling`,
-      );
+    if (!currentKey) throw new Error(`No space key for ${spaceId} during epoch mismatch handling`);
     const currentEpoch = this.spaceEpochs.get(spaceId) ?? 1;
 
     if (err.rewrapEpoch !== null) {
       // Prior advance isn't complete — help finish it
       const targetEpoch = err.rewrapEpoch;
-      const targetKey = deriveForward(
-        currentKey,
-        spaceId,
-        currentEpoch,
-        targetEpoch,
-      );
+      const targetKey = deriveForward(currentKey, spaceId, currentEpoch, targetEpoch);
       const spaceUCAN = this.spaceUCANs.get(spaceId);
       await rewrapAllDEKs({
         ws: this.ws,
@@ -1134,12 +1034,7 @@ export class SpaceManager {
     } else {
       // Another device completed everything. Just adopt the new epoch.
       const serverEpoch = err.currentEpoch;
-      const serverKey = deriveForward(
-        currentKey,
-        spaceId,
-        currentEpoch,
-        serverEpoch,
-      );
+      const serverKey = deriveForward(currentKey, spaceId, currentEpoch, serverEpoch);
       await this.updateLocalEpochState(spaceId, record, serverKey, serverEpoch);
     }
   }
@@ -1148,10 +1043,7 @@ export class SpaceManager {
    * Complete an interrupted rewrap discovered during pull.
    * Called by the transport layer when `rewrapEpoch` is set in the pull response.
    */
-  async completeInterruptedRewrap(
-    spaceId: string,
-    rewrapEpoch: number,
-  ): Promise<void> {
+  async completeInterruptedRewrap(spaceId: string, rewrapEpoch: number): Promise<void> {
     const currentKey = this.spaceKeys.get(spaceId);
     if (!currentKey) return;
     const currentEpoch = this.spaceEpochs.get(spaceId) ?? 1;
@@ -1160,12 +1052,7 @@ export class SpaceManager {
     const spaceRecord = await this.findBySpaceId(spaceId);
     if (!spaceRecord) return;
 
-    const newKey = deriveForward(
-      currentKey,
-      spaceId,
-      currentEpoch,
-      rewrapEpoch,
-    );
+    const newKey = deriveForward(currentKey, spaceId, currentEpoch, rewrapEpoch);
     const spaceUCAN = this.spaceUCANs.get(spaceId);
     await rewrapAllDEKs({
       ws: this.ws,
@@ -1196,12 +1083,7 @@ export class SpaceManager {
     const spaceRecord = await this.findBySpaceId(spaceId);
     if (!spaceRecord) return;
 
-    const newKey = deriveForward(
-      currentKey,
-      spaceId,
-      currentEpoch,
-      serverEpoch,
-    );
+    const newKey = deriveForward(currentKey, spaceId, currentEpoch, serverEpoch);
     await this.updateLocalEpochState(spaceId, spaceRecord, newKey, serverEpoch);
   }
 
@@ -1233,8 +1115,7 @@ export class SpaceManager {
     if (!spaceRecord) return;
 
     const cachedVersion = spaceRecord.metadataVersion as number | undefined;
-    const versionChanged =
-      metadataVersion !== undefined && metadataVersion !== cachedVersion;
+    const versionChanged = metadataVersion !== undefined && metadataVersion !== cachedVersion;
 
     // Reject stale metadata versions (replay protection)
     if (
@@ -1245,8 +1126,7 @@ export class SpaceManager {
       return;
     }
 
-    const rewrapChanged =
-      rewrapEpoch !== (spaceRecord.rewrapEpoch as number | undefined);
+    const rewrapChanged = rewrapEpoch !== (spaceRecord.rewrapEpoch as number | undefined);
     if (versionChanged || rewrapChanged) {
       const patch: Record<string, unknown> = { id: spaceRecord.id };
       if (versionChanged) patch.metadataVersion = metadataVersion;
@@ -1272,17 +1152,13 @@ export class SpaceManager {
   async checkInvitations(privateKeyJwk: JsonWebKey): Promise<number> {
     // Serialize concurrent calls — subsequent callers wait for the in-flight call
     if (this.checkInvitationsPromise) return this.checkInvitationsPromise;
-    this.checkInvitationsPromise = this.checkInvitationsInner(
-      privateKeyJwk,
-    ).finally(() => {
+    this.checkInvitationsPromise = this.checkInvitationsInner(privateKeyJwk).finally(() => {
       this.checkInvitationsPromise = null;
     });
     return this.checkInvitationsPromise;
   }
 
-  private async checkInvitationsInner(
-    privateKeyJwk: JsonWebKey,
-  ): Promise<number> {
+  private async checkInvitationsInner(privateKeyJwk: JsonWebKey): Promise<number> {
     const invitations = await this.invitationClient.listInvitations();
     let count = 0;
 
@@ -1294,35 +1170,22 @@ export class SpaceManager {
         rawPayload = JSON.parse(new TextDecoder().decode(plaintext));
       } catch {
         // Not valid JSON — skip this message
-        await this.invitationClient
-          .deleteInvitation(invitation.id)
-          .catch((err) => {
-            console.error(
-              "[less-sync] Failed to delete invalid invitation:",
-              err,
-            );
-          });
+        await this.invitationClient.deleteInvitation(invitation.id).catch((err) => {
+          console.error("[less-sync] Failed to delete invalid invitation:", err);
+        });
         continue;
       }
 
       // Check if this is a revocation notice
       if (isRevocationNotice(rawPayload)) {
-        const verified = await this.verifyRevocation(
-          rawPayload.space_id,
-          rawPayload.epoch,
-        );
+        const verified = await this.verifyRevocation(rawPayload.space_id, rawPayload.epoch);
         if (verified) {
           await this.handleRevocation(rawPayload.space_id);
         }
         // Delete notice regardless (verified or stale)
-        await this.invitationClient
-          .deleteInvitation(invitation.id)
-          .catch((err) => {
-            console.error(
-              "[less-sync] Failed to delete revocation notice:",
-              err,
-            );
-          });
+        await this.invitationClient.deleteInvitation(invitation.id).catch((err) => {
+          console.error("[less-sync] Failed to delete revocation notice:", err);
+        });
         continue;
       }
 
@@ -1347,9 +1210,7 @@ export class SpaceManager {
         spaces,
         {
           spaceId: payload.space_id,
-          name:
-            payload.metadata.space_name ??
-            `Space ${payload.space_id.slice(0, 8)}`,
+          name: payload.metadata.space_name ?? `Space ${payload.space_id.slice(0, 8)}`,
           status: "invited" satisfies SpaceStatus,
           role: permissionToRole(payload),
           invitedBy: payload.metadata.inviter_display_name,
@@ -1401,10 +1262,7 @@ export class SpaceManager {
         this.config.db
           .patch(spaces, { id: record.id, epochAdvancedAt: now } as never)
           .catch((err) => {
-            console.error(
-              "[less-sync] Failed to backfill epochAdvancedAt:",
-              err,
-            );
+            console.error("[less-sync] Failed to backfill epochAdvancedAt:", err);
           });
       }
 
@@ -1434,8 +1292,7 @@ export class SpaceManager {
 
     // Re-check after the async verification to guard against concurrent state changes
     const spaceRecord = await this.findBySpaceId(spaceId);
-    if (!spaceRecord || (spaceRecord.status as SpaceStatus) !== "active")
-      return;
+    if (!spaceRecord || (spaceRecord.status as SpaceStatus) !== "active") return;
 
     await this.config.db.patch(spaces, {
       id: spaceRecord.id,
@@ -1475,10 +1332,7 @@ export class SpaceManager {
         return;
       } catch (err) {
         if (attempt === 1) {
-          console.warn(
-            `Failed to send revocation notice for space ${spaceId}:`,
-            err,
-          );
+          console.warn(`Failed to send revocation notice for space ${spaceId}:`, err);
         }
       }
     }
@@ -1495,10 +1349,7 @@ export class SpaceManager {
    * @param noticeEpoch - Optional epoch from revocation notice (replay protection)
    * @returns true if the space is genuinely revoked, false if access is valid
    */
-  private async verifyRevocation(
-    spaceId: string,
-    noticeEpoch?: number,
-  ): Promise<boolean> {
+  private async verifyRevocation(spaceId: string, noticeEpoch?: number): Promise<boolean> {
     const spaceRecord = await this.findBySpaceId(spaceId);
     if (!spaceRecord) return false; // Unknown space — ignore
     if ((spaceRecord.status as SpaceStatus) !== "active") return false; // Already removed/invited
@@ -1507,8 +1358,7 @@ export class SpaceManager {
     // Use in-memory epoch (source of truth) which may be ahead of persisted epoch.
     if (noticeEpoch !== undefined) {
       const currentEpoch = this.spaceEpochs.get(spaceId);
-      if (currentEpoch !== undefined && noticeEpoch < currentEpoch)
-        return false;
+      if (currentEpoch !== undefined && noticeEpoch < currentEpoch) return false;
     }
 
     const spaceUCAN = this.spaceUCANs.get(spaceId);
@@ -1533,6 +1383,10 @@ export class SpaceManager {
     newKey: Uint8Array,
     newEpoch: number,
   ): Promise<void> {
+    // Zero old key material before replacing with the new epoch key
+    this.syncCryptos.get(spaceId)?.destroy();
+    this.spaceKeys.get(spaceId)?.fill(0);
+
     this.syncCryptos.set(spaceId, new SyncCrypto(newKey));
     this.spaceKeys.set(spaceId, newKey);
     this.spaceEpochs.set(spaceId, newEpoch);
@@ -1546,11 +1400,29 @@ export class SpaceManager {
   }
 
   /**
+   * Zero all key material and tear down sync state. Safe to call multiple times.
+   * Called automatically by SyncEngine.dispose().
+   */
+  destroy(): void {
+    for (const spaceId of [...this.syncCryptos.keys()]) {
+      this.destroySyncStack(spaceId);
+    }
+  }
+
+  [Symbol.dispose](): void {
+    this.destroy();
+  }
+
+  /**
    * Tear down all in-memory sync state for a space.
    */
   private destroySyncStack(spaceId: string): void {
+    this.syncCryptos.get(spaceId)?.destroy();
     this.syncCryptos.delete(spaceId);
+
+    this.spaceKeys.get(spaceId)?.fill(0);
     this.spaceKeys.delete(spaceId);
+
     this.spaceUCANs.delete(spaceId);
     this.spaceEpochs.delete(spaceId);
     this.spaceEpochAdvancedAt.delete(spaceId);
@@ -1590,9 +1462,7 @@ export class SpaceManager {
    * Find a space record by its spaceId field.
    * Returns undefined if no record exists for that space.
    */
-  private async findBySpaceId(
-    spaceId: string,
-  ): Promise<(SpaceRecord & SpaceFields) | undefined> {
+  private async findBySpaceId(spaceId: string): Promise<(SpaceRecord & SpaceFields) | undefined> {
     const result = await this.config.db.query(spaces, {
       filter: { spaceId },
     });
@@ -1611,12 +1481,7 @@ export class SpaceManager {
     seq: number,
     ucan?: string,
   ): Promise<void> {
-    const payload = encryptMembershipPayload(
-      entryPayload,
-      cryptoOrKey,
-      spaceId,
-      seq,
-    );
+    const payload = encryptMembershipPayload(entryPayload, cryptoOrKey, spaceId, seq);
     const entryHash = sha256(payload);
 
     await this.membershipClient.appendEntry(
@@ -1648,11 +1513,7 @@ export class SpaceManager {
   ): Promise<void> {
     const spaceUCAN = ucan ?? this.spaceUCANs.get(spaceId);
     for (let attempt = 0; attempt < 2; attempt++) {
-      const log = await this.membershipClient.getEntries(
-        spaceId,
-        undefined,
-        spaceUCAN,
-      );
+      const log = await this.membershipClient.getEntries(spaceId, undefined, spaceUCAN);
       const lastEntry = log.entries[log.entries.length - 1];
       const prevHash = lastEntry ? lastEntry.entry_hash : null;
       const nextSeq = lastEntry ? lastEntry.chain_seq + 1 : 1;
@@ -1672,10 +1533,7 @@ export class SpaceManager {
         if (err instanceof VersionConflictError && attempt === 0) {
           // Only retry version conflicts (transient race condition).
           // Hash chain violations are permanent — don't retry.
-          if (
-            err.message.includes("hash chain") ||
-            err.message.includes("prev_hash")
-          ) {
+          if (err.message.includes("hash chain") || err.message.includes("prev_hash")) {
             throw err;
           }
           continue;
@@ -1717,9 +1575,7 @@ export class SpaceManager {
     };
   }
 
-  private createSyncStack(
-    credentials: SpaceCredentials & { epoch?: number },
-  ): void {
+  private createSyncStack(credentials: SpaceCredentials & { epoch?: number }): void {
     if (this.syncCryptos.has(credentials.spaceId)) return;
 
     if (credentials.spaceKey.length !== 32) {

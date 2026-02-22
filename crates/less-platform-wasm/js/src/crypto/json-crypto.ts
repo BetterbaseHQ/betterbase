@@ -19,7 +19,7 @@ import { SyncCrypto } from "./sync-crypto.js";
  * console.log(data.name) // 'Alice'
  * ```
  */
-export class JsonCrypto {
+export class JsonCrypto implements Disposable {
   private crypto: SyncCrypto;
 
   /**
@@ -60,5 +60,14 @@ export class JsonCrypto {
     const bytes = this.crypto.decrypt(encrypted);
     const json = new TextDecoder().decode(bytes);
     return JSON.parse(json);
+  }
+
+  /** Zero the underlying key material. Safe to call multiple times. */
+  destroy(): void {
+    this.crypto.destroy();
+  }
+
+  [Symbol.dispose](): void {
+    this.destroy();
   }
 }
