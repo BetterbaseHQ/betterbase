@@ -12,23 +12,25 @@ fmt:
 # Run clippy linter
 # -A deprecated: aes-gcm's generic-array dependency triggers upstream deprecation warnings
 lint:
-    cargo clippy -p less-crypto --all-targets -- -D warnings -A deprecated
-    cargo clippy -p less-discovery --all-targets -- -D warnings
-    cargo clippy -p less-auth --all-targets -- -D warnings -A deprecated
-    cargo clippy -p less-sync-core --all-targets -- -D warnings -A deprecated
-    cargo clippy -p less-platform-wasm --target wasm32-unknown-unknown -- -D warnings -A deprecated
+    cargo clippy -p betterbase-crypto --all-targets -- -D warnings -A deprecated
+    cargo clippy -p betterbase-discovery --all-targets -- -D warnings
+    cargo clippy -p betterbase-auth --all-targets -- -D warnings -A deprecated
+    cargo clippy -p betterbase-sync-core --all-targets -- -D warnings -A deprecated
+    cargo clippy -p betterbase-db --all-targets -- -D warnings
+    cargo clippy -p betterbase-wasm --target wasm32-unknown-unknown -- -D warnings -A deprecated
+    cargo clippy -p betterbase-db-wasm --target wasm32-unknown-unknown -- -D warnings
 
-# Run Rust tests (pure crates only; less-platform-wasm tests run via test-browser)
+# Run Rust tests (pure crates only; WASM crates run via test-browser)
 test *args:
-    cargo test --workspace --exclude less-platform-wasm {{args}}
+    cargo test --workspace --exclude betterbase-wasm --exclude betterbase-db-wasm {{args}}
 
 # Run Rust tests with verbose output
 test-v *args:
-    cargo test --workspace --exclude less-platform-wasm {{args}} -- --nocapture
+    cargo test --workspace --exclude betterbase-wasm --exclude betterbase-db-wasm {{args}} -- --nocapture
 
 # Run JS/WASM quality checks (typecheck + vitest + browser tests)
 check-js:
-    cd crates/less-platform-wasm/js && pnpm install && pnpm check
+    cd js && pnpm install && pnpm check
 
 # Run Rust benchmarks
 bench *args:
@@ -36,21 +38,23 @@ bench *args:
 
 # Run browser integration tests (real WASM + real browser APIs)
 test-browser:
-    cd crates/less-platform-wasm/js && pnpm vitest run --config vitest.browser.config.ts
+    cd js && pnpm vitest run --config vitest.browser.config.ts
 
 # Run browser benchmarks
 bench-browser:
-    cd crates/less-platform-wasm/js && pnpm vitest bench --config vitest.bench.config.ts
+    cd js && pnpm vitest bench --config vitest.bench.config.ts
 
 # Build all targets
 build:
-    cargo build --workspace --exclude less-platform-wasm
-    cargo build -p less-platform-wasm --target wasm32-unknown-unknown
+    cargo build --workspace --exclude betterbase-wasm --exclude betterbase-db-wasm
+    cargo build -p betterbase-wasm --target wasm32-unknown-unknown
+    cargo build -p betterbase-db-wasm --target wasm32-unknown-unknown
 
 # Build release
 build-release:
-    cargo build --workspace --exclude less-platform-wasm --release
-    cargo build -p less-platform-wasm --target wasm32-unknown-unknown --release
+    cargo build --workspace --exclude betterbase-wasm --exclude betterbase-db-wasm --release
+    cargo build -p betterbase-wasm --target wasm32-unknown-unknown --release
+    cargo build -p betterbase-db-wasm --target wasm32-unknown-unknown --release
 
 # Clean build artifacts
 clean:

@@ -1,0 +1,22 @@
+[package]
+name = "betterbase-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+betterbase-crypto = { path = "../betterbase-crypto" }
+betterbase-auth = { path = "../betterbase-auth" }
+betterbase-discovery = { path = "../betterbase-discovery" }
+betterbase-sync-core = { path = "../betterbase-sync-core" }
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde-wasm-bindgen = "0.6"
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+getrandom = { version = "0.2", features = ["js"] }
+zeroize = "1"
+sha2 = "0.10"

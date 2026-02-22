@@ -1,0 +1,102 @@
+{
+  "name": "@betterbase/sdk",
+  "version": "0.1.0",
+  "description": "Betterbase SDK — crypto, auth, discovery, sync, and local-first DB",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    },
+    "./auth": {
+      "import": "./src/auth/index.ts",
+      "types": "./src/auth/index.ts"
+    },
+    "./auth/react": {
+      "import": "./src/auth/react.ts",
+      "types": "./src/auth/react.ts"
+    },
+    "./auth/internals": {
+      "import": "./src/auth/internals.ts",
+      "types": "./src/auth/internals.ts"
+    },
+    "./crypto": {
+      "import": "./src/crypto/index.ts",
+      "types": "./src/crypto/index.ts"
+    },
+    "./crypto/internals": {
+      "import": "./src/crypto/internals.ts",
+      "types": "./src/crypto/internals.ts"
+    },
+    "./discovery": {
+      "import": "./src/discovery/index.ts",
+      "types": "./src/discovery/index.ts"
+    },
+    "./sync": {
+      "import": "./src/sync/index.ts",
+      "types": "./src/sync/index.ts"
+    },
+    "./sync/react": {
+      "import": "./src/sync/react.ts",
+      "types": "./src/sync/react.ts"
+    },
+    "./sync/protocol": {
+      "import": "./src/sync/protocol.ts",
+      "types": "./src/sync/protocol.ts"
+    },
+    "./db": {
+      "import": "./src/db/index.ts",
+      "types": "./src/db/index.ts"
+    },
+    "./db/react": {
+      "import": "./src/db/react.ts",
+      "types": "./src/db/react.ts"
+    },
+    "./db/worker": {
+      "import": "./src/db/opfs/init.ts",
+      "types": "./src/db/opfs/init.ts"
+    }
+  },
+  "license": "Apache-2.0",
+  "scripts": {
+    "build:wasm": "wasm-pack build --target bundler ../crates/betterbase-wasm && wasm-pack build --target bundler ../crates/betterbase-db-wasm",
+    "build:ts": "tsc --project tsconfig.json",
+    "build": "pnpm build:wasm && pnpm build:ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "test:browser": "vitest run --passWithNoTests --config vitest.browser.config.ts",
+    "bench": "vitest bench --config vitest.bench.config.ts",
+    "format": "prettier --write .",
+    "check": "prettier --write . && pnpm typecheck && pnpm test && pnpm test:browser"
+  },
+  "dependencies": {
+    "cborg": "^4.5.8",
+    "json-joy": "^17.67.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@vitest/browser": "^4.0.18",
+    "@vitest/browser-playwright": "^4.0.18",
+    "dexie": "^4.0.11",
+    "fake-indexeddb": "^6.2.5",
+    "playwright": "^1.58.2",
+    "prettier": "^3.8.1",
+    "react": "^19.2.4",
+    "typescript": "^5.9.3",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.5.0",
+    "vitest": "^4.0.18"
+  }
+}

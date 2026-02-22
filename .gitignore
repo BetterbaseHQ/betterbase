@@ -2,6 +2,8 @@
 *.swp
 .DS_Store
 node_modules/
-crates/less-platform-wasm/pkg/
-crates/less-platform-wasm/js/dist/
+crates/betterbase-wasm/pkg/
+crates/betterbase-db-wasm/pkg/
+js/dist/
 __screenshots__/
+test-results/

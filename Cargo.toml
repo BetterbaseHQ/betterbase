@@ -1,3 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["crates/less-crypto", "crates/less-discovery", "crates/less-auth", "crates/less-sync-core", "crates/less-platform-wasm"]
+members = [
+    "crates/betterbase-crypto",
+    "crates/betterbase-discovery",
+    "crates/betterbase-auth",
+    "crates/betterbase-sync-core",
+    "crates/betterbase-wasm",
+    "crates/betterbase-db",
+    "crates/betterbase-db-wasm",
+]
+
+[patch.crates-io]
+sqlite-wasm-vfs = { path = "crates/sqlite-wasm-vfs" }
