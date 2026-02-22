@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { OpfsDb } from "../src/index.js";
-import { buildUsersCollection, openFreshOpfsDb, cleanupOpfsDb, type UsersCollection } from "./opfs-helpers.js";
+import type { OpfsDb } from "../../src/db/index.js";
+import {
+  buildUsersCollection,
+  openFreshOpfsDb,
+  cleanupOpfsDb,
+  type UsersCollection,
+} from "./opfs-helpers.js";
 
 describe("OPFS bulk operations", () => {
   const users: UsersCollection = buildUsersCollection();
@@ -58,7 +63,10 @@ describe("OPFS bulk operations", () => {
   });
 
   it("bulkDelete with nonexistent ids does not error", async () => {
-    const result = await db.bulkDelete(users, ["nonexistent-1", "nonexistent-2"]);
+    const result = await db.bulkDelete(users, [
+      "nonexistent-1",
+      "nonexistent-2",
+    ]);
     expect(result.errors.length).toBe(0);
   });
 });

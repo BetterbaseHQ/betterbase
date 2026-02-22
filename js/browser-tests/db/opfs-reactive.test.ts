@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { OpfsDb, ChangeEvent } from "../src/index.js";
-import { buildUsersCollection, openFreshOpfsDb, cleanupOpfsDb, type UsersCollection } from "./opfs-helpers.js";
+import type { OpfsDb, ChangeEvent } from "../../src/db/index.js";
+import {
+  buildUsersCollection,
+  openFreshOpfsDb,
+  cleanupOpfsDb,
+  type UsersCollection,
+} from "./opfs-helpers.js";
 
 /** Wait for a condition to become true, polling at short intervals. */
 function waitFor(
@@ -41,9 +46,6 @@ describe("OPFS reactive", () => {
       events.push(event);
     });
 
-    // Give subscription time to set up across the worker boundary
-    await new Promise((r) => setTimeout(r, 300));
-
     await db.put(users, { name: "Alice", email: "alice@test.com", age: 30 });
 
     await waitFor(() => events.length >= 1);
@@ -61,13 +63,14 @@ describe("OPFS reactive", () => {
       results.push(result);
     });
 
-    // Give subscription time to set up across the worker boundary
-    await new Promise((r) => setTimeout(r, 300));
+    // Wait for initial snapshot (empty result set) from flush()
+    await waitFor(() => results.length >= 1);
 
     // Insert data — this triggers reactive flush which fires the observeQuery callback
     await db.put(users, { name: "Alice", email: "alice@test.com", age: 30 });
 
-    await waitFor(() => results.length >= 1);
+    // Wait for the update notification (initial snapshot was results[0])
+    await waitFor(() => results.length >= 2);
 
     const last = results[results.length - 1] as { records: unknown[] };
     expect(last.records.length).toBe(1);

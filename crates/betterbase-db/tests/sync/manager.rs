@@ -370,7 +370,11 @@ impl SyncAdapter for MockAdapter {
         Ok(inner.sequences.get(collection).copied().unwrap_or(0))
     }
 
-    fn set_last_sequence(&self, collection: &str, sequence: i64) -> betterbase_db::error::Result<()> {
+    fn set_last_sequence(
+        &self,
+        collection: &str,
+        sequence: i64,
+    ) -> betterbase_db::error::Result<()> {
         let mut inner = self.inner.lock();
         if let Some(ref err) = inner.set_last_sequence_error {
             return Err(betterbase_db::error::LessDbError::Internal(err.clone()));
@@ -1983,7 +1987,11 @@ async fn apply_remote_records_does_not_advance_on_complete_failure() {
     let adapter = Arc::new(MockAdapter::new());
     let def = make_def("tasks");
 
-    adapter.on_apply(|_, _, _| Err(betterbase_db::error::LessDbError::Internal("total crash".into())));
+    adapter.on_apply(|_, _, _| {
+        Err(betterbase_db::error::LessDbError::Internal(
+            "total crash".into(),
+        ))
+    });
 
     let manager = make_manager(transport.clone(), adapter.clone());
 

@@ -1,5 +1,7 @@
 use betterbase_db::patch::diff::{diff, node_equals};
-use betterbase_db::schema::node::{created_at_schema, key_schema, t, updated_at_schema, SchemaNode};
+use betterbase_db::schema::node::{
+    created_at_schema, key_schema, t, updated_at_schema, SchemaNode,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 

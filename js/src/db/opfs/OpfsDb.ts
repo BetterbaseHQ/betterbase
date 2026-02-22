@@ -23,18 +23,74 @@ import type {
   ChangeEvent,
   RemoteRecord,
   ApplyRemoteOptions,
+  ApplyRemoteResult,
+  ApplyRemoteRecordResult,
   PushSnapshot,
+  DirtyRecord,
+  RustStoredRecordWithMeta,
+  RustApplyRemoteResult,
+  RustRemoteRecord,
 } from "../types.js";
 import { serializeForRust, deserializeFromRust } from "../conversions.js";
-import { WorkerRpc } from "./worker-rpc.js";
+import type { RpcClient } from "./worker-rpc.js";
 
 export class OpfsDb {
-  private rpc: WorkerRpc;
-  private collections: Map<string, CollectionDefHandle>;
+  private rpc: RpcClient;
+  private closeFn: (() => Promise<void>) | null;
+  private unloadHandler: (() => void) | null = null;
+  private changeListeners = new Set<(event: ChangeEvent) => void>();
+  private broadcastChannel: BroadcastChannel | null = null;
+  private readonly senderId = Math.random().toString(36).slice(2);
 
-  constructor(rpc: WorkerRpc, collections: CollectionDefHandle[]) {
+  constructor(
+    rpc: RpcClient,
+    _collections: CollectionDefHandle[],
+    closeFn?: () => Promise<void>,
+  ) {
     this.rpc = rpc;
-    this.collections = new Map(collections.map((c) => [c.name, c]));
+    this.closeFn = closeFn ?? null;
+
+    // Set up cross-tab change notification via BroadcastChannel.
+    // Writes emit events locally and broadcast to other tabs so that
+    // onChange listeners fire without a Worker RPC round-trip.
+    if (typeof BroadcastChannel !== "undefined") {
+      this.broadcastChannel = new BroadcastChannel("betterbase-db");
+      this.broadcastChannel.onmessage = (e) => {
+        if (e.data?.sender !== this.senderId) {
+          this.emitChange(e.data.event);
+        }
+      };
+    }
+
+    // Terminate the worker on page unload to release OPFS access handles.
+    // Data durability is guaranteed by PRAGMA synchronous=FULL (every commit
+    // flushes to OPFS), so we just need to release the file handles cleanly.
+    // Use `pagehide` instead of deprecated `unload` — it fires reliably on
+    // mobile browsers and bfcache-enabled navigations where `unload` does not.
+    if (typeof globalThis.addEventListener === "function") {
+      this.unloadHandler = () => {
+        if (this.closeFn) {
+          // TabCoordinator handles graceful leadership transfer
+          this.closeFn();
+        } else {
+          this.rpc.terminate();
+        }
+      };
+      globalThis.addEventListener("pagehide", this.unloadHandler);
+    }
+  }
+
+  private emitChange(event: ChangeEvent): void {
+    for (const cb of this.changeListeners) cb(event);
+  }
+
+  private emitAndBroadcast(event: ChangeEvent): void {
+    this.emitChange(event);
+    try {
+      this.broadcastChannel?.postMessage({ sender: this.senderId, event });
+    } catch {
+      /* channel may be closed */
+    }
   }
 
   private schemaFor(def: CollectionDefHandle): SchemaShape {
@@ -56,7 +112,16 @@ export class OpfsDb {
       serialized,
       options ?? null,
     ])) as Record<string, unknown>;
-    return deserializeFromRust(result, this.schemaFor(def)) as CollectionRead<S>;
+    const record = deserializeFromRust(
+      result,
+      this.schemaFor(def),
+    ) as CollectionRead<S>;
+    this.emitAndBroadcast({
+      type: "put",
+      collection: def.name,
+      id: (record as Record<string, unknown>).id as string,
+    });
+    return record;
   }
 
   async get<S extends SchemaShape>(
@@ -70,7 +135,10 @@ export class OpfsDb {
       options ?? null,
     ])) as Record<string, unknown> | null;
     if (result === null || result === undefined) return null;
-    return deserializeFromRust(result, this.schemaFor(def)) as CollectionRead<S>;
+    return deserializeFromRust(
+      result,
+      this.schemaFor(def),
+    ) as CollectionRead<S>;
   }
 
   async patch<S extends SchemaShape>(
@@ -85,7 +153,16 @@ export class OpfsDb {
       serialized,
       { ...options, id },
     ])) as Record<string, unknown>;
-    return deserializeFromRust(result, this.schemaFor(def)) as CollectionRead<S>;
+    const record = deserializeFromRust(
+      result,
+      this.schemaFor(def),
+    ) as CollectionRead<S>;
+    this.emitAndBroadcast({
+      type: "put",
+      collection: def.name,
+      id: (record as Record<string, unknown>).id as string,
+    });
+    return record;
   }
 
   async delete<S extends SchemaShape>(
@@ -93,7 +170,15 @@ export class OpfsDb {
     id: string,
     options?: DeleteOptions,
   ): Promise<boolean> {
-    return (await this.rpc.call("delete", [def.name, id, options ?? null])) as boolean;
+    const deleted = (await this.rpc.call("delete", [
+      def.name,
+      id,
+      options ?? null,
+    ])) as boolean;
+    if (deleted) {
+      this.emitAndBroadcast({ type: "delete", collection: def.name, id });
+    }
+    return deleted;
   }
 
   // ========================================================================
@@ -123,7 +208,8 @@ export class OpfsDb {
     def: CollectionDefHandle<string, S>,
     query?: QueryOptions,
   ): Promise<number> {
-    if (!query) return (await this.rpc.call("count", [def.name, null])) as number;
+    if (!query)
+      return (await this.rpc.call("count", [def.name, null])) as number;
     const serializedFilter = query.filter
       ? serializeForRust(query.filter)
       : undefined;
@@ -162,13 +248,19 @@ export class OpfsDb {
       def.name,
       serialized,
       options ?? null,
-    ])) as { records: Record<string, unknown>[]; errors: BatchResult<unknown>["errors"] };
-    return {
-      records: result.records.map(
-        (r) => deserializeFromRust(r, this.schemaFor(def)) as CollectionRead<S>,
-      ),
-      errors: result.errors,
+    ])) as {
+      records: Record<string, unknown>[];
+      errors: BatchResult<unknown>["errors"];
     };
+    const deserialized = result.records.map(
+      (r) => deserializeFromRust(r, this.schemaFor(def)) as CollectionRead<S>,
+    );
+    this.emitAndBroadcast({
+      type: "bulk",
+      collection: def.name,
+      ids: deserialized.map((r) => (r as Record<string, unknown>).id as string),
+    });
+    return { records: deserialized, errors: result.errors };
   }
 
   async bulkDelete<S extends SchemaShape>(
@@ -176,11 +268,19 @@ export class OpfsDb {
     ids: string[],
     options?: DeleteOptions,
   ): Promise<BulkDeleteResult> {
-    return (await this.rpc.call("bulkDelete", [
+    const result = (await this.rpc.call("bulkDelete", [
       def.name,
       ids,
       options ?? null,
     ])) as BulkDeleteResult;
+    if (result.deleted_ids.length > 0) {
+      this.emitAndBroadcast({
+        type: "bulk",
+        collection: def.name,
+        ids: result.deleted_ids,
+      });
+    }
+    return result;
   }
 
   // ========================================================================
@@ -286,30 +386,14 @@ export class OpfsDb {
 
   /**
    * Register a global change listener. Returns an unsubscribe function synchronously.
+   *
+   * Notifications are emitted locally after every write and received from other
+   * tabs via BroadcastChannel — no Worker RPC round-trip required.
    */
   onChange(callback: (event: ChangeEvent) => void): () => void {
-    let unsubFn: (() => void) | null = null;
-    let cancelled = false;
-
-    const wrappedCallback = (payload: unknown) => {
-      const p = payload as { type: string; event: ChangeEvent };
-      callback(p.event);
-    };
-
-    this.rpc
-      .subscribe("onChange", [], wrappedCallback)
-      .then(([, unsub]) => {
-        if (cancelled) {
-          unsub();
-        } else {
-          unsubFn = unsub;
-        }
-      })
-      .catch(() => {});
-
+    this.changeListeners.add(callback);
     return () => {
-      cancelled = true;
-      if (unsubFn) unsubFn();
+      this.changeListeners.delete(callback);
     };
   }
 
@@ -317,20 +401,24 @@ export class OpfsDb {
   // Sync storage
   // ========================================================================
 
-  async getDirty<S extends SchemaShape>(
-    def: CollectionDefHandle<string, S>,
-  ): Promise<CollectionRead<S>[]> {
-    const result = (await this.rpc.call("getDirty", [def.name])) as Record<
-      string,
-      unknown
-    >[];
-    return result.map(
-      (r) => deserializeFromRust(r, this.schemaFor(def)) as CollectionRead<S>,
-    );
+  async getDirty(def: CollectionDefHandle): Promise<DirtyRecord[]> {
+    const result = (await this.rpc.call("getDirty", [def.name])) as {
+      records: RustStoredRecordWithMeta[];
+      errors: unknown[];
+    };
+    return result.records.map((r) => ({
+      id: r.id,
+      _v: r.version,
+      crdt: new Uint8Array(r.crdt),
+      deleted: r.deleted,
+      sequence: r.sequence,
+      meta: r.meta ?? undefined,
+      pendingPatchesLength: r.pending_patches.length,
+    }));
   }
 
-  async markSynced<S extends SchemaShape>(
-    def: CollectionDefHandle<string, S>,
+  async markSynced(
+    def: CollectionDefHandle,
     id: string,
     sequence: number,
     snapshot?: PushSnapshot,
@@ -343,16 +431,46 @@ export class OpfsDb {
     ]);
   }
 
-  async applyRemoteChanges<S extends SchemaShape>(
-    def: CollectionDefHandle<string, S>,
+  async applyRemoteChanges(
+    def: CollectionDefHandle,
     records: RemoteRecord[],
     options?: ApplyRemoteOptions,
-  ): Promise<void> {
-    await this.rpc.call("applyRemoteChanges", [
+  ): Promise<ApplyRemoteResult> {
+    // Convert TS RemoteRecord (_v, Uint8Array) to Rust format (version, number[])
+    const rustRecords: RustRemoteRecord[] = records.map((r) => ({
+      id: r.id,
+      version: r._v,
+      crdt: r.crdt ? Array.from(r.crdt) : null,
+      deleted: r.deleted,
+      sequence: r.sequence,
+      meta: r.meta,
+    }));
+    const raw = (await this.rpc.call("applyRemoteChanges", [
       def.name,
-      records,
+      rustRecords,
       options ?? {},
-    ]);
+    ])) as RustApplyRemoteResult;
+    // Convert Rust result to TS types
+    const resultRecords: ApplyRemoteRecordResult[] = raw.applied.map((r) => ({
+      id: r.id,
+      merged: r.action === "Updated",
+      deleted: r.action === "Deleted",
+      previousData: r.previous_data ?? null,
+    }));
+    const applyResult: ApplyRemoteResult = {
+      records: resultRecords,
+      errors: raw.errors,
+      count: raw.applied.length,
+      mergedCount: raw.merged_count,
+    };
+    if (resultRecords.length > 0) {
+      this.emitAndBroadcast({
+        type: "remote",
+        collection: def.name,
+        ids: resultRecords.map((r) => r.id),
+      });
+    }
+    return applyResult;
   }
 
   async getLastSequence(collection: string): Promise<number> {
@@ -369,10 +487,23 @@ export class OpfsDb {
 
   /** Close the worker and underlying database. */
   async close(): Promise<void> {
-    try {
-      await this.rpc.call("close", []);
-    } finally {
-      this.rpc.terminate();
+    this.broadcastChannel?.close();
+    this.broadcastChannel = null;
+    this.changeListeners.clear();
+
+    if (this.unloadHandler) {
+      globalThis.removeEventListener("pagehide", this.unloadHandler);
+      this.unloadHandler = null;
+    }
+
+    if (this.closeFn) {
+      await this.closeFn();
+    } else {
+      try {
+        await this.rpc.call("close", []);
+      } finally {
+        this.rpc.terminate();
+      }
     }
   }
 }

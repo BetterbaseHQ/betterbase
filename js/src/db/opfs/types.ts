@@ -44,9 +44,4 @@ export interface WorkerNotification {
   payload: unknown;
 }
 
-/** Sent once when the worker has finished initialization. */
-export interface WorkerReady {
-  type: "ready";
-}
-
-export type WorkerToMainMessage = WorkerResponse | WorkerNotification | WorkerReady;
+export type WorkerToMainMessage = WorkerResponse | WorkerNotification;

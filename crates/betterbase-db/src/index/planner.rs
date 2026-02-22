@@ -395,7 +395,8 @@ fn score_field_index(
     }
 
     // Check if index provides sort order
-    let provides_sort = check_sort_match(index, conditions, sort);
+    let sort_match = check_sort_match(index, conditions, sort);
+    let provides_sort = sort_match != SortMatch::None;
 
     // If no conditions covered and no sort match, index is not useful
     if covered_conditions.is_empty() && !provides_sort {
@@ -405,7 +406,11 @@ fn score_field_index(
     // Sort-only scan: no filter conditions, but sort matches.
     // Full traversal of the index in the requested direction — no bounds needed.
     if covered_conditions.is_empty() && provides_sort {
-        let direction = sort_to_index_order(sort.and_then(|s| s.first()));
+        // direction means "scan direction relative to index": Asc = forward, Desc = backward
+        let direction = match sort_match {
+            SortMatch::Reverse => IndexSortOrder::Desc,
+            _ => IndexSortOrder::Asc,
+        };
         let scan = IndexScan {
             scan_type: IndexScanType::Full,
             index: IndexDefinition::Field(index.clone()),
@@ -445,7 +450,11 @@ fn score_field_index(
         5.0
     };
 
-    let direction = sort_to_index_order(sort.and_then(|s| s.first()));
+    // direction means "scan direction relative to index": Asc = forward, Desc = backward
+    let direction = match sort_match {
+        SortMatch::Reverse => IndexSortOrder::Desc,
+        _ => IndexSortOrder::Asc,
+    };
     let (range_lower, range_upper) = range_bounds.unwrap_or((None, None));
 
     let scan = IndexScan {
@@ -527,22 +536,33 @@ fn score_computed_index(
     })
 }
 
-fn sort_to_index_order(first_sort: Option<&SortEntry>) -> IndexSortOrder {
-    match first_sort {
-        Some(e) if e.direction == SortDirection::Desc => IndexSortOrder::Desc,
-        _ => IndexSortOrder::Asc,
-    }
+/// Whether the index can satisfy the requested sort order.
+///
+/// "Forward" and "Reverse" refer to *scan direction relative to the index's
+/// declared field order*, not to the output order from the user's perspective.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortMatch {
+    /// Index does not match the sort.
+    None,
+    /// Index fields match the sort directions exactly (forward scan).
+    Forward,
+    /// Every sort direction is the opposite of the index field direction (backward scan).
+    Reverse,
 }
 
 /// Check if the index provides the required sort order.
+///
+/// Returns `Forward` when directions match exactly, `Reverse` when every
+/// direction is flipped (a backward index scan produces the desired order),
+/// and `None` for mixed or non-matching cases.
 fn check_sort_match(
     index: &FieldIndex,
     conditions: &ExtractedConditions,
     sort: Option<&[SortEntry]>,
-) -> bool {
+) -> SortMatch {
     let sort = match sort {
         Some(s) if !s.is_empty() => s,
-        _ => return false,
+        _ => return SortMatch::None,
     };
 
     // Count equality prefix (these fields are fixed and don't affect sort)
@@ -555,23 +575,34 @@ fn check_sort_match(
     let remaining_index_fields = &index.fields[equality_prefix_len..];
 
     if remaining_index_fields.len() < sort.len() {
-        return false;
+        return SortMatch::None;
     }
+
+    let mut all_match = true;
+    let mut all_opposite = true;
 
     for (sort_entry, index_field) in sort.iter().zip(remaining_index_fields.iter()) {
         if index_field.field != sort_entry.field {
-            return false;
+            return SortMatch::None;
         }
         let sort_dir = match sort_entry.direction {
             SortDirection::Asc => IndexSortOrder::Asc,
             SortDirection::Desc => IndexSortOrder::Desc,
         };
-        if index_field.order != sort_dir {
-            return false;
+        if index_field.order == sort_dir {
+            all_opposite = false;
+        } else {
+            all_match = false;
         }
     }
 
-    true
+    if all_match {
+        SortMatch::Forward
+    } else if all_opposite {
+        SortMatch::Reverse
+    } else {
+        SortMatch::None
+    }
 }
 
 // ============================================================================

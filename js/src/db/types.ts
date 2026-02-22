@@ -2,20 +2,45 @@
 // Schema types
 // ============================================================================
 
-export interface StringSchema { type: "string"; }
-export interface TextSchema { type: "text"; }
-export interface NumberSchema { type: "number"; }
-export interface BooleanSchema { type: "boolean"; }
-export interface DateSchema { type: "date"; }
-export interface BytesSchema { type: "bytes"; }
-export interface OptionalSchema<T extends SchemaNode = SchemaNode> { type: "optional"; inner: T; }
-export interface ArraySchema<T extends SchemaNode = SchemaNode> { type: "array"; items: T; }
-export interface RecordSchema<T extends SchemaNode = SchemaNode> { type: "record"; values: T; }
-export interface ObjectSchema<T extends Record<string, SchemaNode> = Record<string, SchemaNode>> {
+export interface StringSchema {
+  type: "string";
+}
+export interface TextSchema {
+  type: "text";
+}
+export interface NumberSchema {
+  type: "number";
+}
+export interface BooleanSchema {
+  type: "boolean";
+}
+export interface DateSchema {
+  type: "date";
+}
+export interface BytesSchema {
+  type: "bytes";
+}
+export interface OptionalSchema<T extends SchemaNode = SchemaNode> {
+  type: "optional";
+  inner: T;
+}
+export interface ArraySchema<T extends SchemaNode = SchemaNode> {
+  type: "array";
+  items: T;
+}
+export interface RecordSchema<T extends SchemaNode = SchemaNode> {
+  type: "record";
+  values: T;
+}
+export interface ObjectSchema<
+  T extends Record<string, SchemaNode> = Record<string, SchemaNode>,
+> {
   type: "object";
   properties: T;
 }
-export interface LiteralSchema<T extends string | number | boolean = string | number | boolean> {
+export interface LiteralSchema<
+  T extends string | number | boolean = string | number | boolean,
+> {
   type: "literal";
   value: T;
 }
@@ -45,48 +70,89 @@ export type SchemaShape = Record<string, SchemaNode>;
 // ============================================================================
 
 /** Infer the read type from a schema node (what you get back from get/query). */
-export type InferRead<T extends SchemaNode> =
-  T extends StringSchema ? string :
-  T extends TextSchema ? string :
-  T extends NumberSchema ? number :
-  T extends BooleanSchema ? boolean :
-  T extends DateSchema ? Date :
-  T extends BytesSchema ? Uint8Array :
-  T extends OptionalSchema<infer U> ? InferRead<U> | undefined :
-  T extends ArraySchema<infer U> ? InferRead<U>[] :
-  T extends RecordSchema<infer U> ? Record<string, InferRead<U>> :
-  T extends ObjectSchema<infer U> ? { [K in keyof U]: InferRead<U[K]> } :
-  T extends LiteralSchema<infer U> ? U :
-  T extends UnionSchema<infer U> ? InferRead<U[number]> :
-  unknown;
+export type InferRead<T extends SchemaNode> = T extends StringSchema
+  ? string
+  : T extends TextSchema
+    ? string
+    : T extends NumberSchema
+      ? number
+      : T extends BooleanSchema
+        ? boolean
+        : T extends DateSchema
+          ? Date
+          : T extends BytesSchema
+            ? Uint8Array
+            : T extends OptionalSchema<infer U>
+              ? InferRead<U> | undefined
+              : T extends ArraySchema<infer U>
+                ? InferRead<U>[]
+                : T extends RecordSchema<infer U>
+                  ? Record<string, InferRead<U>>
+                  : T extends ObjectSchema<infer U>
+                    ? { [K in keyof U]: InferRead<U[K]> }
+                    : T extends LiteralSchema<infer U>
+                      ? U
+                      : T extends UnionSchema<infer U>
+                        ? InferRead<U[number]>
+                        : unknown;
 
 /** Infer the write type from a schema node (what you pass to put). */
-export type InferWrite<T extends SchemaNode> =
-  T extends StringSchema ? string :
-  T extends TextSchema ? string :
-  T extends NumberSchema ? number :
-  T extends BooleanSchema ? boolean :
-  T extends DateSchema ? Date | string :
-  T extends BytesSchema ? Uint8Array | string :
-  T extends OptionalSchema<infer U> ? InferWrite<U> | undefined :
-  T extends ArraySchema<infer U> ? InferWrite<U>[] :
-  T extends RecordSchema<infer U> ? Record<string, InferWrite<U>> :
-  T extends ObjectSchema<infer U> ? { [K in keyof U]: InferWrite<U[K]> } :
-  T extends LiteralSchema<infer U> ? U :
-  T extends UnionSchema<infer U> ? InferWrite<U[number]> :
-  unknown;
+export type InferWrite<T extends SchemaNode> = T extends StringSchema
+  ? string
+  : T extends TextSchema
+    ? string
+    : T extends NumberSchema
+      ? number
+      : T extends BooleanSchema
+        ? boolean
+        : T extends DateSchema
+          ? Date | string
+          : T extends BytesSchema
+            ? Uint8Array | string
+            : T extends OptionalSchema<infer U>
+              ? InferWrite<U> | undefined
+              : T extends ArraySchema<infer U>
+                ? InferWrite<U>[]
+                : T extends RecordSchema<infer U>
+                  ? Record<string, InferWrite<U>>
+                  : T extends ObjectSchema<infer U>
+                    ? { [K in keyof U]: InferWrite<U[K]> }
+                    : T extends LiteralSchema<infer U>
+                      ? U
+                      : T extends UnionSchema<infer U>
+                        ? InferWrite<U[number]>
+                        : unknown;
 
-/** Read type for a full schema shape including auto-fields. */
-export type CollectionRead<S extends SchemaShape> = {
+/** Extract schema shape from a CollectionDefHandle or pass through a SchemaShape directly. */
+type ExtractSchema<S> = S extends {
+  readonly schema: infer T extends SchemaShape;
+}
+  ? T
+  : S extends SchemaShape
+    ? S
+    : never;
+
+/** Read type for a full schema shape including auto-fields.
+ *  Accepts either a SchemaShape or a CollectionDefHandle (extracts .schema automatically). */
+export type CollectionRead<
+  S extends SchemaShape | { readonly schema: SchemaShape },
+> = {
   id: string;
   createdAt: Date;
   updatedAt: Date;
-} & { [K in keyof S]: InferRead<S[K]> };
+} & { [K in keyof ExtractSchema<S>]: InferRead<ExtractSchema<S>[K]> };
 
-/** Write type for a schema shape (auto-fields optional). */
+/** Keys whose schema node is OptionalSchema — these become optional in the write type. */
+type OptionalSchemaKeys<S extends SchemaShape> = {
+  [K in keyof S]: S[K] extends OptionalSchema ? K : never;
+}[keyof S];
+
+/** Write type for a schema shape (auto-fields optional, optional schema fields are optional keys). */
 export type CollectionWrite<S extends SchemaShape> = {
   id?: string;
-} & { [K in keyof S]: InferWrite<S[K]> };
+} & { [K in Exclude<keyof S, OptionalSchemaKeys<S>>]: InferWrite<S[K]> } & {
+  [K in OptionalSchemaKeys<S>]?: InferWrite<S[K]>;
+};
 
 /** Patch type for a schema shape (id required, others optional). */
 export type CollectionPatch<S extends SchemaShape> = {
@@ -176,11 +242,25 @@ export interface BulkDeleteResult {
 
 export interface RemoteRecord {
   id: string;
-  version: number;
-  crdt?: number[];
+  _v: number;
+  crdt: Uint8Array | null;
   deleted: boolean;
   sequence: number;
-  meta?: unknown;
+  meta?: Record<string, unknown>;
+}
+
+/**
+ * Internal representation from Rust serialization.
+ * version (not _v), crdt as number[] (not Uint8Array).
+ * @internal
+ */
+export interface RustRemoteRecord {
+  id: string;
+  version: number;
+  crdt?: number[] | null;
+  deleted: boolean;
+  sequence: number;
+  meta?: Record<string, unknown>;
 }
 
 export interface PushSnapshot {
@@ -189,7 +269,11 @@ export interface PushSnapshot {
 }
 
 export interface ApplyRemoteOptions {
-  delete_conflict_strategy?: "RemoteWins" | "LocalWins" | "DeleteWins" | "UpdateWins";
+  delete_conflict_strategy?:
+    | "RemoteWins"
+    | "LocalWins"
+    | "DeleteWins"
+    | "UpdateWins";
   received_at?: string;
 }
 
@@ -219,11 +303,17 @@ export interface VersionEntry {
 
 /** @internal Index entry captured during collection building. */
 export type IndexEntry =
-  | { type: "field"; fields: string[]; options: { name?: string; unique?: boolean; sparse?: boolean } }
+  | {
+      type: "field";
+      fields: string[];
+      options: { name?: string; unique?: boolean; sparse?: boolean };
+    }
   | {
       type: "computed";
       name: string;
-      compute: (data: Record<string, unknown>) => string | number | boolean | null;
+      compute: (
+        data: Record<string, unknown>,
+      ) => string | number | boolean | null;
       options: { unique?: boolean; sparse?: boolean };
     };
 
@@ -251,11 +341,11 @@ export interface CollectionDefHandle<
 
 export interface OutboundRecord {
   id: string;
-  version: number;
-  crdt?: number[];
+  _v: number;
+  crdt: Uint8Array | null;
   deleted: boolean;
   sequence: number;
-  meta?: unknown;
+  meta?: Record<string, unknown>;
 }
 
 export interface PushAck {
@@ -265,14 +355,14 @@ export interface PushAck {
 
 export interface PullResult {
   records: RemoteRecord[];
-  latest_sequence?: number;
-  failures: PullFailure[];
+  latestSequence?: number;
+  failures?: PullFailure[];
 }
 
 export interface PullFailure {
   id: string;
   sequence: number;
-  error: string;
+  error: Error;
   retryable: boolean;
 }
 
@@ -281,3 +371,134 @@ export interface SyncTransport {
   pull(collection: string, since: number): Promise<PullResult>;
 }
 
+// ============================================================================
+// Dirty record (from getDirty, for SyncManager)
+// ============================================================================
+
+/**
+ * A record returned by getDirty(), containing all fields the SyncManager needs
+ * to construct OutboundRecords and PushSnapshots.
+ */
+export interface DirtyRecord {
+  id: string;
+  _v: number;
+  crdt: Uint8Array;
+  deleted: boolean;
+  sequence: number;
+  meta?: Record<string, unknown>;
+  pendingPatchesLength: number;
+}
+
+/**
+ * Raw dirty record as serialized from Rust (version not _v, crdt as number[]).
+ * @internal
+ */
+export interface RustStoredRecordWithMeta {
+  id: string;
+  version: number;
+  data: Record<string, unknown>;
+  crdt: number[];
+  pending_patches: number[];
+  sequence: number;
+  dirty: boolean;
+  deleted: boolean;
+  deleted_at?: string | null;
+  meta?: Record<string, unknown> | null;
+  was_migrated: boolean;
+  original_version?: number | null;
+}
+
+// ============================================================================
+// Apply remote result types
+// ============================================================================
+
+export interface ApplyRemoteRecordResult {
+  id: string;
+  merged: boolean;
+  deleted: boolean;
+  previousData: unknown | null;
+}
+
+export interface ApplyRemoteResult {
+  records: ApplyRemoteRecordResult[];
+  errors: RecordError[];
+  count: number;
+  mergedCount: number;
+}
+
+/**
+ * Raw result from Rust apply_remote_changes.
+ * @internal
+ */
+export interface RustApplyRemoteResult {
+  applied: { id: string; action: string; previous_data?: unknown | null }[];
+  errors: RecordError[];
+  new_sequence: number;
+  merged_count: number;
+}
+
+// ============================================================================
+// Delete conflict types
+// ============================================================================
+
+export type DeleteConflictStrategy =
+  | "remote-wins"
+  | "local-wins"
+  | "delete-wins"
+  | "update-wins";
+
+export interface ConflictEvent {
+  type: "delete-conflict";
+  collection: string;
+  id: string;
+  localDeleted: boolean;
+  remoteDeleted: boolean;
+  resolution: "delete" | "update";
+}
+
+// ============================================================================
+// SyncAdapter interface
+// ============================================================================
+
+/**
+ * Narrow interface for sync operations. OpfsDb satisfies this interface.
+ */
+export interface SyncAdapter {
+  getDirty(def: CollectionDefHandle): Promise<DirtyRecord[]>;
+  markSynced(
+    def: CollectionDefHandle,
+    id: string,
+    sequence: number,
+    pushSnapshot?: PushSnapshot,
+  ): Promise<void>;
+  applyRemoteChanges(
+    def: CollectionDefHandle,
+    records: RemoteRecord[],
+    options?: ApplyRemoteOptions,
+  ): Promise<ApplyRemoteResult>;
+  getLastSequence(collection: string): Promise<number>;
+  setLastSequence(collection: string, sequence: number): Promise<void>;
+}
+
+// ============================================================================
+// Observe options
+// ============================================================================
+
+export interface ObserveOptions {
+  onError?: (error: Error) => void;
+}
+
+// ============================================================================
+// Type aliases for compatibility with betterbase-db consumers
+// ============================================================================
+
+/** Alias for QueryOptions (matches betterbase-db Query). */
+export type Query<_T = unknown> = QueryOptions;
+
+/** Alias for CollectionDefHandle (matches betterbase-db CollectionDef). */
+export type CollectionDef<
+  TName extends string = string,
+  TSchema extends SchemaShape = SchemaShape,
+  _TRead = unknown,
+  _TWrite = unknown,
+> = CollectionDefHandle<TName, TSchema>;

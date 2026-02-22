@@ -5,7 +5,12 @@ import type {
   OutboundRecord,
   SyncAdapter,
 } from "../types.js";
-import type { SyncResult, SyncError, SyncErrorKind, SyncManagerOptions } from "./types.js";
+import type {
+  SyncResult,
+  SyncError,
+  SyncErrorKind,
+  SyncManagerOptions,
+} from "./types.js";
 
 function emptySyncResult(): SyncResult {
   return { pushed: 0, pulled: 0, merged: 0, errors: [] };
@@ -30,7 +35,10 @@ export class SyncManager {
 
   constructor(options: SyncManagerOptions) {
     const batchSize = options.pushBatchSize ?? 50;
-    if (batchSize !== Infinity && (batchSize < 1 || !Number.isFinite(batchSize))) {
+    if (
+      batchSize !== Infinity &&
+      (batchSize < 1 || !Number.isFinite(batchSize))
+    ) {
       throw new Error(
         `pushBatchSize must be a positive finite number or Infinity, got ${batchSize}`,
       );
@@ -103,7 +111,9 @@ export class SyncManager {
       try {
         currentSeq = await this.adapter.getLastSequence(collection);
       } catch (e) {
-        result.errors.push(this.makeSyncError("pull", collection, undefined, e, "transient"));
+        result.errors.push(
+          this.makeSyncError("pull", collection, undefined, e, "transient"),
+        );
         return result;
       }
 
@@ -112,7 +122,9 @@ export class SyncManager {
           try {
             await this.adapter.setLastSequence(collection, latestSequence);
           } catch (e) {
-            result.errors.push(this.makeSyncError("pull", collection, undefined, e, "transient"));
+            result.errors.push(
+              this.makeSyncError("pull", collection, undefined, e, "transient"),
+            );
           }
         }
         return result;
@@ -120,12 +132,20 @@ export class SyncManager {
 
       this.reportProgress("pull", collection, 0, records.length);
 
-      const recordsToApply = records.filter((r) => !this.quarantined.has(`${collection}:${r.id}`));
+      const recordsToApply = records.filter(
+        (r) => !this.quarantined.has(`${collection}:${r.id}`),
+      );
 
       try {
-        const applyResult = await this.adapter.applyRemoteChanges(def, recordsToApply, {
-          delete_conflict_strategy: this.mapDeleteStrategy(this.options.deleteStrategy),
-        });
+        const applyResult = await this.adapter.applyRemoteChanges(
+          def,
+          recordsToApply,
+          {
+            delete_conflict_strategy: this.mapDeleteStrategy(
+              this.options.deleteStrategy,
+            ),
+          },
+        );
         result.pulled = applyResult.count;
         result.merged = applyResult.mergedCount;
 
@@ -133,7 +153,9 @@ export class SyncManager {
 
         for (const re of applyResult.errors) {
           const kind: SyncErrorKind = "permanent";
-          result.errors.push(this.makeSyncError("pull", collection, re.id, re.error, kind));
+          result.errors.push(
+            this.makeSyncError("pull", collection, re.id, re.error, kind),
+          );
           this.trackFailure(collection, re.id, kind);
         }
 
@@ -142,7 +164,9 @@ export class SyncManager {
           this.failureCounts.delete(key);
         }
       } catch (e) {
-        result.errors.push(this.makeSyncError("pull", collection, undefined, e, "transient"));
+        result.errors.push(
+          this.makeSyncError("pull", collection, undefined, e, "transient"),
+        );
         return result;
       }
 
@@ -150,7 +174,9 @@ export class SyncManager {
         try {
           await this.adapter.setLastSequence(collection, latestSequence);
         } catch (e) {
-          result.errors.push(this.makeSyncError("pull", collection, undefined, e, "transient"));
+          result.errors.push(
+            this.makeSyncError("pull", collection, undefined, e, "transient"),
+          );
         }
       }
 
@@ -177,7 +203,9 @@ export class SyncManager {
     try {
       dirtyRecords = await this.adapter.getDirty(def);
     } catch (e) {
-      result.errors.push(this.makeSyncError("push", collection, undefined, e, "transient"));
+      result.errors.push(
+        this.makeSyncError("push", collection, undefined, e, "transient"),
+      );
       return result;
     }
 
@@ -185,7 +213,10 @@ export class SyncManager {
       return result;
     }
 
-    const pushSnapshots = new Map<string, { pendingPatchesLength: number; deleted: boolean }>();
+    const pushSnapshots = new Map<
+      string,
+      { pendingPatchesLength: number; deleted: boolean }
+    >();
     const allOutbound: OutboundRecord[] = dirtyRecords.map((record) => {
       pushSnapshots.set(record.id, {
         pendingPatchesLength: record.pendingPatchesLength,
@@ -211,7 +242,9 @@ export class SyncManager {
       try {
         acks = await this.transport.push(collection, batch);
       } catch (e) {
-        result.errors.push(this.makeSyncError("push", collection, undefined, e, "transient"));
+        result.errors.push(
+          this.makeSyncError("push", collection, undefined, e, "transient"),
+        );
         break;
       }
 
@@ -231,7 +264,9 @@ export class SyncManager {
           );
           result.pushed++;
         } catch (e) {
-          result.errors.push(this.makeSyncError("push", collection, ack.id, e, "transient"));
+          result.errors.push(
+            this.makeSyncError("push", collection, ack.id, e, "transient"),
+          );
         }
       }
 
@@ -248,7 +283,9 @@ export class SyncManager {
     try {
       since = await this.adapter.getLastSequence(collection);
     } catch (e) {
-      result.errors.push(this.makeSyncError("pull", collection, undefined, e, "transient"));
+      result.errors.push(
+        this.makeSyncError("pull", collection, undefined, e, "transient"),
+      );
       return result;
     }
 
@@ -256,14 +293,26 @@ export class SyncManager {
     try {
       pullResult = await this.transport.pull(collection, since);
     } catch (e) {
-      result.errors.push(this.makeSyncError("pull", collection, undefined, e, "transient"));
+      result.errors.push(
+        this.makeSyncError("pull", collection, undefined, e, "transient"),
+      );
       return result;
     }
 
     if (pullResult.failures) {
       for (const failure of pullResult.failures) {
-        const kind: SyncErrorKind = failure.retryable ? "transient" : "permanent";
-        result.errors.push(this.makeSyncError("pull", collection, failure.id, failure.error, kind));
+        const kind: SyncErrorKind = failure.retryable
+          ? "transient"
+          : "permanent";
+        result.errors.push(
+          this.makeSyncError(
+            "pull",
+            collection,
+            failure.id,
+            failure.error,
+            kind,
+          ),
+        );
         this.trackFailure(collection, failure.id, kind);
       }
     }
@@ -276,9 +325,15 @@ export class SyncManager {
 
     if (recordsToApply.length > 0) {
       try {
-        const applyResult = await this.adapter.applyRemoteChanges(def, recordsToApply, {
-          delete_conflict_strategy: this.mapDeleteStrategy(this.options.deleteStrategy),
-        });
+        const applyResult = await this.adapter.applyRemoteChanges(
+          def,
+          recordsToApply,
+          {
+            delete_conflict_strategy: this.mapDeleteStrategy(
+              this.options.deleteStrategy,
+            ),
+          },
+        );
         result.pulled = applyResult.count;
         result.merged = applyResult.mergedCount;
 
@@ -286,7 +341,9 @@ export class SyncManager {
 
         for (const re of applyResult.errors) {
           const kind: SyncErrorKind = "permanent";
-          result.errors.push(this.makeSyncError("pull", collection, re.id, re.error, kind));
+          result.errors.push(
+            this.makeSyncError("pull", collection, re.id, re.error, kind),
+          );
           this.trackFailure(collection, re.id, kind);
         }
 
@@ -295,26 +352,40 @@ export class SyncManager {
           this.failureCounts.delete(key);
         }
       } catch (e) {
-        result.errors.push(this.makeSyncError("pull", collection, undefined, e, "transient"));
+        result.errors.push(
+          this.makeSyncError("pull", collection, undefined, e, "transient"),
+        );
         return result;
       }
     }
 
-    this.reportProgress("pull", collection, pullResult.records.length, pullResult.records.length);
+    this.reportProgress(
+      "pull",
+      collection,
+      pullResult.records.length,
+      pullResult.records.length,
+    );
 
-    const latestSequence = pullResult.latestSequence ?? maxSequence(pullResult.records);
+    const latestSequence =
+      pullResult.latestSequence ?? maxSequence(pullResult.records);
     if (latestSequence > since) {
       try {
         await this.adapter.setLastSequence(collection, latestSequence);
       } catch (e) {
-        result.errors.push(this.makeSyncError("pull", collection, undefined, e, "transient"));
+        result.errors.push(
+          this.makeSyncError("pull", collection, undefined, e, "transient"),
+        );
       }
     }
 
     return result;
   }
 
-  private trackFailure(collection: string, id: string, kind: SyncErrorKind): void {
+  private trackFailure(
+    collection: string,
+    id: string,
+    kind: SyncErrorKind,
+  ): void {
     if (kind === "transient") return;
     const key = `${collection}:${id}`;
     const count = (this.failureCounts.get(key) ?? 0) + 1;
@@ -324,7 +395,10 @@ export class SyncManager {
     }
   }
 
-  private async withLock<T>(collection: string, fn: () => Promise<T>): Promise<T> {
+  private async withLock<T>(
+    collection: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
     const prev = this.locks.get(collection) ?? Promise.resolve();
     let resolve: () => void;
     const next = new Promise<void>((r) => {

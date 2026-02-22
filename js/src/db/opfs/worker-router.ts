@@ -8,7 +8,11 @@
  * correct source.
  */
 
-import type { MainToWorkerMessage, WorkerToMainMessage, WorkerRequest } from "./types.js";
+import type {
+  MainToWorkerMessage,
+  WorkerToMainMessage,
+  WorkerRequest,
+} from "./types.js";
 import type { RpcTransport } from "./rpc-transport.js";
 
 /** Subscribe methods whose last arg is a subscriptionId. */
@@ -79,7 +83,10 @@ export class WorkerRouter {
     for (const [globalSubId, source] of this.subscriptionSources) {
       if (source.port === port) {
         this.subscriptionSources.delete(globalSubId);
-        const msg: MainToWorkerMessage = { type: "unsubscribe", subscriptionId: globalSubId };
+        const msg: MainToWorkerMessage = {
+          type: "unsubscribe",
+          subscriptionId: globalSubId,
+        };
         this.worker.postMessage(msg);
       }
     }
@@ -106,7 +113,10 @@ export class WorkerRouter {
     } else if (msg.type === "unsubscribe") {
       // Find the global subscription ID for this port's local sub ID
       for (const [globalSubId, source] of this.subscriptionSources) {
-        if (source.port === port && source.originalSubId === msg.subscriptionId) {
+        if (
+          source.port === port &&
+          source.originalSubId === msg.subscriptionId
+        ) {
           this.subscriptionSources.delete(globalSubId);
           const remapped: MainToWorkerMessage = {
             type: "unsubscribe",

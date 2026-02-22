@@ -96,7 +96,11 @@ describe("RpcClient", () => {
       // Resolve all on new transport
       for (const msg of next.sent) {
         const req = msg as { id: number; method: string };
-        next.deliverMessage({ type: "response", id: req.id, result: `${req.method}-ok` });
+        next.deliverMessage({
+          type: "response",
+          id: req.id,
+          result: `${req.method}-ok`,
+        });
       }
 
       expect(await call1).toBe("get-ok");
@@ -169,16 +173,26 @@ describe("RpcClient", () => {
 
       // Start a subscription — subscribe() sends a call and waits for acknowledgement.
       // We deliver the ack synchronously below so the promise resolves immediately.
-      const subPromise = client.subscribe("observe", ["users", "id-1"], (payload) => {
-        notifications.push(payload);
-      });
+      const subPromise = client.subscribe(
+        "observe",
+        ["users", "id-1"],
+        (payload) => {
+          notifications.push(payload);
+        },
+      );
 
       // Extract the subscription ID from the outbound message (last arg)
       const subRequest = old.sent[0] as { id: number; args: unknown[] };
-      const subscriptionId = subRequest.args[subRequest.args.length - 1] as number;
+      const subscriptionId = subRequest.args[
+        subRequest.args.length - 1
+      ] as number;
 
       // Acknowledge the subscribe call
-      old.deliverMessage({ type: "response", id: subRequest.id, result: undefined });
+      old.deliverMessage({
+        type: "response",
+        id: subRequest.id,
+        result: undefined,
+      });
       await subPromise;
 
       // Replace transport

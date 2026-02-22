@@ -367,15 +367,28 @@ impl SqliteBackend {
 
                 if index_provides_sort {
                     use crate::index::types::IndexSortOrder;
+                    let backward = scan.direction == IndexSortOrder::Desc;
+                    // Skip equality-pinned fields — they are fixed by the WHERE
+                    // clause and don't affect row ordering.
+                    let eq_len = scan.equality_values.as_ref().map_or(0, |v| v.len());
                     let order_by: Vec<String> = fi
                         .fields
                         .iter()
+                        .skip(eq_len)
                         .map(|f| {
-                            let dir = match f.order {
-                                IndexSortOrder::Asc => "ASC",
-                                IndexSortOrder::Desc => "DESC",
+                            let effective_dir = if backward {
+                                // Backward scan: flip each field's declared direction
+                                match f.order {
+                                    IndexSortOrder::Asc => "DESC",
+                                    IndexSortOrder::Desc => "ASC",
+                                }
+                            } else {
+                                match f.order {
+                                    IndexSortOrder::Asc => "ASC",
+                                    IndexSortOrder::Desc => "DESC",
+                                }
                             };
-                            format!("json_extract(data, '$.{}') {}", f.field, dir)
+                            format!("json_extract(data, '$.{}') {}", f.field, effective_dir)
                         })
                         .collect();
                     sql.push_str(&format!(" ORDER BY {}", order_by.join(", ")));
@@ -724,6 +737,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     fn scan_index_raw(&self, collection: &str, scan: &IndexScan) -> Result<Option<RawBatchResult>> {
+        // Exact scans return at most one row; ordering is irrelevant and is omitted.
         let index_provides_sort = matches!(
             scan.scan_type,
             IndexScanType::Full | IndexScanType::Prefix | IndexScanType::Range

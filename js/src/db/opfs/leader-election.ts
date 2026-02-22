@@ -21,7 +21,10 @@ export interface ElectionResult {
  * the lock until release() is called. If not, returns with role "follower"
  * and queues for promotion — when eventually promoted, `onPromoted` fires.
  */
-export function electLeader(dbName: string, onPromoted: () => void): Promise<ElectionResult> {
+export function electLeader(
+  dbName: string,
+  onPromoted: () => void,
+): Promise<ElectionResult> {
   const lockName = leaderLockName(dbName);
 
   return new Promise<ElectionResult>((resolveElection) => {

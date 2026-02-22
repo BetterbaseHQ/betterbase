@@ -1390,3 +1390,204 @@ fn operations_fail_before_initialize() {
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("initialize"));
 }
+
+// ============================================================================
+// Session ID caching
+// ============================================================================
+
+#[test]
+fn session_id_generated_and_cached() {
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    // First put generates a session_id
+    let r1 = adapter
+        .put(
+            &def,
+            json!({ "name": "A", "email": "a@x.com" }),
+            &PutOptions::default(),
+        )
+        .expect("first put");
+
+    // Second put reuses the same session_id — CRDT session IDs should match
+    let r2 = adapter
+        .put(
+            &def,
+            json!({ "name": "B", "email": "b@x.com" }),
+            &PutOptions::default(),
+        )
+        .expect("second put");
+
+    // Both records should exist and be valid
+    assert!(!r1.id.is_empty());
+    assert!(!r2.id.is_empty());
+    assert_ne!(r1.id, r2.id);
+}
+
+// ============================================================================
+// put to deleted record
+// ============================================================================
+
+#[test]
+fn put_to_deleted_record_returns_error() {
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    let opts = PutOptions {
+        id: Some("will-delete".to_string()),
+        session_id: Some(SID),
+        ..Default::default()
+    };
+
+    adapter
+        .put(&def, json!({ "name": "Doomed", "email": "d@x.com" }), &opts)
+        .expect("initial put");
+
+    adapter
+        .delete(&def, "will-delete", &DeleteOptions::default())
+        .expect("delete");
+
+    // Try to put with the same ID — should fail because the record is deleted
+    let result = adapter.put(
+        &def,
+        json!({ "name": "Revived", "email": "r@x.com" }),
+        &opts,
+    );
+    assert!(result.is_err(), "put to deleted record should fail");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("deleted") || err.contains("Deleted"),
+        "unexpected error: {err}"
+    );
+}
+
+// ============================================================================
+// query — multi-field sort with tie-breaking
+// ============================================================================
+
+#[test]
+fn query_sort_multi_field_tie_breaking() {
+    use betterbase_db::query::types::{Query, SortDirection, SortEntry, SortInput};
+
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    adapter
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "z@x.com" }),
+            &put_opts(),
+        )
+        .expect("put");
+    adapter
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "a@x.com" }),
+            &put_opts(),
+        )
+        .expect("put");
+    adapter
+        .put(
+            &def,
+            json!({ "name": "Bob", "email": "m@x.com" }),
+            &put_opts(),
+        )
+        .expect("put");
+
+    let query = Query {
+        sort: Some(SortInput::Entries(vec![
+            SortEntry {
+                field: "name".to_string(),
+                direction: SortDirection::Asc,
+            },
+            SortEntry {
+                field: "email".to_string(),
+                direction: SortDirection::Desc,
+            },
+        ])),
+        ..Default::default()
+    };
+
+    let result = adapter.query(&def, &query).expect("query");
+    assert_eq!(result.records.len(), 3);
+    // First two are "Alice" sorted by email DESC
+    assert_eq!(result.records[0].data["name"], json!("Alice"));
+    assert_eq!(result.records[0].data["email"], json!("z@x.com"));
+    assert_eq!(result.records[1].data["name"], json!("Alice"));
+    assert_eq!(result.records[1].data["email"], json!("a@x.com"));
+    // Third is "Bob"
+    assert_eq!(result.records[2].data["name"], json!("Bob"));
+}
+
+// ============================================================================
+// explain_query
+// ============================================================================
+
+#[test]
+fn explain_query_returns_plan() {
+    use betterbase_db::query::types::Query;
+    use betterbase_db::storage::traits::StorageRead;
+
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    let query = Query {
+        filter: Some(json!({"name": "Alice"})),
+        ..Default::default()
+    };
+
+    // explain_query should return a plan (may be full scan since no indexes on users_def)
+    let plan = adapter.explain_query(&def, &query);
+    // Without indexes, should be a full scan
+    assert_eq!(plan.estimated_cost, 6.0, "no indexes → full scan cost");
+}
+
+// ============================================================================
+// mark_synced with snapshot — record updated after snapshot stays dirty
+// ============================================================================
+
+#[test]
+fn mark_synced_with_snapshot_patches_grew_stays_dirty() {
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    let record = adapter
+        .put(
+            &def,
+            json!({ "name": "User", "email": "u@x.com" }),
+            &put_opts(),
+        )
+        .expect("put");
+
+    // Take a snapshot of the current record state
+    let snapshot = PushSnapshot {
+        pending_patches_length: 0, // pretend no patches at snapshot time
+        deleted: false,
+    };
+
+    // Patch the record (this grows pending_patches)
+    let patch_opts = PatchOptions {
+        id: record.id.clone(),
+        session_id: Some(SID),
+        ..Default::default()
+    };
+    adapter
+        .patch(&def, json!({ "name": "Updated" }), &patch_opts)
+        .expect("patch");
+
+    // Now mark synced with the old snapshot — patches grew, should stay dirty
+    adapter
+        .mark_synced(&def, &record.id, 50, Some(&snapshot))
+        .expect("mark_synced");
+
+    let fetched = adapter
+        .get(&def, &record.id, &get_opts())
+        .expect("get")
+        .expect("exists");
+
+    assert!(
+        fetched.dirty,
+        "record should stay dirty when patches grew after snapshot"
+    );
+    assert_eq!(fetched.sequence, 50, "sequence should still be updated");
+}

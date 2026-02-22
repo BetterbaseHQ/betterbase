@@ -705,6 +705,13 @@ pub fn merge_records(
 }
 
 /// Cross-version merge: migrate remote data, then reapply local edits via diff.
+///
+/// **Assumption:** `local` is already at the current schema version. This is
+/// guaranteed by the current call flow — `process_record` (called on every
+/// read from storage) runs `migrate_and_deserialize` and writes back the
+/// migrated record. If this function were called with a non-migrated local
+/// record, the diff in Step 3 would compare mismatched schema versions and
+/// produce incorrect results.
 fn merge_with_migrated_remote(
     def: &CollectionDef,
     local: &SerializedRecord,

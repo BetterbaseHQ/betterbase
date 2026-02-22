@@ -41,7 +41,12 @@ export class TabCoordinator {
   /** Guards against concurrent reconnection attempts. */
   private reconnecting = false;
 
-  private constructor(tabId: string, dbName: string, worker: Worker, rpc: RpcClient) {
+  private constructor(
+    tabId: string,
+    dbName: string,
+    worker: Worker,
+    rpc: RpcClient,
+  ) {
     this.tabId = tabId;
     this.dbName = dbName;
     this.worker = worker;
@@ -55,7 +60,10 @@ export class TabCoordinator {
    * follower connection (if follower). Returns an RpcClient that
    * transparently handles leader transitions.
    */
-  static async create(dbName: string, worker: Worker): Promise<TabCoordinatorResult> {
+  static async create(
+    dbName: string,
+    worker: Worker,
+  ): Promise<TabCoordinatorResult> {
     const tabId = crypto.randomUUID();
     const rpc = new RpcClient(new DirectTransport(worker));
     const coordinator = new TabCoordinator(tabId, dbName, worker, rpc);
@@ -111,14 +119,19 @@ export class TabCoordinator {
       const timer = setTimeout(() => {
         channel.close();
         reject(
-          new Error(`Timed out waiting for leader to accept connection (${CONNECT_TIMEOUT_MS}ms)`),
+          new Error(
+            `Timed out waiting for leader to accept connection (${CONNECT_TIMEOUT_MS}ms)`,
+          ),
         );
       }, CONNECT_TIMEOUT_MS);
 
       channel.onmessage = (ev: MessageEvent<TabProtocolMessage>) => {
         const msg = ev.data;
 
-        if (msg.type === "follower-accepted" && msg.followerTabId === this.tabId) {
+        if (
+          msg.type === "follower-accepted" &&
+          msg.followerTabId === this.tabId
+        ) {
           clearTimeout(timer);
           channel.close();
           resolve(msg.channelName);
@@ -141,9 +154,13 @@ export class TabCoordinator {
 
   /** Listen on discovery channel for leader changes (follower only). */
   private listenForLeaderChanges(): void {
-    this.discoveryChannel = new BroadcastChannel(discoveryChannelName(this.dbName));
+    this.discoveryChannel = new BroadcastChannel(
+      discoveryChannelName(this.dbName),
+    );
 
-    this.discoveryChannel.onmessage = (ev: MessageEvent<TabProtocolMessage>) => {
+    this.discoveryChannel.onmessage = (
+      ev: MessageEvent<TabProtocolMessage>,
+    ) => {
       const msg = ev.data;
 
       // Only reconnect on leader-announce (a new leader is ready).

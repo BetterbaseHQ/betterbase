@@ -8,8 +8,34 @@
  *     .build();
  */
 
-import type { SchemaShape, CollectionDefHandle, VersionEntry, IndexEntry } from "./types.js";
+import type {
+  SchemaShape,
+  CollectionDefHandle,
+  VersionEntry,
+  IndexEntry,
+} from "./types.js";
 import { BLUEPRINT } from "./types.js";
+
+/** Field names reserved for internal use. User schemas must not use these. */
+const RESERVED_FIELDS = new Set([
+  "id",
+  "createdAt",
+  "updatedAt",
+  "__betterbase_meta",
+]);
+
+function validateSchemaFields(
+  collectionName: string,
+  schema: SchemaShape,
+): void {
+  for (const key of Object.keys(schema)) {
+    if (RESERVED_FIELDS.has(key)) {
+      throw new Error(
+        `[betterbase-db] collection "${collectionName}": field "${key}" is reserved and cannot be used in a schema`,
+      );
+    }
+  }
+}
 
 // ============================================================================
 // Builder option types (exported for consumers)
@@ -33,11 +59,17 @@ export interface ComputedOptions {
 /** Collection builder before any versions are defined. */
 export interface CollectionBuilderNoVersions<TName extends string> {
   /** Define the first version (v1) with its schema. */
-  v<S extends SchemaShape>(version: 1, schema: S): CollectionBuilderWithVersions<TName, S>;
+  v<S extends SchemaShape>(
+    version: 1,
+    schema: S,
+  ): CollectionBuilderWithVersions<TName, S>;
 }
 
 /** Collection builder after at least one version has been defined. */
-export interface CollectionBuilderWithVersions<TName extends string, TSchema extends SchemaShape> {
+export interface CollectionBuilderWithVersions<
+  TName extends string,
+  TSchema extends SchemaShape,
+> {
   /** Add a new schema version with migration function. */
   v<S extends SchemaShape>(
     version: number,
@@ -51,7 +83,9 @@ export interface CollectionBuilderWithVersions<TName extends string, TSchema ext
   /** Define a computed index. */
   computed(
     name: string,
-    compute: (data: Record<string, unknown>) => string | number | boolean | null,
+    compute: (
+      data: Record<string, unknown>,
+    ) => string | number | boolean | null,
     options?: ComputedOptions,
   ): this;
 
@@ -63,28 +97,33 @@ export interface CollectionBuilderWithVersions<TName extends string, TSchema ext
 // Implementation
 // ============================================================================
 
-class CollectionBuilderNoVersionsImpl<TName extends string>
-  implements CollectionBuilderNoVersions<TName>
-{
+class CollectionBuilderNoVersionsImpl<
+  TName extends string,
+> implements CollectionBuilderNoVersions<TName> {
   #name: TName;
 
   constructor(name: TName) {
     this.#name = name;
   }
 
-  v<S extends SchemaShape>(version: 1, schema: S): CollectionBuilderWithVersions<TName, S> {
+  v<S extends SchemaShape>(
+    version: 1,
+    schema: S,
+  ): CollectionBuilderWithVersions<TName, S> {
+    validateSchemaFields(this.#name, schema);
     return new CollectionBuilderWithVersionsImpl(
       this.#name,
       schema,
-      [{ version: 1, schema }],
+      [{ version, schema }],
       [],
     );
   }
 }
 
-class CollectionBuilderWithVersionsImpl<TName extends string, TSchema extends SchemaShape>
-  implements CollectionBuilderWithVersions<TName, TSchema>
-{
+class CollectionBuilderWithVersionsImpl<
+  TName extends string,
+  TSchema extends SchemaShape,
+> implements CollectionBuilderWithVersions<TName, TSchema> {
   #name: TName;
   #currentSchema: TSchema;
   #versions: VersionEntry[];
@@ -111,10 +150,11 @@ class CollectionBuilderWithVersionsImpl<TName extends string, TSchema extends Sc
     schema: S,
     migrate: (data: Record<string, unknown>) => Record<string, unknown>,
   ): CollectionBuilderWithVersions<TName, S> {
+    validateSchemaFields(this.#name, schema);
     if (this.#indexes.length > 0) {
       console.warn(
         `[betterbase-db] collection "${this.#name}": indexes defined before .v(${version}) will be dropped. ` +
-        `Define indexes after the last .v() call.`,
+          `Define indexes after the last .v() call.`,
       );
     }
     return new CollectionBuilderWithVersionsImpl(
@@ -132,7 +172,9 @@ class CollectionBuilderWithVersionsImpl<TName extends string, TSchema extends Sc
 
   computed(
     name: string,
-    compute: (data: Record<string, unknown>) => string | number | boolean | null,
+    compute: (
+      data: Record<string, unknown>,
+    ) => string | number | boolean | null,
     options: ComputedOptions = {},
   ): this {
     this.#indexes.push({ type: "computed", name, compute, options });

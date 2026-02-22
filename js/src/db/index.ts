@@ -44,7 +44,9 @@ export type {
   CollectionPatch,
   // Collection
   CollectionDefHandle,
+  CollectionDef,
   // Query
+  Query,
   QueryOptions,
   QueryResult,
   SortDirection,
@@ -61,19 +63,32 @@ export type {
   RecordError,
   // Change events
   ChangeEvent,
-  // Sync
+  // Sync types
   RemoteRecord,
   PushSnapshot,
   ApplyRemoteOptions,
+  ApplyRemoteResult,
+  ApplyRemoteRecordResult,
   SyncTransport,
   OutboundRecord,
   PushAck,
   PullResult,
   PullFailure,
+  DirtyRecord,
+  SyncAdapter,
+  // Delete conflict
+  DeleteConflictStrategy,
+  ConflictEvent,
+  // Observe
+  ObserveOptions,
 } from "./types.js";
 
 // Re-export conversions for advanced use
-export { serializeForRust, deserializeFromRust } from "./conversions.js";
+export {
+  serializeForRust,
+  deserializeFromRust,
+  META_KEY,
+} from "./conversions.js";
 
 // Re-export WASM init for advanced use
 export { initWasm, setWasmForTesting } from "./wasm-init.js";
@@ -86,9 +101,27 @@ export { OpfsDb } from "./opfs/OpfsDb.js";
 export { createOpfsDb } from "./createOpfsDb.js";
 export type { CreateOpfsDbOptions } from "./createOpfsDb.js";
 
-// Re-export middleware types (used by sync layer)
-export type { Middleware } from "./middleware/types.js";
-export type { TypedAdapter } from "./middleware/typed-adapter.js";
+// Sync manager + scheduler
+export { SyncManager } from "./sync/sync-manager.js";
+export { SyncScheduler } from "./sync/sync-scheduler.js";
+export type { SyncSchedulerOptions } from "./sync/sync-scheduler.js";
+export type {
+  SyncResult,
+  SyncError,
+  SyncErrorKind,
+  SyncProgress,
+  SyncController,
+  RemoteDeleteEvent,
+  SyncManagerOptions,
+} from "./sync/types.js";
 
-// Re-export sync types (used by sync layer)
-export type { SyncController } from "./sync/types.js";
+// Middleware
+export { TypedAdapter } from "./middleware/typed-adapter.js";
+export type {
+  Middleware,
+  WriteOptions,
+  QueryOptions as MiddlewareQueryOptions,
+} from "./middleware/types.js";
+
+// ReactiveAdapter alias (OpfsDb is the reactive adapter in this implementation)
+export type { OpfsDb as ReactiveAdapter } from "./opfs/OpfsDb.js";

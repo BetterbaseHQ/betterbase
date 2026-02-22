@@ -184,11 +184,11 @@ fn listener_removed_during_emit_is_still_called_snapshot_semantics() {
 }
 
 // ============================================================================
-// Error isolation — emit does NOT catch panics (matches JS behavior)
+// Error isolation — emit catches panics per-listener
 // ============================================================================
 
 #[test]
-fn throwing_listener_propagates_and_prevents_subsequent_calls() {
+fn panicking_listener_does_not_prevent_subsequent_listeners() {
     let emitter: EventEmitter<i32> = EventEmitter::new();
     let log = make_log();
     let log_clone = Arc::clone(&log);
@@ -198,20 +198,14 @@ fn throwing_listener_propagates_and_prevents_subsequent_calls() {
         log_clone.lock().unwrap().push("second".to_string());
     });
 
-    // The panic from the first listener should propagate out of emit().
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        emitter.emit(&1);
-    }));
+    // emit() catches panics per-listener — should not propagate.
+    emitter.emit(&1);
 
-    assert!(
-        result.is_err(),
-        "emit should propagate panics from listeners"
-    );
-    // The second listener should NOT have been called because the panic
-    // interrupted iteration.
-    assert!(
-        log.lock().unwrap().is_empty(),
-        "second listener should not be called after first panics"
+    // The second listener should still be called despite the first panicking.
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec!["second"],
+        "second listener should fire despite first panicking"
     );
 }
 

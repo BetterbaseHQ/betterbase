@@ -1,4 +1,4 @@
-//! Tests for the index query planner — ported from the JS reference implementation/tests/index/planner.test.ts
+//! Tests for the index query planner — ported from betterbase-db/tests/index/planner.test.ts
 
 use betterbase_db::index::planner::{explain_plan, extract_conditions, plan_query};
 use betterbase_db::index::types::{
@@ -639,18 +639,139 @@ fn extract_lt_only_condition() {
 // ============================================================================
 
 #[test]
-fn plan_no_index_for_sort_when_direction_mismatches() {
-    // Index is ASC, query asks DESC → index cannot provide sort
+fn plan_reverse_scan_for_opposite_sort_direction() {
+    // Index is ASC, query asks DESC → backward scan provides sort
     let indexes = vec![field_index("status", &["status"], false, false)];
     let plan = plan_query(
         Some(&json!({})),
         Some(&[sort_entry("status", SortDirection::Desc)]),
         &indexes,
     );
-    // Index should NOT provide sort since direction mismatches
+    assert!(
+        plan.index_provides_sort,
+        "ASC index should provide DESC sort via backward scan"
+    );
+    assert_eq!(
+        plan.scan.as_ref().unwrap().direction,
+        IndexSortOrder::Desc,
+        "scan direction should be Desc for backward scan"
+    );
+}
+
+// ============================================================================
+// Reverse-scan optimization
+// ============================================================================
+
+#[test]
+fn plan_sort_reverse_of_index_provides_sort() {
+    // Index (a ASC, b ASC), sort (a DESC, b DESC) → backward scan provides sort
+    let indexes = vec![IndexDefinition::Field(FieldIndex {
+        name: "ab".to_string(),
+        fields: vec![
+            IndexField {
+                field: "a".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "b".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+        ],
+        unique: false,
+        sparse: false,
+    })];
+
+    let sort = vec![
+        sort_entry("a", SortDirection::Desc),
+        sort_entry("b", SortDirection::Desc),
+    ];
+    let plan = plan_query(None, Some(&sort), &indexes);
+
+    assert!(plan.scan.is_some(), "should use index for reverse sort");
+    assert!(
+        plan.index_provides_sort,
+        "backward scan should provide sort"
+    );
+    assert_eq!(
+        plan.scan.as_ref().unwrap().direction,
+        IndexSortOrder::Desc,
+        "direction should be Desc for backward scan"
+    );
+    assert!(plan.post_sort.is_none(), "no post-sort needed");
+}
+
+#[test]
+fn plan_sort_mixed_directions_no_match() {
+    // Index (a ASC, b ASC), sort (a DESC, b ASC) → mixed, no match
+    let indexes = vec![IndexDefinition::Field(FieldIndex {
+        name: "ab".to_string(),
+        fields: vec![
+            IndexField {
+                field: "a".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "b".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+        ],
+        unique: false,
+        sparse: false,
+    })];
+
+    let sort = vec![
+        sort_entry("a", SortDirection::Desc),
+        sort_entry("b", SortDirection::Asc),
+    ];
+    let plan = plan_query(None, Some(&sort), &indexes);
+
+    // Mixed directions can't be satisfied by forward or backward scan
     assert!(
         !plan.index_provides_sort,
-        "ASC index should not provide DESC sort"
+        "mixed sort directions should not match"
+    );
+}
+
+#[test]
+fn plan_sort_reverse_after_equality_prefix() {
+    // Index (a ASC, b ASC, c ASC), equality on a, sort (b DESC, c DESC)
+    // → backward scan after prefix provides sort
+    let indexes = vec![IndexDefinition::Field(FieldIndex {
+        name: "abc".to_string(),
+        fields: vec![
+            IndexField {
+                field: "a".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "b".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "c".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+        ],
+        unique: false,
+        sparse: false,
+    })];
+
+    let filter = json!({"a": "x"});
+    let sort = vec![
+        sort_entry("b", SortDirection::Desc),
+        sort_entry("c", SortDirection::Desc),
+    ];
+    let plan = plan_query(Some(&filter), Some(&sort), &indexes);
+
+    assert!(plan.scan.is_some(), "should use index");
+    assert!(
+        plan.index_provides_sort,
+        "backward scan after equality prefix should provide sort"
+    );
+    assert_eq!(
+        plan.scan.as_ref().unwrap().direction,
+        IndexSortOrder::Desc,
+        "direction should be Desc"
     );
 }
 
@@ -708,4 +829,179 @@ fn plan_in_over_limit_falls_back_to_full_scan() {
         plan.post_filter.is_some(),
         "should have post-filter for residual $in"
     );
+}
+
+// ============================================================================
+// Computed index — range and $in
+// ============================================================================
+
+#[test]
+fn plan_computed_index_range() {
+    let indexes = vec![computed_index(
+        "score_idx",
+        |doc| {
+            doc.get("score")
+                .and_then(|v| v.as_f64())
+                .map(IndexableValue::Number)
+        },
+        false,
+        false,
+    )];
+    let filter = json!({"$computed": {"score_idx": {"$gte": 10, "$lt": 100}}});
+    let plan = plan_query(Some(&filter), None, &indexes);
+    assert!(
+        plan.scan.is_some(),
+        "should select computed index for range"
+    );
+    assert_eq!(plan.scan.as_ref().unwrap().index.name(), "score_idx");
+    assert_eq!(plan.scan.as_ref().unwrap().scan_type, IndexScanType::Range);
+}
+
+#[test]
+fn plan_computed_index_in_values() {
+    let indexes = vec![computed_index(
+        "tag_idx",
+        |doc| {
+            doc.get("tag")
+                .and_then(|v| v.as_str())
+                .map(|s| IndexableValue::String(s.to_string()))
+        },
+        false,
+        false,
+    )];
+    let filter = json!({"$computed": {"tag_idx": {"$in": ["a", "b", "c"]}}});
+    let plan = plan_query(Some(&filter), None, &indexes);
+    assert!(plan.scan.is_some(), "should select computed index for $in");
+    assert_eq!(plan.scan.as_ref().unwrap().index.name(), "tag_idx");
+    let in_vals = plan.scan.as_ref().unwrap().in_values.as_ref().unwrap();
+    assert_eq!(in_vals.len(), 3);
+}
+
+// ============================================================================
+// Multiple indexes — best cost selection
+// ============================================================================
+
+#[test]
+fn plan_multiple_indexes_selects_best_cost() {
+    let indexes = vec![
+        field_index("status", &["status"], false, false),
+        field_index("email_unique", &["email"], true, false),
+        field_index("name", &["name"], false, false),
+    ];
+
+    let filter = json!({"status": "active", "email": "test@example.com", "name": "Alice"});
+    let plan = plan_query(Some(&filter), None, &indexes);
+    // Unique index should win (cost 1.0)
+    assert_eq!(plan.scan.as_ref().unwrap().index.name(), "email_unique");
+    assert_eq!(plan.estimated_cost, 1.0);
+}
+
+// ============================================================================
+// $in edge cases in plan_query
+// ============================================================================
+
+#[test]
+fn plan_in_exceeds_max_falls_to_residual() {
+    let indexes = vec![field_index("idx_tag", &["tag"], false, false)];
+    let values: Vec<serde_json::Value> = (0..21).map(|i| json!(format!("t{i}"))).collect();
+    let filter = json!({"tag": {"$in": values}});
+    let plan = plan_query(Some(&filter), None, &indexes);
+    assert!(plan.scan.is_none(), "$in > 20 should not use index");
+}
+
+#[test]
+fn plan_in_empty_array_residual() {
+    let filter = json!({"tag": {"$in": []}});
+    let conds = extract_conditions(Some(&filter));
+    assert!(conds.ins.is_empty(), "empty $in should not be extracted");
+}
+
+// ============================================================================
+// Sort after equality prefix
+// ============================================================================
+
+#[test]
+fn plan_sort_provided_by_index_after_prefix() {
+    let indexes = vec![IndexDefinition::Field(FieldIndex {
+        name: "status_age".to_string(),
+        fields: vec![
+            IndexField {
+                field: "status".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "age".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+        ],
+        unique: false,
+        sparse: false,
+    })];
+
+    let filter = json!({"status": "active"});
+    let sort = vec![sort_entry("age", SortDirection::Asc)];
+    let plan = plan_query(Some(&filter), Some(&sort), &indexes);
+    assert!(plan.scan.is_some());
+    assert!(
+        plan.index_provides_sort,
+        "sort on second field after equality prefix should be provided by index"
+    );
+}
+
+#[test]
+fn plan_sort_not_provided_gap_in_prefix() {
+    // Compound index (a, b, c) — filter on a, sort on c → gap at b → post-sort required
+    let indexes = vec![IndexDefinition::Field(FieldIndex {
+        name: "abc".to_string(),
+        fields: vec![
+            IndexField {
+                field: "a".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "b".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "c".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+        ],
+        unique: false,
+        sparse: false,
+    })];
+
+    let filter = json!({"a": "x"});
+    let sort = vec![sort_entry("c", SortDirection::Asc)];
+    let plan = plan_query(Some(&filter), Some(&sort), &indexes);
+    // Index can handle the filter but NOT the sort (gap at b)
+    assert!(
+        !plan.index_provides_sort,
+        "gap in prefix → post-sort required"
+    );
+}
+
+// ============================================================================
+// No filter, no sort → full scan
+// ============================================================================
+
+#[test]
+fn plan_no_filter_falls_to_full_scan() {
+    let indexes = vec![field_index("idx_status", &["status"], false, false)];
+    let plan = plan_query(None, None, &indexes);
+    assert!(plan.scan.is_none(), "no filter, no sort → full scan");
+    assert_eq!(plan.estimated_cost, 6.0);
+}
+
+// ============================================================================
+// explain_plan output format
+// ============================================================================
+
+#[test]
+fn plan_explain_output_format() {
+    let indexes = vec![field_index("idx_status", &["status"], false, false)];
+    let plan = plan_query(Some(&json!({"status": "active"})), None, &indexes);
+    let output = explain_plan(&plan);
+    assert!(output.contains("Index: idx_status"), "output: {output}");
+    assert!(output.contains("Scan type: exact"), "output: {output}");
 }

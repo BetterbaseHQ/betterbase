@@ -25,7 +25,9 @@ export class LeaderHost {
 
     this.discoveryChannel = new BroadcastChannel(discoveryChannelName(dbName));
 
-    this.discoveryChannel.onmessage = (ev: MessageEvent<TabProtocolMessage>) => {
+    this.discoveryChannel.onmessage = (
+      ev: MessageEvent<TabProtocolMessage>,
+    ) => {
       this.handleDiscoveryMessage(ev.data);
     };
 

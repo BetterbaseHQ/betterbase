@@ -20,9 +20,14 @@ export interface Middleware<
   TWriteOpts extends WriteOptions = WriteOptions,
   TQueryOpts extends QueryOptions = QueryOptions,
 > {
-  onRead?(record: unknown, meta: Record<string, unknown>): TExtra & Record<string, unknown>;
+  onRead?(
+    record: unknown,
+    meta: Record<string, unknown>,
+  ): TExtra & Record<string, unknown>;
   onWrite?(options: TWriteOpts): Record<string, unknown>;
-  onQuery?(options: TQueryOpts): ((meta?: Record<string, unknown>) => boolean) | undefined;
+  onQuery?(
+    options: TQueryOpts,
+  ): ((meta?: Record<string, unknown>) => boolean) | undefined;
   shouldResetSyncState?(
     oldMeta: Record<string, unknown> | undefined,
     newMeta: Record<string, unknown>,

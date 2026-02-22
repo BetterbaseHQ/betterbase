@@ -9,13 +9,13 @@
  */
 
 /**
- * LESS namespace UUID bytes: UUID5(DNS, "betterbase.dev") = d645a70c-a29d-5167-9f86-6205c732f3ba
+ * Betterbase namespace UUID bytes: UUID5(DNS, "betterbase.dev") = c8362c28-0504-5522-9ba6-6e7ed1d76153
  * Pre-computed constant that must never change.
  */
 // prettier-ignore
-const LESS_NAMESPACE = new Uint8Array([
-  0xd6, 0x45, 0xa7, 0x0c, 0xa2, 0x9d, 0x51, 0x67,
-  0x9f, 0x86, 0x62, 0x05, 0xc7, 0x32, 0xf3, 0xba,
+const BETTERBASE_NAMESPACE = new Uint8Array([
+  0xc8, 0x36, 0x2c, 0x28, 0x05, 0x04, 0x55, 0x22,
+  0x9b, 0xa6, 0x6e, 0x7e, 0xd1, 0xd7, 0x61, 0x53,
 ]);
 
 /**
@@ -35,7 +35,7 @@ export async function personalSpaceId(
   clientId: string,
 ): Promise<string> {
   const name = `${issuer}\0${userId}\0${clientId}`;
-  return uuid5(LESS_NAMESPACE, new TextEncoder().encode(name));
+  return uuid5(BETTERBASE_NAMESPACE, new TextEncoder().encode(name));
 }
 
 /**
@@ -55,7 +55,9 @@ async function uuid5(namespace: Uint8Array, name: Uint8Array): Promise<string> {
   hash[8] = (hash[8]! & 0x3f) | 0x80;
 
   // Format first 16 bytes as UUID string
-  const hex = Array.from(hash.slice(0, 16), (b) => b.toString(16).padStart(2, "0")).join("");
+  const hex = Array.from(hash.slice(0, 16), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
 
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }

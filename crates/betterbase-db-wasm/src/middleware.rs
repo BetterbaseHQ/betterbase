@@ -120,7 +120,7 @@ impl Middleware for JsMiddlewareWrapper {
             Err(_) => return data,
         };
         match self.inner.0.on_read(js_data, js_meta) {
-            Ok(result) => match js_to_value(&result) {
+            Ok(result) => match js_to_value(result) {
                 Ok(v) => v,
                 Err(_) => data,
             },
@@ -137,7 +137,7 @@ impl Middleware for JsMiddlewareWrapper {
         if result.is_null() || result.is_undefined() {
             return None;
         }
-        js_to_value(&result).ok()
+        js_to_value(result).ok()
     }
 
     fn on_query(&self, options: &Value) -> Option<Box<MetaFilterFn>> {
@@ -301,9 +301,9 @@ impl WasmTypedDb {
         options: JsValue,
     ) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
-        let data_val = js_to_value(&data)?;
-        let w_opts = parse_opaque_opts(&write_opts)?;
-        let put_opts = parse_put_options(&options)?;
+        let data_val = js_to_value(data)?;
+        let w_opts = parse_opaque_opts(write_opts)?;
+        let put_opts = parse_put_options(options)?;
         let result = self
             .typed()?
             .put(&def, data_val, w_opts.as_ref(), Some(&put_opts))
@@ -314,7 +314,7 @@ impl WasmTypedDb {
     /// Get a record by id (with middleware enrichment).
     pub fn get(&self, collection: &str, id: &str, options: JsValue) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
-        let opts = parse_get_options(&options)?;
+        let opts = parse_get_options(options)?;
         let result = self.typed()?.get(&def, id, Some(&opts)).into_js()?;
         match result {
             Some(data) => value_to_js(&data),
@@ -331,9 +331,9 @@ impl WasmTypedDb {
         options: JsValue,
     ) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
-        let data_val = js_to_value(&data)?;
-        let w_opts = parse_opaque_opts(&write_opts)?;
-        let patch_opts = parse_patch_options(&options)?;
+        let data_val = js_to_value(data)?;
+        let w_opts = parse_opaque_opts(write_opts)?;
+        let patch_opts = parse_patch_options(options)?;
         let result = self
             .typed()?
             .patch(&def, data_val, w_opts.as_ref(), Some(&patch_opts))
@@ -350,8 +350,8 @@ impl WasmTypedDb {
         options: JsValue,
     ) -> Result<bool, JsValue> {
         let def = self.get_def(collection)?;
-        let w_opts = parse_opaque_opts(&write_opts)?;
-        let del_opts = parse_delete_options(id, &options)?;
+        let w_opts = parse_opaque_opts(write_opts)?;
+        let del_opts = parse_delete_options(id, options)?;
         self.typed()?
             .delete(&def, id, w_opts.as_ref(), Some(&del_opts))
             .into_js()
@@ -369,8 +369,8 @@ impl WasmTypedDb {
         query_opts: JsValue,
     ) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
-        let q = parse_query(&query)?;
-        let q_opts = parse_opaque_opts(&query_opts)?;
+        let q = parse_query(query)?;
+        let q_opts = parse_opaque_opts(query_opts)?;
         let result = self
             .typed()?
             .query(&def, Some(&q), q_opts.as_ref())
@@ -396,9 +396,9 @@ impl WasmTypedDb {
         let q = if query.is_null() || query.is_undefined() {
             None
         } else {
-            Some(parse_query(&query)?)
+            Some(parse_query(query)?)
         };
-        let q_opts = parse_opaque_opts(&query_opts)?;
+        let q_opts = parse_opaque_opts(query_opts)?;
         let result = self
             .typed()?
             .count(&def, q.as_ref(), q_opts.as_ref())
@@ -410,7 +410,7 @@ impl WasmTypedDb {
     #[wasm_bindgen(js_name = "getAll")]
     pub fn get_all(&self, collection: &str, options: JsValue) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
-        let opts = parse_list_options(&options)?;
+        let opts = parse_list_options(options)?;
         let result = self.typed()?.get_all(&def, Some(&opts)).into_js()?;
         value_to_js(&Value::Array(result.records))
     }
@@ -431,8 +431,8 @@ impl WasmTypedDb {
         let def = self.get_def(collection)?;
         let records_val: Vec<Value> = serde_wasm_bindgen::from_value(records)
             .map_err(|e| JsValue::from_str(&format!("Invalid records array: {e}")))?;
-        let w_opts = parse_opaque_opts(&write_opts)?;
-        let put_opts = parse_put_options(&options)?;
+        let w_opts = parse_opaque_opts(write_opts)?;
+        let put_opts = parse_put_options(options)?;
         let result = self
             .typed()?
             .bulk_put(&def, records_val, w_opts.as_ref(), Some(&put_opts))
@@ -457,8 +457,8 @@ impl WasmTypedDb {
         let id_strings: Vec<String> = serde_wasm_bindgen::from_value(ids)
             .map_err(|e| JsValue::from_str(&format!("Invalid ids array: {e}")))?;
         let id_refs: Vec<&str> = id_strings.iter().map(|s| s.as_str()).collect();
-        let w_opts = parse_opaque_opts(&write_opts)?;
-        let del_opts = parse_delete_options("", &options)?;
+        let w_opts = parse_opaque_opts(write_opts)?;
+        let del_opts = parse_delete_options("", options)?;
         let result = self
             .typed()?
             .bulk_delete(&def, &id_refs, w_opts.as_ref(), Some(&del_opts))
@@ -510,12 +510,12 @@ impl WasmTypedDb {
         query_opts: JsValue,
     ) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
-        let q = parse_query(&query)?;
+        let q = parse_query(query)?;
         let cb = Arc::new(SendSyncCallback(callback));
         let q_opts = if query_opts.is_null() || query_opts.is_undefined() {
             None
         } else {
-            js_to_value(&query_opts).ok()
+            js_to_value(query_opts).ok()
         };
 
         let unsub = self.typed()?.observe_query(
@@ -581,7 +581,7 @@ impl WasmTypedDb {
         let snap = if snapshot.is_null() || snapshot.is_undefined() {
             None
         } else {
-            let val = js_to_value(&snapshot)?;
+            let val = js_to_value(snapshot)?;
             let s: betterbase_db::types::PushSnapshot = serde_json::from_value(val)
                 .map_err(|e| JsValue::from_str(&format!("Invalid snapshot: {e}")))?;
             Some(s)
@@ -603,7 +603,7 @@ impl WasmTypedDb {
         let records_val: Vec<betterbase_db::types::RemoteRecord> =
             serde_wasm_bindgen::from_value(records)
                 .map_err(|e| JsValue::from_str(&format!("Invalid remote records: {e}")))?;
-        let opts_val = js_to_value(&options)?;
+        let opts_val = js_to_value(options)?;
         let opts: betterbase_db::types::ApplyRemoteOptions = serde_json::from_value(opts_val)
             .map_err(|e| JsValue::from_str(&format!("Invalid apply options: {e}")))?;
         let result = self
@@ -655,7 +655,7 @@ impl WasmTypedDb {
     }
 }
 
-fn parse_opaque_opts(js: &JsValue) -> Result<Option<Value>, JsValue> {
+fn parse_opaque_opts(js: JsValue) -> Result<Option<Value>, JsValue> {
     if js.is_null() || js.is_undefined() {
         return Ok(None);
     }
@@ -697,7 +697,7 @@ fn change_event_to_value(event: &betterbase_db::reactive::event::ChangeEvent) ->
     Value::Object(obj)
 }
 
-fn parse_put_options(js: &JsValue) -> Result<PutOptions, JsValue> {
+fn parse_put_options(js: JsValue) -> Result<PutOptions, JsValue> {
     if js.is_null() || js.is_undefined() {
         return Ok(PutOptions::default());
     }
@@ -717,7 +717,7 @@ fn parse_put_options(js: &JsValue) -> Result<PutOptions, JsValue> {
     })
 }
 
-fn parse_get_options(js: &JsValue) -> Result<GetOptions, JsValue> {
+fn parse_get_options(js: JsValue) -> Result<GetOptions, JsValue> {
     if js.is_null() || js.is_undefined() {
         return Ok(GetOptions::default());
     }
@@ -731,7 +731,7 @@ fn parse_get_options(js: &JsValue) -> Result<GetOptions, JsValue> {
     })
 }
 
-fn parse_patch_options(js: &JsValue) -> Result<PatchOptions, JsValue> {
+fn parse_patch_options(js: JsValue) -> Result<PatchOptions, JsValue> {
     if js.is_null() || js.is_undefined() {
         return Ok(PatchOptions::default());
     }
@@ -756,7 +756,7 @@ fn parse_patch_options(js: &JsValue) -> Result<PatchOptions, JsValue> {
     })
 }
 
-fn parse_delete_options(id: &str, js: &JsValue) -> Result<DeleteOptions, JsValue> {
+fn parse_delete_options(id: &str, js: JsValue) -> Result<DeleteOptions, JsValue> {
     if js.is_null() || js.is_undefined() {
         return Ok(DeleteOptions {
             id: id.to_string(),
@@ -774,7 +774,7 @@ fn parse_delete_options(id: &str, js: &JsValue) -> Result<DeleteOptions, JsValue
     })
 }
 
-fn parse_list_options(js: &JsValue) -> Result<ListOptions, JsValue> {
+fn parse_list_options(js: JsValue) -> Result<ListOptions, JsValue> {
     if js.is_null() || js.is_undefined() {
         return Ok(ListOptions::default());
     }
@@ -795,7 +795,7 @@ fn parse_list_options(js: &JsValue) -> Result<ListOptions, JsValue> {
     })
 }
 
-fn parse_query(js: &JsValue) -> Result<Query, JsValue> {
+fn parse_query(js: JsValue) -> Result<Query, JsValue> {
     let val = js_to_value(js)?;
     let obj = val
         .as_object()

@@ -9,16 +9,29 @@
  */
 
 import { describe, it, expect, afterEach } from "vitest";
-import type { OpfsDb, ChangeEvent, QueryResult, CollectionRead } from "../src/index.js";
-import { createOpfsDb } from "../src/index.js";
-import { buildUsersCollection, uniqueOpfsDbName, type UsersCollection } from "./opfs-helpers.js";
+import type {
+  OpfsDb,
+  ChangeEvent,
+  QueryResult,
+  CollectionRead,
+} from "../../src/db/index.js";
+import { createOpfsDb } from "../../src/db/index.js";
+import {
+  buildUsersCollection,
+  uniqueOpfsDbName,
+  type UsersCollection,
+} from "./opfs-helpers.js";
 
-type UserRead = CollectionRead<ReturnType<typeof buildUsersCollection>["schema"]>;
+type UserRead = CollectionRead<
+  ReturnType<typeof buildUsersCollection>["schema"]
+>;
 
 const users: UsersCollection = buildUsersCollection();
 
 function createTestWorker(): Worker {
-  return new Worker(new URL("./opfs-test-worker.ts", import.meta.url), { type: "module" });
+  return new Worker(new URL("./opfs-test-worker.ts", import.meta.url), {
+    type: "module",
+  });
 }
 
 /**
@@ -46,7 +59,11 @@ async function waitUntil(
 }
 
 /** Wait for a synchronous condition, polling at short intervals. */
-function waitFor(predicate: () => boolean, timeoutMs = 5_000, intervalMs = 50): Promise<void> {
+function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 5_000,
+  intervalMs = 50,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const check = () => {
@@ -282,9 +299,21 @@ describe("multi-tab", () => {
       const tab1 = await openTab(dbName);
       const tab2 = await openTab(dbName);
 
-      const r1 = await tab1.put(users, { name: "Alice", email: "a@test.com", age: 30 });
-      const r2 = await tab1.put(users, { name: "Bob", email: "b@test.com", age: 25 });
-      const r3 = await tab1.put(users, { name: "Carol", email: "c@test.com", age: 35 });
+      const r1 = await tab1.put(users, {
+        name: "Alice",
+        email: "a@test.com",
+        age: 30,
+      });
+      const r2 = await tab1.put(users, {
+        name: "Bob",
+        email: "b@test.com",
+        age: 25,
+      });
+      const r3 = await tab1.put(users, {
+        name: "Carol",
+        email: "c@test.com",
+        age: 35,
+      });
 
       // Follower bulk deletes two of three
       const result = await tab2.bulkDelete(users, [r1.id, r3.id]);
@@ -309,10 +338,26 @@ describe("multi-tab", () => {
       const tab2 = await openTab(dbName);
 
       // Interleave writes from both tabs
-      const r1 = await tab1.put(users, { name: "Alice", email: "a@test.com", age: 30 });
-      const r2 = await tab2.put(users, { name: "Bob", email: "b@test.com", age: 25 });
-      const r3 = await tab1.put(users, { name: "Carol", email: "c@test.com", age: 35 });
-      const r4 = await tab2.put(users, { name: "Dave", email: "d@test.com", age: 28 });
+      const r1 = await tab1.put(users, {
+        name: "Alice",
+        email: "a@test.com",
+        age: 30,
+      });
+      const r2 = await tab2.put(users, {
+        name: "Bob",
+        email: "b@test.com",
+        age: 25,
+      });
+      const r3 = await tab1.put(users, {
+        name: "Carol",
+        email: "c@test.com",
+        age: 35,
+      });
+      const r4 = await tab2.put(users, {
+        name: "Dave",
+        email: "d@test.com",
+        age: 28,
+      });
 
       // Both tabs see all 4 records
       const fromTab1 = await tab1.getAll(users);
@@ -490,7 +535,11 @@ describe("multi-tab", () => {
       const tab2 = await openTab(dbName);
       const tab3 = await openTab(dbName);
 
-      const record = await tab1.put(users, { name: "Alice", email: "a@test.com", age: 30 });
+      const record = await tab1.put(users, {
+        name: "Alice",
+        email: "a@test.com",
+        age: 30,
+      });
 
       // First leader closes → tab2 promoted
       await tab1.close();
@@ -587,7 +636,11 @@ describe("multi-tab", () => {
       });
 
       // onChange is now synchronous — no setup delay needed
-      const record = await tab1.put(users, { name: "Alice", email: "a@test.com", age: 30 });
+      const record = await tab1.put(users, {
+        name: "Alice",
+        email: "a@test.com",
+        age: 30,
+      });
 
       expect(events.length).toBe(1);
       expect(events[0].type).toBe("put");
@@ -646,7 +699,11 @@ describe("multi-tab", () => {
       });
 
       // put
-      const record = await tab1.put(users, { name: "Alice", email: "a@test.com", age: 30 });
+      const record = await tab1.put(users, {
+        name: "Alice",
+        email: "a@test.com",
+        age: 30,
+      });
       expect(events.length).toBe(1);
       expect(events[0].type).toBe("put");
 
@@ -712,7 +769,11 @@ describe("multi-tab", () => {
       });
 
       // Create a record to get its CRDT, then apply as "remote"
-      const record = await tab1.put(users, { name: "Alice", email: "a@test.com", age: 30 });
+      const record = await tab1.put(users, {
+        name: "Alice",
+        email: "a@test.com",
+        age: 30,
+      });
       // Get the dirty record for its CRDT binary
       const dirty = await tab1.getDirty(users);
       const crdt = dirty[0].crdt;
@@ -926,7 +987,11 @@ describe("multi-tab", () => {
       // Wait for db2 to become leader
       await waitUntil(async () => {
         try {
-          await db2.put(users, { name: "Test", email: "test@test.com", age: 1 });
+          await db2.put(users, {
+            name: "Test",
+            email: "test@test.com",
+            age: 1,
+          });
           return true;
         } catch {
           return false;

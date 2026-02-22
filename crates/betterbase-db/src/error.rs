@@ -433,21 +433,21 @@ mod tests {
     // --- LessDbError From conversions ---
 
     #[test]
-    fn less_db_error_from_schema_error() {
+    fn betterbase_db_error_from_schema_error() {
         let schema_err = SchemaError::Validation(ValidationErrors(vec![]));
         let db_err: LessDbError = schema_err.into();
         assert!(matches!(db_err, LessDbError::Schema(_)));
     }
 
     #[test]
-    fn less_db_error_from_storage_error() {
+    fn betterbase_db_error_from_storage_error() {
         let storage_err = StorageError::NotInitialized;
         let db_err: LessDbError = storage_err.into();
         assert!(matches!(db_err, LessDbError::Storage(_)));
     }
 
     #[test]
-    fn less_db_error_from_migration_error() {
+    fn betterbase_db_error_from_migration_error() {
         let mig_err = MigrationError {
             collection: "c".to_string(),
             record_id: "r".to_string(),
@@ -461,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn less_db_error_from_query_error() {
+    fn betterbase_db_error_from_query_error() {
         let q_err = QueryError::UnknownOperator("$exists".to_string());
         let db_err: LessDbError = q_err.into();
         assert!(matches!(db_err, LessDbError::Query(_)));

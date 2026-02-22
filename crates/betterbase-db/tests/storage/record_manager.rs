@@ -9,12 +9,13 @@ use betterbase_db::{
     crdt::{self, MIN_SESSION_ID},
     schema::node::t,
     storage::record_manager::{
-        compute_index_values, migrate_and_deserialize, normalize_index_value, prepare_delete,
-        prepare_mark_synced, prepare_new, prepare_patch, prepare_remote_insert,
-        prepare_remote_tombstone, prepare_update, try_extract_id,
+        compute_index_values, merge_records, migrate_and_deserialize, normalize_index_value,
+        prepare_delete, prepare_mark_synced, prepare_new, prepare_patch, prepare_remote_insert,
+        prepare_remote_tombstone, prepare_update, resolve_delete_conflict, try_extract_id,
     },
     types::{
-        DeleteOptions, PatchOptions, PushSnapshot, PutOptions, RemoteRecord, SerializedRecord,
+        DeleteConflictStrategy, DeleteOptions, DeleteResolution, PatchOptions, PushSnapshot,
+        PutOptions, RemoteRecord, SerializedRecord,
     },
 };
 use serde_json::{json, Value};
@@ -226,7 +227,10 @@ fn prepare_update_rejects_immutable_id_change() {
     assert!(result.is_err(), "changing id should be rejected");
     match result.unwrap_err() {
         betterbase_db::error::LessDbError::Storage(inner)
-            if matches!(*inner, betterbase_db::error::StorageError::ImmutableField { .. }) =>
+            if matches!(
+                *inner,
+                betterbase_db::error::StorageError::ImmutableField { .. }
+            ) =>
         {
             if let betterbase_db::error::StorageError::ImmutableField { field, .. } = *inner {
                 assert_eq!(field, "id");
@@ -250,7 +254,10 @@ fn prepare_update_rejects_immutable_created_at_change() {
     assert!(result.is_err(), "changing createdAt should be rejected");
     match result.unwrap_err() {
         betterbase_db::error::LessDbError::Storage(inner)
-            if matches!(*inner, betterbase_db::error::StorageError::ImmutableField { .. }) =>
+            if matches!(
+                *inner,
+                betterbase_db::error::StorageError::ImmutableField { .. }
+            ) =>
         {
             if let betterbase_db::error::StorageError::ImmutableField { field, .. } = *inner {
                 assert_eq!(field, "createdAt");
@@ -923,5 +930,253 @@ fn prepare_remote_insert_preserves_meta() {
         result.record.meta,
         Some(json!({"spaceId": "workspace-1"})),
         "meta should be preserved from remote"
+    );
+}
+
+// ============================================================================
+// resolve_delete_conflict
+// ============================================================================
+
+#[test]
+fn resolve_delete_conflict_remote_wins_remote_deleted() {
+    let def = users_def();
+    let local = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+    let remote = RemoteRecord {
+        id: "u1".to_string(),
+        version: 1,
+        crdt: None,
+        deleted: true,
+        sequence: 10,
+        meta: None,
+    };
+    let result = resolve_delete_conflict(&DeleteConflictStrategy::RemoteWins, &local, &remote);
+    assert_eq!(result, DeleteResolution::Delete);
+}
+
+#[test]
+fn resolve_delete_conflict_remote_wins_both_alive() {
+    let def = users_def();
+    let local = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+    let remote = RemoteRecord {
+        id: "u1".to_string(),
+        version: 1,
+        crdt: None,
+        deleted: false,
+        sequence: 10,
+        meta: None,
+    };
+    let result = resolve_delete_conflict(&DeleteConflictStrategy::RemoteWins, &local, &remote);
+    assert_eq!(result, DeleteResolution::Keep);
+}
+
+#[test]
+fn resolve_delete_conflict_local_wins_local_deleted() {
+    let def = users_def();
+    let mut local = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+    local.deleted = true;
+    let remote = RemoteRecord {
+        id: "u1".to_string(),
+        version: 1,
+        crdt: None,
+        deleted: false,
+        sequence: 10,
+        meta: None,
+    };
+    let result = resolve_delete_conflict(&DeleteConflictStrategy::LocalWins, &local, &remote);
+    assert_eq!(result, DeleteResolution::Delete);
+}
+
+#[test]
+fn resolve_delete_conflict_local_wins_local_alive() {
+    let def = users_def();
+    let local = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+    let remote = RemoteRecord {
+        id: "u1".to_string(),
+        version: 1,
+        crdt: None,
+        deleted: true,
+        sequence: 10,
+        meta: None,
+    };
+    let result = resolve_delete_conflict(&DeleteConflictStrategy::LocalWins, &local, &remote);
+    assert_eq!(result, DeleteResolution::Keep);
+}
+
+#[test]
+fn resolve_delete_conflict_delete_wins() {
+    let def = users_def();
+    let local = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+    let remote = RemoteRecord {
+        id: "u1".to_string(),
+        version: 1,
+        crdt: None,
+        deleted: false,
+        sequence: 10,
+        meta: None,
+    };
+    let result = resolve_delete_conflict(&DeleteConflictStrategy::DeleteWins, &local, &remote);
+    assert_eq!(result, DeleteResolution::Delete);
+}
+
+#[test]
+fn resolve_delete_conflict_update_wins() {
+    let def = users_def();
+    let mut local = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+    local.deleted = true;
+    let remote = RemoteRecord {
+        id: "u1".to_string(),
+        version: 1,
+        crdt: None,
+        deleted: true,
+        sequence: 10,
+        meta: None,
+    };
+    let result = resolve_delete_conflict(&DeleteConflictStrategy::UpdateWins, &local, &remote);
+    assert_eq!(result, DeleteResolution::Keep);
+}
+
+#[test]
+fn resolve_delete_conflict_custom_strategy() {
+    let def = users_def();
+    let local = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+
+    // Custom strategy: delete if remote.deleted, keep otherwise
+    let strategy = DeleteConflictStrategy::Custom(Box::new(|_stored, remote| {
+        if remote.deleted {
+            DeleteResolution::Delete
+        } else {
+            DeleteResolution::Keep
+        }
+    }));
+
+    let remote_deleted = RemoteRecord {
+        id: "u1".to_string(),
+        version: 1,
+        crdt: None,
+        deleted: true,
+        sequence: 10,
+        meta: None,
+    };
+    assert_eq!(
+        resolve_delete_conflict(&strategy, &local, &remote_deleted),
+        DeleteResolution::Delete
+    );
+
+    let remote_alive = RemoteRecord {
+        id: "u1".to_string(),
+        version: 1,
+        crdt: None,
+        deleted: false,
+        sequence: 10,
+        meta: None,
+    };
+    assert_eq!(
+        resolve_delete_conflict(&strategy, &local, &remote_alive),
+        DeleteResolution::Keep
+    );
+}
+
+// ============================================================================
+// prepare_patch / prepare_update — no actual changes
+// ============================================================================
+
+#[test]
+fn prepare_patch_no_actual_changes() {
+    let def = users_def();
+    let original = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+
+    // Patch with same values
+    let patch_data = json!({"name": "Alice"});
+    let opts = PatchOptions::default();
+    let result =
+        prepare_patch(&def, &original, patch_data, SID, &opts).expect("prepare_patch failed");
+
+    assert!(
+        !result.has_changes,
+        "identical patch should report no changes"
+    );
+}
+
+#[test]
+fn prepare_update_no_actual_changes() {
+    let def = users_def();
+    let original = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+
+    // Update with exact same data
+    let same_data = original.data.clone();
+    let opts = PatchOptions::default();
+    let result =
+        prepare_update(&def, &original, same_data, SID, &opts).expect("prepare_update failed");
+
+    assert!(
+        !result.has_changes,
+        "identical update should report no changes"
+    );
+}
+
+// ============================================================================
+// compute_index_values — multi-field and missing field
+// ============================================================================
+
+#[test]
+fn compute_index_values_multi_field_extracts_tuple() {
+    let def = collection("items")
+        .v(1, {
+            let mut s = BTreeMap::new();
+            s.insert("name".to_string(), t::string());
+            s.insert("email".to_string(), t::string());
+            s
+        })
+        .index(&["name", "email"])
+        .build();
+
+    let data = json!({"id": "x", "name": "Alice", "email": "a@b.com",
+        "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z"});
+    let computed = compute_index_values(&data, &def.indexes);
+    assert!(computed.is_some());
+    let obj = computed.unwrap();
+    // Multi-field indexes produce keys like "idx_name_email__name" and "idx_name_email__email"
+    assert_eq!(obj["idx_name_email__name"], json!("Alice"));
+    assert_eq!(obj["idx_name_email__email"], json!("a@b.com"));
+}
+
+#[test]
+fn compute_index_values_missing_field_returns_null() {
+    let def = collection("items")
+        .v(1, {
+            let mut s = BTreeMap::new();
+            s.insert("name".to_string(), t::string());
+            s.insert("tag".to_string(), t::optional(t::string()));
+            s
+        })
+        .index(&["tag"])
+        .build();
+
+    // Data without the 'tag' field
+    let data = json!({"id": "x", "name": "Alice",
+        "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z"});
+    let computed = compute_index_values(&data, &def.indexes);
+    assert!(computed.is_some());
+    let obj = computed.unwrap();
+    assert_eq!(obj["idx_tag"], json!(null));
+}
+
+// ============================================================================
+// merge_meta — both None
+// ============================================================================
+
+#[test]
+fn merge_records_meta_both_none_stays_none() {
+    let def = users_def();
+    let local = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+    assert!(local.meta.is_none());
+
+    // Merge with self (remote == local CRDT), no meta on either side
+    let result =
+        merge_records(&def, &local, &local.crdt, 5, 1, None).expect("merge_records failed");
+
+    assert!(
+        result.record.meta.is_none(),
+        "meta should remain None when both sides have no meta"
     );
 }

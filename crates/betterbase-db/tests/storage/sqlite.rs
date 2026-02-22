@@ -892,7 +892,8 @@ fn scan_index_raw_full_scan_with_sort_desc() {
         backend.put_raw(&r).unwrap();
     }
 
-    // Define the index with DESC order to get DESC sorting
+    // Define the index with DESC order to get DESC sorting.
+    // direction: Asc means "forward scan" — use the index's natural order (DESC).
     let index = IndexDefinition::Field(FieldIndex {
         name: "idx_score".to_string(),
         fields: vec![IndexField {
@@ -909,7 +910,7 @@ fn scan_index_raw_full_scan_with_sort_desc() {
         range_lower: None,
         range_upper: None,
         in_values: None,
-        direction: IndexSortOrder::Desc,
+        direction: IndexSortOrder::Asc,
     };
 
     let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
@@ -1082,4 +1083,322 @@ fn initialize_is_idempotent() {
     backend.initialize(&[]).unwrap();
     backend.initialize(&[]).unwrap(); // second call should succeed
     assert!(backend.is_initialized());
+}
+
+// ============================================================================
+// scan_index_raw — compound index prefix scan
+// ============================================================================
+
+#[test]
+fn scan_index_multi_field_partial_equality() {
+    let backend = make_backend();
+
+    // Compound index on (status, score)
+    for (status, score) in [("active", 10), ("active", 20), ("inactive", 30)] {
+        let id = format!("{status}_{score}");
+        let mut r = make_record(&id, "col");
+        r.data = json!({ "status": status, "score": score });
+        r.computed =
+            Some(json!({ "idx_status_score__status": status, "idx_status_score__score": score }));
+        backend.put_raw(&r).unwrap();
+    }
+
+    let index = IndexDefinition::Field(FieldIndex {
+        name: "idx_status_score".to_string(),
+        fields: vec![
+            IndexField {
+                field: "status".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "score".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+        ],
+        unique: false,
+        sparse: false,
+    });
+
+    // Prefix scan: equality on first field only
+    let scan = IndexScan {
+        scan_type: IndexScanType::Prefix,
+        index,
+        equality_values: Some(vec![IndexableValue::String("active".to_string())]),
+        range_lower: None,
+        range_upper: None,
+        in_values: None,
+        direction: IndexSortOrder::Asc,
+    };
+
+    let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
+    assert_eq!(result.records.len(), 2, "should find both 'active' records");
+    for r in &result.records {
+        assert_eq!(r.data["status"], "active");
+    }
+}
+
+// ============================================================================
+// scan_index_raw — computed index exact match
+// ============================================================================
+
+#[test]
+fn scan_index_computed_exact_match() {
+    let backend = make_backend();
+
+    for name in ["alice", "bob", "alice"] {
+        let id = format!("{name}_{}", uuid::Uuid::new_v4());
+        let mut r = make_record(&id, "col");
+        r.data = json!({ "name": name });
+        r.computed = Some(json!({ "name_lower": name }));
+        backend.put_raw(&r).unwrap();
+    }
+
+    let index = IndexDefinition::Computed(ComputedIndex {
+        name: "name_lower".to_string(),
+        compute: Arc::new(|_| None),
+        unique: false,
+        sparse: false,
+    });
+
+    let scan = IndexScan {
+        scan_type: IndexScanType::Exact,
+        index,
+        equality_values: Some(vec![IndexableValue::String("alice".to_string())]),
+        range_lower: None,
+        range_upper: None,
+        in_values: None,
+        direction: IndexSortOrder::Asc,
+    };
+
+    let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
+    assert_eq!(result.records.len(), 2, "should match both 'alice' records");
+}
+
+// ============================================================================
+// scan_all_raw — empty database
+// ============================================================================
+
+#[test]
+fn scan_all_raw_empty_database() {
+    let backend = make_backend();
+    let result = backend
+        .scan_raw("empty_col", &ScanOptions::default())
+        .unwrap();
+    assert!(result.records.is_empty(), "empty DB → empty vec");
+}
+
+// ============================================================================
+// purge_tombstones — edge cases
+// ============================================================================
+
+#[test]
+fn purge_tombstones_older_than_zero_purges_all() {
+    let backend = make_backend();
+
+    let mut t = SerializedRecord {
+        deleted: true,
+        deleted_at: Some("2020-01-01T00:00:00Z".to_string()),
+        ..make_record("t1", "col")
+    };
+    backend.put_raw(&t).unwrap();
+
+    t.id = "t2".to_string();
+    t.deleted_at = Some("2024-06-01T00:00:00Z".to_string());
+    backend.put_raw(&t).unwrap();
+
+    let purged = backend
+        .purge_tombstones_raw(
+            "col",
+            &PurgeTombstonesOptions {
+                older_than_seconds: Some(0),
+                dry_run: false,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(purged, 2, "older_than=0 should purge all dated tombstones");
+}
+
+#[test]
+fn purge_tombstones_null_deleted_at_skipped() {
+    let backend = make_backend();
+
+    let mut t = SerializedRecord {
+        deleted: true,
+        deleted_at: None, // null deleted_at
+        ..make_record("t1", "col")
+    };
+    backend.put_raw(&t).unwrap();
+
+    t.id = "t2".to_string();
+    t.deleted_at = Some("2000-01-01T00:00:00Z".to_string());
+    backend.put_raw(&t).unwrap();
+
+    let purged = backend
+        .purge_tombstones_raw(
+            "col",
+            &PurgeTombstonesOptions {
+                older_than_seconds: Some(1),
+                dry_run: false,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(purged, 1, "null deleted_at should be skipped by age filter");
+    // t1 (null deleted_at) should still exist
+    let all = backend
+        .scan_raw(
+            "col",
+            &ScanOptions {
+                include_deleted: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(all.records.len(), 1);
+    assert_eq!(all.records[0].id, "t1");
+}
+
+// ============================================================================
+// check_unique — compound index with null field
+// ============================================================================
+
+#[test]
+fn check_unique_composite_partial_null() {
+    let backend = make_backend();
+
+    let mut r = make_record("r1", "col");
+    r.data = json!({ "a": "foo", "b": null });
+    r.computed = Some(json!({ "idx_ab__a": "foo", "idx_ab__b": null }));
+    backend.put_raw(&r).unwrap();
+
+    let index = IndexDefinition::Field(FieldIndex {
+        name: "idx_ab".to_string(),
+        fields: vec![
+            IndexField {
+                field: "a".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+            IndexField {
+                field: "b".to_string(),
+                order: IndexSortOrder::Asc,
+            },
+        ],
+        unique: true,
+        sparse: false,
+    });
+
+    // Another record with same a="foo", b=null should conflict
+    let result = backend.check_unique(
+        "col",
+        &index,
+        &json!({ "a": "foo", "b": null }),
+        Some(&json!({ "idx_ab__a": "foo", "idx_ab__b": null })),
+        None,
+    );
+    assert!(
+        result.is_err(),
+        "should conflict even with null in compound index"
+    );
+}
+
+// ============================================================================
+// batch_put_raw — overwrites existing
+// ============================================================================
+
+#[test]
+fn batch_put_raw_overwrites_existing() {
+    let backend = make_backend();
+
+    backend.put_raw(&make_record("r1", "col")).unwrap();
+    backend.put_raw(&make_record("r2", "col")).unwrap();
+
+    // Batch put with updated data
+    let mut r1 = make_record("r1", "col");
+    r1.data = json!({ "name": "r1_updated" });
+    let mut r2 = make_record("r2", "col");
+    r2.data = json!({ "name": "r2_updated" });
+
+    backend.batch_put_raw(&[r1, r2]).unwrap();
+
+    let fetched = backend.get_raw("col", "r1").unwrap().unwrap();
+    assert_eq!(fetched.data["name"], "r1_updated");
+    let fetched = backend.get_raw("col", "r2").unwrap().unwrap();
+    assert_eq!(fetched.data["name"], "r2_updated");
+    assert_eq!(
+        backend.count_raw("col").unwrap(),
+        2,
+        "count should not change"
+    );
+}
+
+// ============================================================================
+// scan_index_raw — $in excludes deleted records
+// ============================================================================
+
+#[test]
+fn scan_index_in_values_excludes_deleted() {
+    let backend = make_backend();
+
+    // Insert 3 records: Alice (alive), Bob (alive), Charlie (deleted)
+    for (name, deleted) in [("Alice", false), ("Bob", false), ("Charlie", true)] {
+        let mut r = make_record(name, "col");
+        r.data = json!({ "name": name });
+        r.deleted = deleted;
+        backend.put_raw(&r).unwrap();
+    }
+
+    let index = field_index_single("idx_name", "name", false);
+    let scan = IndexScan {
+        scan_type: IndexScanType::Range,
+        index,
+        equality_values: None,
+        range_lower: None,
+        range_upper: None,
+        in_values: Some(vec![
+            IndexableValue::String("Alice".to_string()),
+            IndexableValue::String("Charlie".to_string()),
+        ]),
+        direction: IndexSortOrder::Asc,
+    };
+
+    let result = backend.scan_index_raw("col", &scan).unwrap().unwrap();
+    assert_eq!(
+        result.records.len(),
+        1,
+        "deleted Charlie should be excluded"
+    );
+    assert_eq!(result.records[0].id, "Alice");
+}
+
+// ============================================================================
+// transaction — commit and rollback combined
+// ============================================================================
+
+#[test]
+fn transaction_commit_and_rollback() {
+    let backend = make_backend();
+
+    // Successful transaction
+    backend
+        .transaction(|b| {
+            b.put_raw(&make_record("r1", "col"))?;
+            b.put_raw(&make_record("r2", "col"))
+        })
+        .unwrap();
+    assert_eq!(backend.count_raw("col").unwrap(), 2);
+
+    // Failed transaction should not affect previously committed data
+    let result = backend.transaction(|b| {
+        b.put_raw(&make_record("r3", "col"))?;
+        Err::<(), _>(betterbase_db::error::LessDbError::Internal(
+            "abort".to_string(),
+        ))
+    });
+    assert!(result.is_err());
+    assert_eq!(
+        backend.count_raw("col").unwrap(),
+        2,
+        "r3 should be rolled back"
+    );
 }

@@ -21,7 +21,9 @@ import type { SchemaNode, SchemaShape } from "./types.js";
 // ============================================================================
 
 /** Convert a JS value for sending to the Rust side. */
-export function serializeForRust(data: Record<string, unknown>): Record<string, unknown> {
+export function serializeForRust(
+  data: Record<string, unknown>,
+): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
     if (value === undefined) continue; // strip undefined
@@ -51,12 +53,31 @@ function serializeValue(value: unknown): unknown {
 // Deserialize: Rust → JS
 // ============================================================================
 
+/**
+ * Symbol key for record metadata. Used by TypedAdapter for middleware enrichment.
+ * Not enumerable, does not pollute regular record properties.
+ */
+export const META_KEY: unique symbol = Symbol.for("betterbase-db:meta");
+
 /** Convert a Rust value back to JS types, using the schema for type info. */
 export function deserializeFromRust(
   data: Record<string, unknown>,
   schema: SchemaShape,
 ): Record<string, unknown> {
   const result: Record<string, unknown> = { ...data };
+
+  // Extract internal metadata from Rust response and store as symbol-keyed
+  // property. The wire key uses a namespaced prefix to avoid collision with
+  // user schema fields.
+  const meta = result.__betterbase_meta;
+  delete result.__betterbase_meta;
+  if (meta !== undefined && meta !== null) {
+    Object.defineProperty(result, META_KEY, {
+      value: meta,
+      enumerable: false,
+      configurable: true,
+    });
+  }
 
   // Auto-fields: createdAt and updatedAt are always dates
   if (typeof result.createdAt === "string") {
@@ -106,7 +127,9 @@ function deserializeField(value: unknown, node: SchemaNode): unknown {
 
     case "object":
       if (typeof value === "object" && value !== null) {
-        const result: Record<string, unknown> = { ...value as Record<string, unknown> };
+        const result: Record<string, unknown> = {
+          ...(value as Record<string, unknown>),
+        };
         for (const [k, innerNode] of Object.entries(node.properties)) {
           if (k in result) {
             result[k] = deserializeField(result[k], innerNode);
@@ -133,7 +156,7 @@ function deserializeField(value: unknown, node: SchemaNode): unknown {
 function uint8ArrayToBase64(bytes: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
+    binary += String.fromCharCode(bytes[i]!);
   }
   return btoa(binary);
 }

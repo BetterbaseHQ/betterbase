@@ -6,7 +6,7 @@
  *
  * ```ts
  * // my-db-worker.ts
- * import { initOpfsWorker } from "betterbase/sdk/db/worker";
+ * import { initOpfsWorker } from "betterbase-db-wasm/worker";
  * import { users } from "./collections.js";
  * initOpfsWorker([users]);
  * ```
@@ -41,8 +41,11 @@ export function initOpfsWorker(collections: CollectionDefHandle[]): void {
     const dbName = msg.args[0] as string;
 
     try {
-      // Load WASM module
-      const wasmModule = await import("../../../../crates/betterbase-db-wasm/pkg/betterbase_db_wasm.js");
+      // Load and initialize WASM module
+      // vite-plugin-wasm handles WASM initialization at import time —
+      // no manual init call needed with --target bundler.
+      const wasmModule =
+        await import("../../../../crates/betterbase-db-wasm/pkg/betterbase_db_wasm.js");
       const { WasmDb, WasmCollectionBuilder } = wasmModule;
 
       // Create WasmDb — this installs OPFS VFS and opens SQLite entirely in Rust
@@ -52,7 +55,9 @@ export function initOpfsWorker(collections: CollectionDefHandle[]): void {
       const wasmDefs: unknown[] = [];
 
       for (const col of collections) {
-        const blueprint = (col as unknown as Record<symbol, CollectionBlueprint>)[BLUEPRINT];
+        const blueprint = (
+          col as unknown as Record<symbol, CollectionBlueprint>
+        )[BLUEPRINT]!;
         const builder = new WasmCollectionBuilder(col.name);
 
         for (const entry of blueprint.versions) {
@@ -67,7 +72,11 @@ export function initOpfsWorker(collections: CollectionDefHandle[]): void {
           if (idx.type === "field") {
             builder.index(idx.fields, idx.options);
           } else {
-            builder.computed(idx.name, idx.compute as (data: unknown) => unknown, idx.options);
+            builder.computed(
+              idx.name,
+              idx.compute as (data: unknown) => unknown,
+              idx.options,
+            );
           }
         }
 
@@ -83,11 +92,19 @@ export function initOpfsWorker(collections: CollectionDefHandle[]): void {
       // Respond to the open request — this also signals ready.
       // (No separate "ready" message needed; the open response resolves the
       // main thread's createOpfsDb promise.)
-      const response: WorkerResponse = { type: "response", id: requestId, result: true };
+      const response: WorkerResponse = {
+        type: "response",
+        id: requestId,
+        result: true,
+      };
       self.postMessage(response);
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
-      const response: WorkerResponse = { type: "response", id: requestId, error };
+      const response: WorkerResponse = {
+        type: "response",
+        id: requestId,
+        error,
+      };
       self.postMessage(response);
     }
   };

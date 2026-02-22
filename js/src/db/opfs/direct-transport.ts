@@ -29,7 +29,11 @@ export class DirectTransport implements RpcTransport {
       handler(new Error(`Worker error: ${ev.message}`));
     };
     this.worker.onmessageerror = () => {
-      handler(new Error("Worker message serialization failed (structured clone error)"));
+      handler(
+        new Error(
+          "Worker message serialization failed (structured clone error)",
+        ),
+      );
     };
   }
 

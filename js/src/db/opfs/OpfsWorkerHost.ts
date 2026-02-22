@@ -5,7 +5,11 @@
  * Handles reactive subscriptions by posting notifications.
  */
 
-import type { MainToWorkerMessage, WorkerResponse, WorkerNotification } from "./types.js";
+import type {
+  MainToWorkerMessage,
+  WorkerResponse,
+  WorkerNotification,
+} from "./types.js";
 import type { WasmDbInstance } from "../wasm-init.js";
 
 export class OpfsWorkerHost {
@@ -14,7 +18,8 @@ export class OpfsWorkerHost {
 
   constructor(wasm: WasmDbInstance) {
     this.wasm = wasm;
-    self.onmessage = (ev: MessageEvent<MainToWorkerMessage>) => this.handleMessage(ev.data);
+    self.onmessage = (ev: MessageEvent<MainToWorkerMessage>) =>
+      this.handleMessage(ev.data);
   }
 
   private handleMessage(msg: MainToWorkerMessage): void {
@@ -31,8 +36,26 @@ export class OpfsWorkerHost {
   private handleRequest(id: number, method: string, args: unknown[]): void {
     try {
       const result = this.dispatch(id, method, args);
-      const response: WorkerResponse = { type: "response", id, result };
-      self.postMessage(response);
+      if (result instanceof Promise) {
+        result.then(
+          (value) => {
+            const response: WorkerResponse = {
+              type: "response",
+              id,
+              result: value,
+            };
+            self.postMessage(response);
+          },
+          (e) => {
+            const error = e instanceof Error ? e.message : String(e);
+            const response: WorkerResponse = { type: "response", id, error };
+            self.postMessage(response);
+          },
+        );
+      } else {
+        const response: WorkerResponse = { type: "response", id, result };
+        self.postMessage(response);
+      }
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
       const response: WorkerResponse = { type: "response", id, error };
@@ -40,17 +63,29 @@ export class OpfsWorkerHost {
     }
   }
 
-  private dispatch(requestId: number, method: string, args: unknown[]): unknown {
+  private dispatch(
+    requestId: number,
+    method: string,
+    args: unknown[],
+  ): unknown {
     switch (method) {
       // CRUD
       case "put":
         return this.wasm.put(args[0] as string, args[1], args[2] ?? null);
       case "get":
-        return this.wasm.get(args[0] as string, args[1] as string, args[2] ?? null);
+        return this.wasm.get(
+          args[0] as string,
+          args[1] as string,
+          args[2] ?? null,
+        );
       case "patch":
         return this.wasm.patch(args[0] as string, args[1], args[2] ?? null);
       case "delete":
-        return this.wasm.delete(args[0] as string, args[1] as string, args[2] ?? null);
+        return this.wasm.delete(
+          args[0] as string,
+          args[1] as string,
+          args[2] ?? null,
+        );
 
       // Query
       case "query":
@@ -62,9 +97,17 @@ export class OpfsWorkerHost {
 
       // Bulk
       case "bulkPut":
-        return this.wasm.bulkPut(args[0] as string, args[1] as unknown[], args[2] ?? null);
+        return this.wasm.bulkPut(
+          args[0] as string,
+          args[1] as unknown[],
+          args[2] ?? null,
+        );
       case "bulkDelete":
-        return this.wasm.bulkDelete(args[0] as string, args[1] as string[], args[2] ?? null);
+        return this.wasm.bulkDelete(
+          args[0] as string,
+          args[1] as string[],
+          args[2] ?? null,
+        );
 
       // Reactive subscriptions
       case "observe":
@@ -119,6 +162,9 @@ export class OpfsWorkerHost {
     });
 
     this.unsubscribers.set(subscriptionId, unsub);
+    // Flush fires the initial callback synchronously so the subscriber gets
+    // a snapshot before the subscribe RPC response reaches the main thread.
+    this.wasm.flush();
     return undefined;
   }
 
@@ -137,6 +183,9 @@ export class OpfsWorkerHost {
     });
 
     this.unsubscribers.set(subscriptionId, unsub);
+    // Flush fires the initial callback synchronously so the subscriber gets
+    // a snapshot before the subscribe RPC response reaches the main thread.
+    this.wasm.flush();
     return undefined;
   }
 
@@ -164,14 +213,21 @@ export class OpfsWorkerHost {
     }
   }
 
-  private close(): undefined {
+  private async close(): Promise<undefined> {
     // Unsubscribe all
     for (const unsub of this.unsubscribers.values()) {
       unsub();
     }
     this.unsubscribers.clear();
-    // Close the SQLite connection (now handled in Rust)
+    // Close the SQLite connection
     this.wasm.close();
+    // Release OPFS access handles so the next worker can open the same database
+    // immediately, without waiting for GC to collect the abandoned handles.
+    try {
+      await this.wasm.releaseAccessHandles();
+    } catch (e) {
+      console.warn("Failed to release OPFS access handles:", e);
+    }
     return undefined;
   }
 }

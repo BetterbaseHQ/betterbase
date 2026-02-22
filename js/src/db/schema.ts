@@ -2,7 +2,7 @@
  * Schema builder helpers — matches the original betterbase-db `t` API.
  *
  * Usage:
- *   import { t } from "@betterbase/sdk/db";
+ *   import { t } from "betterbase-db-wasm";
  *   const schema = { name: t.string(), age: t.optional(t.number()) };
  */
 
@@ -45,12 +45,16 @@ export const t = {
     values,
   }),
 
-  object: <T extends Record<string, SchemaNode>>(properties: T): ObjectSchema<T> => ({
+  object: <T extends Record<string, SchemaNode>>(
+    properties: T,
+  ): ObjectSchema<T> => ({
     type: "object",
     properties,
   }),
 
-  literal: <T extends string | number | boolean>(value: T): LiteralSchema<T> => ({
+  literal: <T extends string | number | boolean>(
+    value: T,
+  ): LiteralSchema<T> => ({
     type: "literal",
     value,
   }),

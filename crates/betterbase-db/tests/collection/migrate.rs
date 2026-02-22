@@ -523,3 +523,136 @@ fn test_migration_chain_throws_on_migration_failure() {
 
     test_migration_chain(&broken, serde_json::json!({ "name": "John" }), |_| {});
 }
+
+// ============================================================================
+// Five-step migration chain
+// ============================================================================
+
+#[test]
+fn migrate_five_step_chain() {
+    let items = collection("items")
+        .v(1, schema(&[("name", t::string())]))
+        .v(2, schema(&[("name", t::string()), ("slug", t::string())]), |prev| {
+            let name = prev.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            Ok(serde_json::json!({ "name": name, "slug": name.to_lowercase().replace(' ', "-") }))
+        })
+        .v(
+            3,
+            schema(&[("name", t::string()), ("slug", t::string()), ("version", t::number())]),
+            |prev| {
+                let mut obj = prev.as_object().cloned().unwrap_or_default();
+                obj.insert("version".into(), serde_json::json!(1));
+                Ok(serde_json::Value::Object(obj))
+            },
+        )
+        .v(
+            4,
+            schema(&[
+                ("name", t::string()),
+                ("slug", t::string()),
+                ("version", t::number()),
+                ("active", t::boolean()),
+            ]),
+            |prev| {
+                let mut obj = prev.as_object().cloned().unwrap_or_default();
+                obj.insert("active".into(), serde_json::json!(true));
+                Ok(serde_json::Value::Object(obj))
+            },
+        )
+        .v(
+            5,
+            schema(&[
+                ("title", t::string()),
+                ("slug", t::string()),
+                ("version", t::number()),
+                ("active", t::boolean()),
+            ]),
+            |prev| {
+                let mut obj = prev.as_object().cloned().unwrap_or_default();
+                let name = obj.remove("name").unwrap_or(serde_json::json!(""));
+                obj.insert("title".into(), name);
+                Ok(serde_json::Value::Object(obj))
+            },
+        )
+        .build();
+
+    let result = migrate(
+        &items,
+        with_auto_fields(serde_json::json!({ "name": "My Item" })),
+        1,
+        None,
+    )
+    .expect("migrate v1→v5");
+
+    assert_eq!(result.data["title"], "My Item");
+    assert_eq!(result.data["slug"], "my-item");
+    assert_eq!(result.data["version"], 1);
+    assert_eq!(result.data["active"], true);
+    assert!(
+        result.data.get("name").is_none(),
+        "name should be renamed to title"
+    );
+    assert_eq!(result.steps_applied, 4);
+    assert_eq!(result.migrated_from, 1);
+    assert_eq!(result.migrated_to, 5);
+}
+
+// ============================================================================
+// Intermediate invalid data fixed by next step
+// ============================================================================
+
+#[test]
+fn migrate_intermediate_invalid_fixed_by_next_step() {
+    // v2 migration produces data missing "status" — invalid for v2 schema.
+    // v3 migration adds the missing field. Since validation only runs once
+    // after the final step, the chain succeeds.
+    let items = collection("items")
+        .v(1, schema(&[("name", t::string())]))
+        .v(
+            2,
+            schema(&[("name", t::string()), ("status", t::string())]),
+            |prev| {
+                // Intentionally omit "status" — would be invalid for v2 schema
+                Ok(serde_json::json!({ "name": prev.get("name").cloned().unwrap_or_default() }))
+            },
+        )
+        .v(
+            3,
+            schema(&[("name", t::string()), ("status", t::string())]),
+            |prev| {
+                let mut obj = prev.as_object().cloned().unwrap_or_default();
+                obj.entry("status".to_string())
+                    .or_insert(serde_json::json!("active"));
+                Ok(serde_json::Value::Object(obj))
+            },
+        )
+        .build();
+
+    let result = migrate(
+        &items,
+        with_auto_fields(serde_json::json!({ "name": "Test" })),
+        1,
+        None,
+    )
+    .expect("should succeed because validation only runs after final step");
+
+    assert_eq!(result.data["name"], "Test");
+    assert_eq!(result.data["status"], "active");
+    assert_eq!(result.steps_applied, 2);
+}
+
+// ============================================================================
+// needs_migration false for single version
+// ============================================================================
+
+#[test]
+fn needs_migration_false_for_single_version() {
+    let items = collection("items")
+        .v(1, schema(&[("name", t::string())]))
+        .build();
+
+    assert!(
+        !needs_migration(&items, 1),
+        "single-version collection at v1 should not need migration"
+    );
+}

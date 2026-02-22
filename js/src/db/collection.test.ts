@@ -48,10 +48,10 @@ describe("collection builder", () => {
 
     const bp = def[BLUEPRINT];
     expect(bp.versions).toHaveLength(2);
-    expect(bp.versions[0]).toEqual({ version: 1, schema: v1Schema });
-    expect(bp.versions[1].version).toBe(2);
-    expect(bp.versions[1].schema).toBe(v2Schema);
-    expect(bp.versions[1].migrate).toBe(migrate);
+    expect(bp.versions[0]!).toEqual({ version: 1, schema: v1Schema });
+    expect(bp.versions[1]!.version).toBe(2);
+    expect(bp.versions[1]!.schema).toBe(v2Schema);
+    expect(bp.versions[1]!.migrate).toBe(migrate);
   });
 
   // --------------------------------------------------------------------------
@@ -68,8 +68,16 @@ describe("collection builder", () => {
     const bp = def[BLUEPRINT];
     const fieldIndexes = bp.indexes.filter((i) => i.type === "field");
     expect(fieldIndexes).toHaveLength(2);
-    expect(fieldIndexes[0]).toEqual({ type: "field", fields: ["email"], options: { unique: true } });
-    expect(fieldIndexes[1]).toEqual({ type: "field", fields: ["name"], options: {} });
+    expect(fieldIndexes[0]).toEqual({
+      type: "field",
+      fields: ["email"],
+      options: { unique: true },
+    });
+    expect(fieldIndexes[1]).toEqual({
+      type: "field",
+      fields: ["name"],
+      options: {},
+    });
   });
 
   it("supports compound field indexes", () => {
@@ -119,7 +127,7 @@ describe("collection builder", () => {
 
     const bp = def[BLUEPRINT];
     const computedIndexes = bp.indexes.filter((i) => i.type === "computed");
-    expect(computedIndexes[0].options).toEqual({});
+    expect(computedIndexes[0]!.options).toEqual({});
   });
 
   // --------------------------------------------------------------------------
@@ -156,7 +164,11 @@ describe("collection builder", () => {
     const bp = def[BLUEPRINT];
     // Only v2's index should be present
     expect(bp.indexes).toHaveLength(1);
-    expect(bp.indexes[0]).toEqual({ type: "field", fields: ["age"], options: {} });
+    expect(bp.indexes[0]).toEqual({
+      type: "field",
+      fields: ["age"],
+      options: {},
+    });
   });
 
   // --------------------------------------------------------------------------

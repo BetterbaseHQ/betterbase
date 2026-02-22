@@ -9,12 +9,14 @@ import type { SchemaShape } from "./types.js";
 
 describe("serializeForRust", () => {
   it("passes through primitives", () => {
-    expect(serializeForRust({ s: "hello", n: 42, b: true, nil: null })).toEqual({
-      s: "hello",
-      n: 42,
-      b: true,
-      nil: null,
-    });
+    expect(serializeForRust({ s: "hello", n: 42, b: true, nil: null })).toEqual(
+      {
+        s: "hello",
+        n: 42,
+        b: true,
+        nil: null,
+      },
+    );
   });
 
   it("converts Date to ISO string", () => {
@@ -96,7 +98,9 @@ describe("deserializeFromRust", () => {
     );
     expect(result.createdAt).toBeInstanceOf(Date);
     expect(result.updatedAt).toBeInstanceOf(Date);
-    expect((result.createdAt as Date).toISOString()).toBe("2024-06-15T12:00:00.000Z");
+    expect((result.createdAt as Date).toISOString()).toBe(
+      "2024-06-15T12:00:00.000Z",
+    );
   });
 
   it("does not touch createdAt/updatedAt if already non-string", () => {
@@ -118,7 +122,9 @@ describe("deserializeFromRust", () => {
       { birthday: t.date() },
     );
     expect(result.birthday).toBeInstanceOf(Date);
-    expect((result.birthday as Date).toISOString()).toBe("2000-01-15T00:00:00.000Z");
+    expect((result.birthday as Date).toISOString()).toBe(
+      "2000-01-15T00:00:00.000Z",
+    );
   });
 
   it("leaves null date fields as null", () => {
@@ -135,10 +141,7 @@ describe("deserializeFromRust", () => {
 
   it("converts bytes schema fields from base64 to Uint8Array", () => {
     const base64 = btoa("Hello");
-    const result = deserializeFromRust(
-      { data: base64 },
-      { data: t.bytes() },
-    );
+    const result = deserializeFromRust({ data: base64 }, { data: t.bytes() });
     expect(result.data).toBeInstanceOf(Uint8Array);
     const bytes = result.data as Uint8Array;
     expect(Array.from(bytes)).toEqual([72, 101, 108, 108, 111]);
@@ -211,7 +214,12 @@ describe("deserializeFromRust", () => {
 
   it("converts record values", () => {
     const result = deserializeFromRust(
-      { schedule: { mon: "2024-01-01T09:00:00.000Z", tue: "2024-01-02T09:00:00.000Z" } },
+      {
+        schedule: {
+          mon: "2024-01-01T09:00:00.000Z",
+          tue: "2024-01-02T09:00:00.000Z",
+        },
+      },
       { schedule: t.record(t.date()) },
     );
     const schedule = result.schedule as Record<string, Date>;
@@ -279,9 +287,13 @@ describe("deserializeFromRust", () => {
   it("round-trip: Date survives serialize → deserialize", () => {
     const original = { birthday: new Date("2000-06-15T00:00:00.000Z") };
     const serialized = serializeForRust(original);
-    const deserialized = deserializeFromRust(serialized, { birthday: t.date() });
+    const deserialized = deserializeFromRust(serialized, {
+      birthday: t.date(),
+    });
     expect(deserialized.birthday).toBeInstanceOf(Date);
-    expect((deserialized.birthday as Date).toISOString()).toBe("2000-06-15T00:00:00.000Z");
+    expect((deserialized.birthday as Date).toISOString()).toBe(
+      "2000-06-15T00:00:00.000Z",
+    );
   });
 
   it("round-trip: Uint8Array survives serialize → deserialize", () => {
@@ -289,7 +301,9 @@ describe("deserializeFromRust", () => {
     const serialized = serializeForRust(original);
     const deserialized = deserializeFromRust(serialized, { data: t.bytes() });
     expect(deserialized.data).toBeInstanceOf(Uint8Array);
-    expect(Array.from(deserialized.data as Uint8Array)).toEqual([1, 2, 3, 4, 5]);
+    expect(Array.from(deserialized.data as Uint8Array)).toEqual([
+      1, 2, 3, 4, 5,
+    ]);
   });
 
   it("round-trip: complex nested schema", () => {
@@ -313,14 +327,20 @@ describe("deserializeFromRust", () => {
 
     const serialized = serializeForRust(original);
     // Verify serialized form
-    expect(typeof (serialized.profile as Record<string, unknown>).birthday).toBe("string");
-    expect(typeof (serialized.profile as Record<string, unknown>).avatar).toBe("string");
+    expect(
+      typeof (serialized.profile as Record<string, unknown>).birthday,
+    ).toBe("string");
+    expect(typeof (serialized.profile as Record<string, unknown>).avatar).toBe(
+      "string",
+    );
 
     const deserialized = deserializeFromRust(serialized, schema);
     const profile = deserialized.profile as Record<string, unknown>;
     expect(profile.birthday).toBeInstanceOf(Date);
     expect(profile.avatar).toBeInstanceOf(Uint8Array);
-    expect((profile.birthday as Date).toISOString()).toBe("1990-05-20T00:00:00.000Z");
+    expect((profile.birthday as Date).toISOString()).toBe(
+      "1990-05-20T00:00:00.000Z",
+    );
     expect(Array.from(profile.avatar as Uint8Array)).toEqual([0xff, 0xd8]);
   });
 });

@@ -37,7 +37,9 @@ export class SyncScheduler {
     if (this.disposed) {
       return Promise.reject(new Error("SyncScheduler is disposed"));
     }
-    return this.schedule(def.name, () => this.syncManager.sync(def)) as Promise<SyncResult>;
+    return this.schedule(def.name, () =>
+      this.syncManager.sync(def),
+    ) as Promise<SyncResult>;
   }
 
   schedulePush(def: CollectionDefHandle): Promise<SyncResult> {
@@ -93,7 +95,12 @@ export class SyncScheduler {
   ): Promise<SyncResult | Map<string, SyncResult>> {
     let slot = this.slots.get(key);
     if (!slot) {
-      slot = { running: null, queued: null, cooldownTimer: null, cooldownActive: false };
+      slot = {
+        running: null,
+        queued: null,
+        cooldownTimer: null,
+        cooldownActive: false,
+      };
       this.slots.set(key, slot);
     }
 

@@ -18,22 +18,58 @@ export interface WasmModule {
 export interface WasmDbInstance {
   initialize(defs: unknown[]): void;
   close(): void;
+  releaseAccessHandles(): Promise<void>;
   deleteDatabase(): Promise<void>;
   put(collection: string, data: unknown, options: unknown): unknown;
   get(collection: string, id: string, options: unknown): unknown;
   patch(collection: string, data: unknown, options: unknown): unknown;
   delete(collection: string, id: string, options: unknown): boolean;
-  query(collection: string, query: unknown): { records: unknown[]; total?: number };
+  query(
+    collection: string,
+    query: unknown,
+  ): { records: unknown[]; total?: number };
   count(collection: string, query: unknown): number;
   getAll(collection: string, options: unknown): unknown[];
-  bulkPut(collection: string, records: unknown[], options: unknown): { records: unknown[]; errors: { id: string; collection: string; error: string }[] };
-  bulkDelete(collection: string, ids: string[], options: unknown): { deleted_ids: string[]; errors: { id: string; collection: string; error: string }[] };
-  observe(collection: string, id: string, callback: (data: unknown) => void): () => void;
-  observeQuery(collection: string, query: unknown, callback: (result: unknown) => void): () => void;
+  bulkPut(
+    collection: string,
+    records: unknown[],
+    options: unknown,
+  ): {
+    records: unknown[];
+    errors: { id: string; collection: string; error: string }[];
+  };
+  bulkDelete(
+    collection: string,
+    ids: string[],
+    options: unknown,
+  ): {
+    deleted_ids: string[];
+    errors: { id: string; collection: string; error: string }[];
+  };
+  observe(
+    collection: string,
+    id: string,
+    callback: (data: unknown) => void,
+  ): () => void;
+  observeQuery(
+    collection: string,
+    query: unknown,
+    callback: (result: unknown) => void,
+  ): () => void;
   onChange(callback: (event: unknown) => void): () => void;
+  flush(): void;
   getDirty(collection: string): unknown[];
-  markSynced(collection: string, id: string, sequence: number, snapshot: unknown): void;
-  applyRemoteChanges(collection: string, records: unknown[], options: unknown): unknown;
+  markSynced(
+    collection: string,
+    id: string,
+    sequence: number,
+    snapshot: unknown,
+  ): void;
+  applyRemoteChanges(
+    collection: string,
+    records: unknown[],
+    options: unknown,
+  ): unknown;
   getLastSequence(collection: string): number;
   setLastSequence(collection: string, sequence: number): void;
 }
@@ -62,7 +98,10 @@ export async function initWasm(): Promise<WasmModule> {
 
   initPromise = (async () => {
     try {
-      const mod = await import("../../../crates/betterbase-db-wasm/pkg/betterbase_db_wasm.js");
+      // vite-plugin-wasm handles WASM initialization at import time —
+      // no manual init call needed with --target bundler.
+      const mod =
+        await import("../../../crates/betterbase-db-wasm/pkg/betterbase_db_wasm.js");
       wasmModule = mod as WasmModule;
       return wasmModule;
     } catch (e) {

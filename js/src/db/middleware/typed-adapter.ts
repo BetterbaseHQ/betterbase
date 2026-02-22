@@ -32,7 +32,11 @@ import type {
   PushSnapshot,
   DirtyRecord,
 } from "../types.js";
-import type { Middleware, WriteOptions, QueryOptions as MiddlewareQueryOptions } from "./types.js";
+import type {
+  Middleware,
+  WriteOptions,
+  QueryOptions as MiddlewareQueryOptions,
+} from "./types.js";
 import { META_KEY } from "../conversions.js";
 
 /**
@@ -47,7 +51,10 @@ export class TypedAdapter<
   readonly inner: OpfsDb;
   private readonly middleware: Middleware<TExtra, TWriteOpts, TQueryOpts>;
 
-  constructor(inner: OpfsDb, middleware: Middleware<TExtra, TWriteOpts, TQueryOpts>) {
+  constructor(
+    inner: OpfsDb,
+    middleware: Middleware<TExtra, TWriteOpts, TQueryOpts>,
+  ) {
     this.inner = inner;
     this.middleware = middleware;
   }
@@ -94,7 +101,9 @@ export class TypedAdapter<
       });
       const start = offset ?? 0;
       const sliced =
-        limit !== undefined ? filtered.slice(start, start + limit) : filtered.slice(start);
+        limit !== undefined
+          ? filtered.slice(start, start + limit)
+          : filtered.slice(start);
       return {
         records: sliced.map((r) => this.enrichRecord(r)),
         total: filtered.length,

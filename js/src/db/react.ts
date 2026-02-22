@@ -53,7 +53,13 @@ const LessDBContext = createContext<OpfsDb | null>(null);
  * React context provider for OpfsDb.
  * Wrap your app (or subtree) to make `useLessDB()`, `useRecord()`, and `useQuery()` available.
  */
-export function LessDBProvider({ value, children }: { value: OpfsDb; children: ReactNode }) {
+export function LessDBProvider({
+  value,
+  children,
+}: {
+  value: OpfsDb;
+  children: ReactNode;
+}) {
   return createElement(LessDBContext.Provider, { value }, children);
 }
 
@@ -125,7 +131,9 @@ export function useRecord<S extends SchemaShape>(
   const onErrorRef = useRef(options?.onError);
   onErrorRef.current = options?.onError;
 
-  const subscribe = useRef<((onStoreChange: () => void) => () => void) | undefined>(undefined);
+  const subscribe = useRef<
+    ((onStoreChange: () => void) => () => void) | undefined
+  >(undefined);
   const key = `${def.name}:${id ?? ""}`;
   const prevKey = useRef(key);
   if (!subscribe.current || prevKey.current !== key) {
@@ -182,7 +190,9 @@ export function useQuery<S extends SchemaShape>(
     stableQuery.current = query;
   }
 
-  const subscribe = useRef<((onStoreChange: () => void) => () => void) | undefined>(undefined);
+  const subscribe = useRef<
+    ((onStoreChange: () => void) => () => void) | undefined
+  >(undefined);
   const subKey = `${def.name}:${queryJSON ?? "{}"}`;
   const prevSubKey = useRef(subKey);
   if (!subscribe.current || prevSubKey.current !== subKey) {

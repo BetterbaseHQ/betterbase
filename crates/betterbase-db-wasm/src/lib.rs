@@ -1,4 +1,4 @@
-//! WASM bindings for betterbase-db.
+//! WASM bindings for betterbase-db-rs.
 //!
 //! Exposes the betterbase-db document store to JavaScript via wasm-bindgen.
 //! SQLite runs entirely inside the Rust WASM module via sqlite-wasm-rs,

@@ -217,12 +217,25 @@ pub struct Connection {
 }
 
 impl Connection {
-    /// Open a database at `path`. Creates it if it doesn't exist.
+    /// Open a database at `path` using the default VFS. Creates it if it doesn't exist.
     pub fn open(path: &str) -> Result<Self> {
+        Self::open_with_vfs(path, None)
+    }
+
+    /// Open a database at `path` using a specific VFS. Creates it if it doesn't exist.
+    pub fn open_with_vfs(path: &str, vfs_name: Option<&str>) -> Result<Self> {
         let c_path = CString::new(path).map_err(|e| SqliteError {
             code: ffi::SQLITE_ERROR,
             message: format!("Invalid path: {e}"),
         })?;
+        let c_vfs = vfs_name
+            .map(|name| {
+                CString::new(name).map_err(|e| SqliteError {
+                    code: ffi::SQLITE_ERROR,
+                    message: format!("Invalid VFS name: {e}"),
+                })
+            })
+            .transpose()?;
 
         let mut db: *mut ffi::sqlite3 = std::ptr::null_mut();
         let rc = unsafe {
@@ -230,7 +243,7 @@ impl Connection {
                 c_path.as_ptr(),
                 &mut db,
                 ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
-                std::ptr::null(),
+                c_vfs.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
             )
         };
 

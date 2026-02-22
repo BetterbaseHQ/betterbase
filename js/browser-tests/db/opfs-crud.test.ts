@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { OpfsDb } from "../src/index.js";
-import { buildUsersCollection, openFreshOpfsDb, cleanupOpfsDb, type UsersCollection } from "./opfs-helpers.js";
+import type { OpfsDb } from "../../src/db/index.js";
+import {
+  buildUsersCollection,
+  openFreshOpfsDb,
+  cleanupOpfsDb,
+  type UsersCollection,
+} from "./opfs-helpers.js";
 
 describe("OPFS CRUD", () => {
   const users: UsersCollection = buildUsersCollection();
@@ -15,7 +20,11 @@ describe("OPFS CRUD", () => {
   });
 
   it("put inserts and returns record with id/createdAt/updatedAt", async () => {
-    const record = await db.put(users, { name: "Alice", email: "alice@test.com", age: 30 });
+    const record = await db.put(users, {
+      name: "Alice",
+      email: "alice@test.com",
+      age: 30,
+    });
 
     expect(record.id).toBeDefined();
     expect(typeof record.id).toBe("string");
@@ -27,12 +36,20 @@ describe("OPFS CRUD", () => {
   });
 
   it("put with explicit id uses that id", async () => {
-    const record = await db.put(users, { name: "Bob", email: "bob@test.com", age: 25 }, { id: "custom-id" });
+    const record = await db.put(
+      users,
+      { name: "Bob", email: "bob@test.com", age: 25 },
+      { id: "custom-id" },
+    );
     expect(record.id).toBe("custom-id");
   });
 
   it("get retrieves by id", async () => {
-    const inserted = await db.put(users, { name: "Alice", email: "alice@test.com", age: 30 });
+    const inserted = await db.put(users, {
+      name: "Alice",
+      email: "alice@test.com",
+      age: 30,
+    });
     const fetched = await db.get(users, inserted.id);
 
     expect(fetched).not.toBeNull();
@@ -48,7 +65,11 @@ describe("OPFS CRUD", () => {
   });
 
   it("put overwrites existing record (same id)", async () => {
-    const original = await db.put(users, { name: "Alice", email: "alice@test.com", age: 30 });
+    const original = await db.put(users, {
+      name: "Alice",
+      email: "alice@test.com",
+      age: 30,
+    });
     const updated = await db.put(
       users,
       { name: "Alice Updated", email: "alice2@test.com", age: 31 },
@@ -62,7 +83,11 @@ describe("OPFS CRUD", () => {
   });
 
   it("patch updates specific fields, leaves others unchanged", async () => {
-    const original = await db.put(users, { name: "Alice", email: "alice@test.com", age: 30 });
+    const original = await db.put(users, {
+      name: "Alice",
+      email: "alice@test.com",
+      age: 30,
+    });
     const patched = await db.patch(users, { id: original.id, age: 31 });
 
     expect(patched.id).toBe(original.id);
@@ -72,7 +97,11 @@ describe("OPFS CRUD", () => {
   });
 
   it("delete returns true and makes get return null", async () => {
-    const record = await db.put(users, { name: "Alice", email: "alice@test.com", age: 30 });
+    const record = await db.put(users, {
+      name: "Alice",
+      email: "alice@test.com",
+      age: 30,
+    });
 
     const deleted = await db.delete(users, record.id);
     expect(deleted).toBe(true);

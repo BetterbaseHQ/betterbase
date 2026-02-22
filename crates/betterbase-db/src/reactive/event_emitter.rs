@@ -5,8 +5,8 @@
 //!   - A listener removed *during* emission is still called in that round.
 //!   - A listener added *during* emission is NOT called until the next emit.
 //!
-//! Panics inside a listener propagate to the caller — no error isolation at
-//! this level (the ReactiveAdapter handles isolation above).
+//! Panics inside a listener are caught via `catch_unwind` so that a single
+//! misbehaving listener cannot prevent subsequent listeners from running.
 //!
 //! All methods take `&self` (interior mutability via `parking_lot::Mutex`),
 //! which allows listeners to call `on()`/`off()` during `emit()` without
@@ -63,6 +63,9 @@ impl<T> EventEmitter<T> {
     /// A snapshot of the listener list is taken before iteration so that
     /// additions or removals during a callback do not affect the current
     /// emission round. The lock is released before calling any callbacks.
+    ///
+    /// Each listener is invoked inside `catch_unwind` so that a panicking
+    /// listener does not prevent subsequent listeners from running.
     pub fn emit(&self, event: &T) {
         // Snapshot Arc references under the lock (cheap: just ref-count bumps).
         let snapshot: Vec<Arc<ListenerFn<T>>> = {
@@ -71,7 +74,18 @@ impl<T> EventEmitter<T> {
         };
         // Lock is released — callbacks can safely call on()/off().
         for cb in snapshot {
-            cb(event);
+            if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cb(event);
+            })) {
+                let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else if let Some(s) = e.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                eprintln!("EventEmitter: listener panicked: {msg}");
+            }
         }
     }
 

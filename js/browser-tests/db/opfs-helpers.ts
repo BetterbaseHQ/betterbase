@@ -1,4 +1,10 @@
-import { collection, t, createOpfsDb, type OpfsDb, type CollectionDefHandle } from "../src/index.js";
+import {
+  collection,
+  t,
+  createOpfsDb,
+  type OpfsDb,
+  type CollectionDefHandle,
+} from "../../src/db/index.js";
 
 // ============================================================================
 // Unique DB naming
@@ -15,10 +21,9 @@ export function uniqueOpfsDbName(prefix = "opfs-test"): string {
 // ============================================================================
 
 function createTestWorker(): Worker {
-  return new Worker(
-    new URL("./opfs-test-worker.ts", import.meta.url),
-    { type: "module" },
-  );
+  return new Worker(new URL("./opfs-test-worker.ts", import.meta.url), {
+    type: "module",
+  });
 }
 
 export async function openFreshOpfsDb(

@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { OpfsDb } from "../src/index.js";
-import { buildUsersCollection, openFreshOpfsDb, cleanupOpfsDb, type UsersCollection } from "./opfs-helpers.js";
+import type { OpfsDb } from "../../src/db/index.js";
+import {
+  buildUsersCollection,
+  openFreshOpfsDb,
+  cleanupOpfsDb,
+  type UsersCollection,
+} from "./opfs-helpers.js";
 
 describe("OPFS sync", () => {
   const users: UsersCollection = buildUsersCollection();
@@ -15,15 +20,26 @@ describe("OPFS sync", () => {
   });
 
   it("getDirty returns records with pending changes", async () => {
-    await db.put(users, { name: "Alice", email: "alice@test.com", age: 30 });
+    const record = await db.put(users, {
+      name: "Alice",
+      email: "alice@test.com",
+      age: 30,
+    });
 
     const dirty = await db.getDirty(users);
     expect(dirty.length).toBe(1);
-    expect(dirty[0].name).toBe("Alice");
+    expect(dirty[0].id).toBe(record.id);
+    expect(dirty[0].deleted).toBe(false);
+    expect(dirty[0].crdt).toBeInstanceOf(Uint8Array);
+    expect(dirty[0].crdt.length).toBeGreaterThan(0);
   });
 
   it("markSynced clears dirty flag", async () => {
-    const record = await db.put(users, { name: "Alice", email: "alice@test.com", age: 30 });
+    const record = await db.put(users, {
+      name: "Alice",
+      email: "alice@test.com",
+      age: 30,
+    });
 
     await db.markSynced(users, record.id, 1);
 

@@ -24,8 +24,10 @@ pub fn value_to_js(v: &Value) -> Result<JsValue, JsValue> {
 }
 
 /// Convert a `JsValue` to a `serde_json::Value` using serde-wasm-bindgen.
-pub fn js_to_value(v: &JsValue) -> Result<Value, JsValue> {
-    serde_wasm_bindgen::from_value(v.clone()).map_err(|e| JsValue::from_str(&e.to_string()))
+///
+/// Takes ownership of the `JsValue` to avoid cloning — `from_value` consumes it.
+pub fn js_to_value(v: JsValue) -> Result<Value, JsValue> {
+    serde_wasm_bindgen::from_value(v).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Parse a JSON schema definition into a `BTreeMap<String, SchemaNode>`.
@@ -34,7 +36,7 @@ pub fn js_to_value(v: &JsValue) -> Result<Value, JsValue> {
 /// ```json
 /// { "name": { "type": "string" }, "age": { "type": "number" } }
 /// ```
-pub fn parse_schema(js: &JsValue) -> Result<BTreeMap<String, SchemaNode>, JsValue> {
+pub fn parse_schema(js: JsValue) -> Result<BTreeMap<String, SchemaNode>, JsValue> {
     let val: Value = js_to_value(js)?;
     let obj = val
         .as_object()

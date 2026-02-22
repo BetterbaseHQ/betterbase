@@ -1,4 +1,8 @@
-import type { CollectionDefHandle, RemoteRecord, SyncAdapter } from "../types.js";
+import type {
+  CollectionDefHandle,
+  RemoteRecord,
+  SyncAdapter,
+} from "../types.js";
 
 /** Aggregated result of a sync cycle. */
 export interface SyncResult {

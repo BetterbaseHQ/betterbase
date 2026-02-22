@@ -96,7 +96,7 @@ impl WasmCollectionBuilder {
 
     /// Define the first version (v1) with a schema. No migration function needed.
     pub fn v1(&mut self, schema_js: JsValue) -> Result<(), JsValue> {
-        let schema = parse_schema(&schema_js)?;
+        let schema = parse_schema(schema_js)?;
         self.versions.push(VersionEntry {
             version: 1,
             schema,
@@ -113,7 +113,7 @@ impl WasmCollectionBuilder {
         schema_js: JsValue,
         migrate: js_sys::Function,
     ) -> Result<(), JsValue> {
-        let schema = parse_schema(&schema_js)?;
+        let schema = parse_schema(schema_js)?;
         self.versions.push(VersionEntry {
             version,
             schema,
@@ -133,7 +133,7 @@ impl WasmCollectionBuilder {
         let opts: Value = if options.is_undefined() || options.is_null() {
             Value::Object(serde_json::Map::new())
         } else {
-            js_to_value(&options)?
+            js_to_value(options)?
         };
 
         let name = opts.get("name").and_then(|v| v.as_str()).map(String::from);
@@ -167,7 +167,7 @@ impl WasmCollectionBuilder {
         let opts: Value = if options.is_undefined() || options.is_null() {
             Value::Object(serde_json::Map::new())
         } else {
-            js_to_value(&options)?
+            js_to_value(options)?
         };
 
         let unique = opts

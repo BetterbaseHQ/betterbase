@@ -646,3 +646,114 @@ fn serialize_nested_union() {
     assert_eq!(serialize(&outer_union, &json!(42)).unwrap(), json!(42));
     assert_eq!(serialize(&outer_union, &json!(true)).unwrap(), json!(true));
 }
+
+// ============================================================================
+// Literal booleans
+// ============================================================================
+
+#[test]
+fn serialize_literal_bool_true() {
+    assert_eq!(
+        serialize(&t::literal_bool(true), &json!(true)).unwrap(),
+        json!(true)
+    );
+}
+
+#[test]
+fn serialize_literal_bool_false() {
+    assert_eq!(
+        serialize(&t::literal_bool(false), &json!(false)).unwrap(),
+        json!(false)
+    );
+}
+
+#[test]
+fn deserialize_literal_bool_roundtrip() {
+    let schema = t::literal_bool(true);
+    let serialized = serialize(&schema, &json!(true)).unwrap();
+    let deserialized = deserialize(&schema, &serialized).unwrap();
+    assert_eq!(deserialized, json!(true));
+}
+
+// ============================================================================
+// Max depth boundary — exactly MAX_DEPTH (100) succeeds
+// ============================================================================
+
+#[test]
+fn serialize_max_depth_boundary_succeeds() {
+    // Build schema with exactly 100 levels of nesting.
+    // Each level adds depth+1 to the recursive call.
+    // 100 levels → deepest call at depth=100, which is NOT > 100, so succeeds.
+    let mut schema = t::object({
+        let mut p = BTreeMap::new();
+        p.insert("value".to_string(), t::string());
+        p
+    });
+    for _ in 0..99 {
+        schema = t::object({
+            let mut p = BTreeMap::new();
+            p.insert("nested".to_string(), schema.clone());
+            p
+        });
+    }
+
+    let mut value = json!({"value": "test"});
+    for _ in 0..99 {
+        value = json!({"nested": value});
+    }
+
+    // Should succeed — exactly at the boundary
+    let result = serialize(&schema, &value);
+    assert!(
+        result.is_ok(),
+        "depth=100 should succeed, got: {:?}",
+        result.err()
+    );
+}
+
+// ============================================================================
+// Deserialize null in optional fields round-trips
+// ============================================================================
+
+#[test]
+fn deserialize_null_in_optional_fields_roundtrip() {
+    let mut props = BTreeMap::new();
+    props.insert("name".to_string(), t::string());
+    props.insert("bio".to_string(), t::optional(t::string()));
+    props.insert("age".to_string(), t::optional(t::number()));
+    let schema = t::object(props);
+
+    let value = json!({"name": "Alice", "bio": null, "age": null});
+    let serialized = serialize(&schema, &value).unwrap();
+    // serialize skips null optionals
+    assert!(serialized.get("bio").is_none());
+    assert!(serialized.get("age").is_none());
+
+    // deserialize of the serialized form (missing fields) round-trips cleanly
+    let deserialized = deserialize(&schema, &serialized).unwrap();
+    assert_eq!(deserialized["name"], json!("Alice"));
+    // absent optional fields stay absent
+    assert!(deserialized.get("bio").is_none());
+    assert!(deserialized.get("age").is_none());
+}
+
+// ============================================================================
+// Deserialize non-matching union — passthrough
+// ============================================================================
+
+#[test]
+fn deserialize_non_matching_union_passthrough() {
+    // Union of string and number — boolean doesn't match either
+    let schema = t::union(vec![t::string(), t::number()]);
+    // deserialize returns the value unchanged when no variant matches
+    let result = deserialize(&schema, &json!(true)).unwrap();
+    assert_eq!(result, json!(true));
+
+    // Also test with null
+    let result = deserialize(&schema, &Value::Null).unwrap();
+    assert_eq!(result, Value::Null);
+
+    // And with an array
+    let result = deserialize(&schema, &json!([1, 2, 3])).unwrap();
+    assert_eq!(result, json!([1, 2, 3]));
+}

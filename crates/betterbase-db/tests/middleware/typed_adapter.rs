@@ -74,7 +74,10 @@ impl Middleware for SpacesMiddleware {
         Some(json!({}))
     }
 
-    fn on_query(&self, options: &Value) -> Option<Box<betterbase_db::middleware::types::MetaFilterFn>> {
+    fn on_query(
+        &self,
+        options: &Value,
+    ) -> Option<Box<betterbase_db::middleware::types::MetaFilterFn>> {
         let target_space_id = if let Some(same_space) = options.get("sameSpaceAs") {
             same_space
                 .get("_spaceId")

@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { OpfsDb } from "../src/index.js";
-import { buildUsersCollection, openFreshOpfsDb, cleanupOpfsDb, type UsersCollection } from "./opfs-helpers.js";
+import type { OpfsDb } from "../../src/db/index.js";
+import {
+  buildUsersCollection,
+  openFreshOpfsDb,
+  cleanupOpfsDb,
+  type UsersCollection,
+} from "./opfs-helpers.js";
 
 describe("OPFS query", () => {
   const users: UsersCollection = buildUsersCollection();
@@ -11,7 +16,11 @@ describe("OPFS query", () => {
     // Seed data
     await db.put(users, { name: "Alice", email: "alice@test.com", age: 30 });
     await db.put(users, { name: "Bob", email: "bob@test.com", age: 25 });
-    await db.put(users, { name: "Charlie", email: "charlie@test.com", age: 35 });
+    await db.put(users, {
+      name: "Charlie",
+      email: "charlie@test.com",
+      age: 35,
+    });
   });
 
   afterEach(async () => {
@@ -29,7 +38,11 @@ describe("OPFS query", () => {
     const result = await db.query(users, {
       sort: [{ field: "age", direction: "asc" }],
     });
-    expect(result.records.map((r) => r.name)).toEqual(["Bob", "Alice", "Charlie"]);
+    expect(result.records.map((r) => r.name)).toEqual([
+      "Bob",
+      "Alice",
+      "Charlie",
+    ]);
   });
 
   it("query with limit and offset", async () => {
