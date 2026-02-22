@@ -23,17 +23,9 @@ import {
   type ReactNode,
 } from "react";
 import { FilesClient } from "./files.js";
-import {
-  FileStore,
-  type UploadQueueEntry,
-  type CacheStats,
-} from "./file-store.js";
+import { FileStore, type UploadQueueEntry, type CacheStats } from "./file-store.js";
 import type { TokenProvider } from "./types.js";
-import {
-  SpaceManager,
-  type SpaceRecord,
-  type Member,
-} from "./space-manager.js";
+import { SpaceManager, type SpaceRecord, type Member } from "./space-manager.js";
 import {
   type SpaceFields,
   type SpaceWriteOptions,
@@ -43,10 +35,7 @@ import {
 import { spaces, type SpaceRole } from "./spaces-collection.js";
 import { PresenceManager, type PeerPresence } from "./presence.js";
 import { EventManager } from "./event-manager.js";
-import {
-  fetchServerMetadata,
-  type ServerMetadata,
-} from "../discovery/index.js";
+import { fetchServerMetadata, type ServerMetadata } from "../discovery/index.js";
 import { initialSyncState } from "./sync-state.js";
 import { stableStringify } from "./stable-stringify.js";
 import { SyncEngine } from "./sync-engine.js";
@@ -98,15 +87,21 @@ export interface LessSession {
    * delivered at login IS the epoch-0 key (HKDF-derived from the root export key).
    */
   getEpoch(): number | undefined;
-  /** Get the current epoch key as raw bytes (may read from IndexedDB). */
-  getEpochKey(): Promise<Uint8Array | null>;
+  /** Get the current epoch KW key as CryptoKey (may read from IndexedDB). */
+  getEpochKey(): Promise<CryptoKey | null>;
+  /** Get the current epoch derive key as HKDF CryptoKey (may read from IndexedDB). */
+  getEpochDeriveKey(): Promise<CryptoKey | null>;
   getEpochAdvancedAt(): number | undefined;
   /** Get the P-256 signing keypair as JWK pair (may read from IndexedDB). */
   getAppKeypair(): Promise<{
     privateKeyJwk: JsonWebKey;
     publicKeyJwk: JsonWebKey;
   } | null>;
-  updateEpoch(epoch: number, epochKey: Uint8Array): Promise<void>;
+  updateEpoch(
+    epoch: number,
+    epochKey: Uint8Array | CryptoKey,
+    epochDeriveKey?: CryptoKey,
+  ): Promise<void>;
 }
 
 // ===========================================================================
@@ -139,12 +134,16 @@ export interface LessProviderProps {
   getToken?: TokenProvider;
   /** Current epoch number for forward secrecy (from session state). */
   epoch?: number;
-  /** Current epoch key for forward secrecy (from session state). Raw Uint8Array bytes. */
-  epochKey?: Uint8Array;
+  /** Current epoch key for forward secrecy. CryptoKey (personal space, non-extractable) or raw bytes. */
+  epochKey?: Uint8Array | CryptoKey;
   /** Timestamp (ms) when the current epoch was established (from session state). */
   epochAdvancedAt?: number;
   /** Callback when epoch advances during re-encryption. Persist the new key + epoch to session. */
-  onEpochAdvanced?: (epoch: number, key: Uint8Array) => void | Promise<void>;
+  onEpochAdvanced?: (
+    epoch: number,
+    key: Uint8Array | CryptoKey,
+    deriveKey?: CryptoKey,
+  ) => void | Promise<void>;
   /** Enable/disable sync (e.g. `!!session`). Default: true. */
   enabled?: boolean;
   /** Called on 401 errors. */
@@ -305,9 +304,7 @@ export function LessProvider(props: LessProviderProps): ReactElement {
       },
       (err) => {
         if (!cancelled) {
-          setDiscoveryError(
-            err instanceof Error ? err.message : "Discovery failed",
-          );
+          setDiscoveryError(err instanceof Error ? err.message : "Discovery failed");
         }
       },
     );
@@ -330,12 +327,9 @@ export function LessProvider(props: LessProviderProps): ReactElement {
     privateKeyJwk: JsonWebKey;
     publicKeyJwk: JsonWebKey;
   } | null>(null);
-  const [sessionEpochKey, setSessionEpochKey] = useState<Uint8Array | null>(
-    null,
-  );
-  const [sessionResolveError, setSessionResolveError] = useState<string | null>(
-    null,
-  );
+  const [sessionEpochKey, setSessionEpochKey] = useState<CryptoKey | null>(null);
+  const [sessionEpochDeriveKey, setSessionEpochDeriveKey] = useState<CryptoKey | null>(null);
+  const [sessionResolveError, setSessionResolveError] = useState<string | null>(null);
 
   // Re-resolve when session changes OR when epoch advances (updateEpoch stores
   // a new key in KeyStore). Without sessionEpochNumber, the effect wouldn't
@@ -346,24 +340,24 @@ export function LessProvider(props: LessProviderProps): ReactElement {
     // Clear derived state immediately — prevents stale keys during session transitions
     setSessionKeypair(null);
     setSessionEpochKey(null);
+    setSessionEpochDeriveKey(null);
     setSessionResolveError(null);
 
     if (!session) return;
     let cancelled = false;
 
     // Resolve async session fields in parallel
-    Promise.all([session.getAppKeypair(), session.getEpochKey()]).then(
-      ([kp, ek]) => {
+    Promise.all([session.getAppKeypair(), session.getEpochKey(), session.getEpochDeriveKey()]).then(
+      ([kp, ek, edk]) => {
         if (cancelled) return;
         setSessionKeypair(kp);
         setSessionEpochKey(ek);
+        setSessionEpochDeriveKey(edk);
       },
       (err) => {
         if (!cancelled) {
           setSessionResolveError(
-            err instanceof Error
-              ? err.message
-              : "Failed to resolve session fields",
+            err instanceof Error ? err.message : "Failed to resolve session fields",
           );
         }
       },
@@ -391,27 +385,17 @@ export function LessProvider(props: LessProviderProps): ReactElement {
 
   // Surface discovery errors
   if (discoveryError) {
-    throw new Error(
-      `LessProvider: discovery failed for "${domain}": ${discoveryError}`,
-    );
+    throw new Error(`LessProvider: discovery failed for "${domain}": ${discoveryError}`);
   }
 
   // Surface session resolution errors via React Error Boundary.
   if (sessionResolveError) {
-    console.error(
-      "[less-sync] Session resolution failed:",
-      sessionResolveError,
-    );
-    throw new Error(
-      `LessProvider: session resolution failed: ${sessionResolveError}`,
-    );
+    console.error("[less-sync] Session resolution failed:", sessionResolveError);
+    throw new Error(`LessProvider: session resolution failed: ${sessionResolveError}`);
   }
 
   // Warn if mixing session + explicit auth props (easy mistake, hard to debug)
-  if (
-    session &&
-    (props.keypair || props.getToken || props.personalSpaceId || props.handle)
-  ) {
+  if (session && (props.keypair || props.getToken || props.personalSpaceId || props.handle)) {
     console.warn(
       "[less-sync] LessProvider: explicit auth props (keypair, getToken, personalSpaceId, handle) " +
         "override session-derived values. Remove them to use session defaults.",
@@ -420,26 +404,23 @@ export function LessProvider(props: LessProviderProps): ReactElement {
 
   // Merge explicit props over session-derived values
   const keypair = props.keypair ?? sessionKeypair ?? undefined;
-  const personalSpaceId =
-    props.personalSpaceId ?? session?.getPersonalSpaceId() ?? undefined;
+  const personalSpaceId = props.personalSpaceId ?? session?.getPersonalSpaceId() ?? undefined;
   const handle = props.handle ?? session?.getHandle() ?? undefined;
   const getToken = props.getToken ?? (session ? sessionGetToken : undefined);
   const epoch = props.epoch ?? session?.getEpoch() ?? (session ? 0 : undefined);
   const epochKey = props.epochKey ?? sessionEpochKey ?? undefined;
-  const epochAdvancedAt =
-    props.epochAdvancedAt ?? session?.getEpochAdvancedAt();
+  const epochDeriveKey = sessionEpochDeriveKey ?? undefined;
+  const epochAdvancedAt = props.epochAdvancedAt ?? session?.getEpochAdvancedAt();
   const onEpochAdvanced =
     props.onEpochAdvanced ??
     (session
-      ? (ep: number, key: Uint8Array) => session.updateEpoch(ep, key)
+      ? (ep: number, key: Uint8Array | CryptoKey, dk?: CryptoKey) =>
+          session.updateEpoch(ep, key, dk)
       : undefined);
 
   // Always wrap children in FileStoreContext so useFile/useFileStore work
   // even before auth resolves.
-  const fileStoreContextValue = useMemo<FileStoreContextValue>(
-    () => ({ fileStore }),
-    [fileStore],
-  );
+  const fileStoreContextValue = useMemo<FileStoreContextValue>(() => ({ fileStore }), [fileStore]);
 
   // Check if all required fields are present
   const ready = !!(keypair && personalSpaceId && getToken);
@@ -463,6 +444,7 @@ export function LessProvider(props: LessProviderProps): ReactElement {
       getToken: canActivate ? getToken : undefined,
       epoch: canActivate ? epoch : undefined,
       epochKey: canActivate ? (epochKey ?? undefined) : undefined,
+      epochDeriveKey: canActivate ? epochDeriveKey : undefined,
       epochAdvancedAt: canActivate ? epochAdvancedAt : undefined,
       onEpochAdvanced: canActivate ? onEpochAdvanced : undefined,
       adapter,
@@ -495,7 +477,8 @@ interface LessProviderInnerProps extends Omit<
   personalSpaceId?: string;
   handle?: string;
   getToken?: TokenProvider;
-  epochKey?: Uint8Array;
+  epochKey?: Uint8Array | CryptoKey;
+  epochDeriveKey?: CryptoKey;
   /** Resolved sync API base URL. */
   syncBaseUrl: string;
   /** Resolved accounts server base URL. */
@@ -520,6 +503,7 @@ function LessProviderInner(props: LessProviderInnerProps) {
     getToken,
     epoch,
     epochKey,
+    epochDeriveKey,
     epochAdvancedAt,
     onEpochAdvanced,
     enabled = true,
@@ -547,9 +531,7 @@ function LessProviderInner(props: LessProviderInnerProps) {
   const editChainCollectionsRef = useRef(editChainCollections);
   if (
     editChainCollectionsRef.current?.length !== editChainCollections?.length ||
-    editChainCollectionsRef.current?.some(
-      (c, i) => c !== editChainCollections?.[i],
-    )
+    editChainCollectionsRef.current?.some((c, i) => c !== editChainCollections?.[i])
   ) {
     editChainCollectionsRef.current = editChainCollections;
   }
@@ -575,6 +557,7 @@ function LessProviderInner(props: LessProviderInnerProps) {
       accountsBaseUrl,
       epoch,
       epochKey,
+      epochDeriveKey,
       epochAdvancedAt,
       onEpochAdvanced,
       editChainCollections: editChainSet,
@@ -618,6 +601,7 @@ function LessProviderInner(props: LessProviderInnerProps) {
     accountsBaseUrl,
     epoch,
     epochKey,
+    epochDeriveKey,
     epochAdvancedAt,
     onEpochAdvanced,
     stableEditChainCollections,
@@ -722,11 +706,7 @@ function LessProviderInner(props: LessProviderInnerProps) {
     createElement(
       LessContext.Provider,
       { value: contextValue },
-      createElement(
-        SyncStatusContext.Provider,
-        { value: syncStatusValue },
-        children,
-      ),
+      createElement(SyncStatusContext.Provider, { value: syncStatusValue }, children),
     ),
   );
 
@@ -798,14 +778,9 @@ export function SyncReady({
  * @throws Error if sync is not ready. Use `useSyncReady()` to check first,
  * or gate your component so it only renders when sync is available.
  */
-export function useSyncDb(): TypedAdapter<
-  SpaceFields,
-  SpaceWriteOptions,
-  SpaceQueryOptions
-> {
+export function useSyncDb(): TypedAdapter<SpaceFields, SpaceWriteOptions, SpaceQueryOptions> {
   const ctx = useContext(LessContext);
-  if (!ctx)
-    throw new Error("useSyncDb: no LessProvider found in component tree");
+  if (!ctx) throw new Error("useSyncDb: no LessProvider found in component tree");
   return ctx.db;
 }
 
@@ -841,10 +816,7 @@ export function FileStoreProvider({
   fileStore: FileStore;
   children: ReactNode;
 }): ReactElement {
-  const value = useMemo<FileStoreContextValue>(
-    () => ({ fileStore }),
-    [fileStore],
-  );
+  const value = useMemo<FileStoreContextValue>(() => ({ fileStore }), [fileStore]);
   return createElement(FileStoreContext.Provider, { value }, children);
 }
 
@@ -906,11 +878,7 @@ export function useFileUploadQueue(): FileUploadQueueResult {
     () => fileStore?.getQueueSnapshot() ?? EMPTY_QUEUE_ENTRIES,
     [fileStore],
   );
-  const uploadQueue = useSyncExternalStore(
-    subscribe,
-    getSnapshot,
-    () => EMPTY_QUEUE_ENTRIES,
-  );
+  const uploadQueue = useSyncExternalStore(subscribe, getSnapshot, () => EMPTY_QUEUE_ENTRIES);
 
   return useMemo(() => {
     if (!fileStore) return EMPTY_UPLOAD_QUEUE;
@@ -1093,8 +1061,7 @@ export interface UseSpacesResult {
  */
 export function useSpaces(): UseSpacesResult {
   const ctx = useContext(LessContext);
-  if (!ctx)
-    throw new Error("useSpaces: no LessProvider found in component tree");
+  if (!ctx) throw new Error("useSpaces: no LessProvider found in component tree");
 
   const mgr = ctx.spaceManager;
   const { flushAll, scheduleSync, resubscribe, privateKeyJwk } = ctx;
@@ -1163,17 +1130,13 @@ export interface UseMembersResult {
  */
 export function useMembers(spaceId: string | undefined): UseMembersResult {
   const ctx = useContext(LessContext);
-  if (!ctx)
-    throw new Error("useMembers: no LessProvider found in component tree");
+  if (!ctx) throw new Error("useMembers: no LessProvider found in component tree");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   // Reactive query for the space record — gives us cached members immediately
-  const spaceQuery = useQuery(
-    spaces,
-    spaceId ? { filter: { spaceId } } : undefined,
-  );
+  const spaceQuery = useQuery(spaces, spaceId ? { filter: { spaceId } } : undefined);
   const spaceRecord = spaceQuery.records[0];
   const cachedMembers: Member[] = useMemo(
     () => (spaceRecord?.members as Member[] | undefined) ?? [],
@@ -1209,8 +1172,7 @@ export function useMembers(spaceId: string | undefined): UseMembersResult {
   }, [spaceId, mgr]);
 
   // Still loading if the space record query hasn't resolved yet OR refresh is in progress
-  const isLoading =
-    (spaceId !== undefined && spaceQuery.total === 0) || loading;
+  const isLoading = (spaceId !== undefined && spaceQuery.total === 0) || loading;
   return { members: cachedMembers, loading: isLoading, error };
 }
 
@@ -1223,9 +1185,7 @@ export function useMembers(spaceId: string | undefined): UseMembersResult {
  *
  * Returns a `QueryResult` of space records with status "invited".
  */
-export function usePendingInvitations(): QueryResult<
-  SpaceRecord & SpaceFields
-> {
+export function usePendingInvitations(): QueryResult<SpaceRecord & SpaceFields> {
   return useQuery(spaces, { filter: { status: "invited" } }) as QueryResult<
     SpaceRecord & SpaceFields
   >;
@@ -1266,8 +1226,7 @@ export interface UseLessSyncResult {
  */
 export function useLessSync(): UseLessSyncResult {
   const ctx = useContext(LessContext);
-  if (!ctx)
-    throw new Error("useLessSync: no LessProvider found in component tree");
+  if (!ctx) throw new Error("useLessSync: no LessProvider found in component tree");
   return {
     phase: ctx.phase,
     syncing: ctx.syncing,
@@ -1291,16 +1250,13 @@ export function useRecord<TName extends string, TSchema extends SchemaShape>(
   id: string | undefined,
 ): (CollectionRead<TSchema> & SpaceFields) | undefined {
   const ctx = useContext(LessContext);
-  if (!ctx)
-    throw new Error("useRecord: no LessProvider found in component tree");
+  if (!ctx) throw new Error("useRecord: no LessProvider found in component tree");
   const db = ctx.db;
 
   type R = (CollectionRead<TSchema> & SpaceFields) | undefined;
   const snapshotRef = useRef<R>(undefined);
 
-  const subscribe = useRef<
-    ((onStoreChange: () => void) => () => void) | undefined
-  >(undefined);
+  const subscribe = useRef<((onStoreChange: () => void) => () => void) | undefined>(undefined);
   const key = `${def.name}:${id ?? ""}`;
   const prevKey = useRef(key);
   if (!subscribe.current || prevKey.current !== key) {
@@ -1350,8 +1306,7 @@ export function useQuery<TName extends string, TSchema extends SchemaShape>(
   queryOptions?: SpaceQueryOptions,
 ): QueryResult<CollectionRead<TSchema> & SpaceFields> {
   const ctx = useContext(LessContext);
-  if (!ctx)
-    throw new Error("useQuery: no LessProvider found in component tree");
+  if (!ctx) throw new Error("useQuery: no LessProvider found in component tree");
   const db = ctx.db;
 
   type QR = QueryResult<CollectionRead<TSchema> & SpaceFields>;
@@ -1366,8 +1321,7 @@ export function useQuery<TName extends string, TSchema extends SchemaShape>(
     stableQuery.current = query;
   }
 
-  const optionsJSON =
-    queryOptions === undefined ? undefined : stableStringify(queryOptions);
+  const optionsJSON = queryOptions === undefined ? undefined : stableStringify(queryOptions);
   const prevOptionsJSON = useRef(optionsJSON);
   const stableOptions = useRef(queryOptions);
   if (prevOptionsJSON.current !== optionsJSON) {
@@ -1375,9 +1329,7 @@ export function useQuery<TName extends string, TSchema extends SchemaShape>(
     stableOptions.current = queryOptions;
   }
 
-  const subscribe = useRef<
-    ((onStoreChange: () => void) => () => void) | undefined
-  >(undefined);
+  const subscribe = useRef<((onStoreChange: () => void) => () => void) | undefined>(undefined);
   const subKey = `${def.name}:${queryJSON ?? "{}"}:${optionsJSON ?? "{}"}`;
   const prevSubKey = useRef(subKey);
   if (!subscribe.current || prevSubKey.current !== subKey) {
@@ -1414,8 +1366,7 @@ export function useQuery<TName extends string, TSchema extends SchemaShape>(
  */
 export function useSpaceManager(): SpaceManager {
   const ctx = useContext(LessContext);
-  if (!ctx)
-    throw new Error("useSpaceManager: no LessProvider found in component tree");
+  if (!ctx) throw new Error("useSpaceManager: no LessProvider found in component tree");
   return ctx.spaceManager;
 }
 
@@ -1430,10 +1381,7 @@ export function useSpaceManager(): SpaceManager {
  */
 export function usePresenceManager(): PresenceManager | null {
   const ctx = useContext(LessContext);
-  if (!ctx)
-    throw new Error(
-      "usePresenceManager: no LessProvider found in component tree",
-    );
+  if (!ctx) throw new Error("usePresenceManager: no LessProvider found in component tree");
   return ctx.presenceManager;
 }
 
@@ -1448,8 +1396,7 @@ export function usePresenceManager(): PresenceManager | null {
  */
 export function useEventManager(): EventManager | null {
   const ctx = useContext(LessContext);
-  if (!ctx)
-    throw new Error("useEventManager: no LessProvider found in component tree");
+  if (!ctx) throw new Error("useEventManager: no LessProvider found in component tree");
   return ctx.eventManager;
 }
 
@@ -1465,9 +1412,7 @@ export function useEventManager(): EventManager | null {
  *
  * @param spaceId - Space ID, or undefined to skip.
  */
-export function usePeers<T = unknown>(
-  spaceId: string | undefined,
-): PeerPresence<T>[] {
+export function usePeers<T = unknown>(spaceId: string | undefined): PeerPresence<T>[] {
   const ctx = useContext(LessContext);
   const pm = ctx?.presenceManager ?? null;
 
@@ -1558,13 +1503,7 @@ export function usePresence<T = unknown>(
   // available after BOOTSTRAP_COMPLETE. Without this guard, getChannelKey would
   // return null and the send would silently no-op — phase is the explicit contract.
   useEffect(() => {
-    if (
-      !pm ||
-      !spaceId ||
-      phase !== "ready" ||
-      stableMyData.current === undefined
-    )
-      return;
+    if (!pm || !spaceId || phase !== "ready" || stableMyData.current === undefined) return;
     pm.setPresence(spaceId, stableMyData.current);
     return () => {
       pm.clearPresence(spaceId);
@@ -1607,10 +1546,7 @@ export function useEvent<T>(
   name: string,
   handler: (data: T, peer: string) => void,
 ): void;
-export function useEvent<
-  TMap extends Record<string, unknown>,
-  K extends keyof TMap & string,
->(
+export function useEvent<TMap extends Record<string, unknown>, K extends keyof TMap & string>(
   spaceId: string | undefined,
   name: K,
   handler: (data: TMap[K], peer: string) => void,
@@ -1661,9 +1597,7 @@ export function useEvent(
  * @param spaceId - Space ID to send to, or undefined.
  * @returns A typed send function, or a no-op if spaceId is undefined.
  */
-export function useSendEvent<
-  TMap extends Record<string, unknown> = Record<string, unknown>,
->(
+export function useSendEvent<TMap extends Record<string, unknown> = Record<string, unknown>>(
   spaceId: string | undefined,
 ): <K extends string & keyof TMap>(name: K, data: TMap[K]) => void {
   const ctx = useContext(LessContext);

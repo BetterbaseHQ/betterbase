@@ -822,13 +822,11 @@ export class SpaceManager {
       epoch: newEpoch,
     });
 
-    // 1g. Update local crypto state to use new key (zero old key material first).
-    this.syncCryptos.get(spaceId)?.destroy();
-    this.spaceKeys.get(spaceId)?.fill(0);
+    // 1g. Build new SyncCrypto for re-encryption WITHOUT replacing in-memory state yet.
+    // updateLocalEpochState() will zero old key material and swap atomically.
+    // If we stored newKey in this.spaceKeys now, updateLocalEpochState would zero it
+    // (same reference) before constructing the replacement SyncCrypto.
     const newCrypto = new SyncCrypto(newKey);
-    this.syncCryptos.set(spaceId, newCrypto);
-    this.spaceKeys.set(spaceId, newKey);
-    this.spaceEpochs.set(spaceId, newEpoch);
 
     // 1h. Append signed revocation entries for each revoked UCAN.
     for (const ucan of ucansToRevoke) {
@@ -855,7 +853,7 @@ export class SpaceManager {
       await this.sendRevocationNotice(spaceId, newEpoch, memberContact);
     }
 
-    // 1k. Persist updated key and epoch.
+    // 1k. Persist updated key and epoch (zeros old key material, swaps crypto state).
     await this.updateLocalEpochState(spaceId, spaceRecord, newKey, newEpoch);
   }
 

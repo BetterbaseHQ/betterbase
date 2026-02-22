@@ -1,8 +1,5 @@
 /** Decode a single claim from a JWT payload without verification. */
-export function decodeJwtClaim(
-  token: string,
-  claim: string,
-): string | undefined {
+export function decodeJwtClaim(token: string, claim: string): string | undefined {
   try {
     const payload = token.split(".")[1];
     if (!payload) return undefined;

@@ -10,19 +10,14 @@ const SYNC_REL = "https://less.so/ns/sync";
  * @returns Parsed user resolution with sync endpoint.
  * @throws Error if the user cannot be resolved or the response is invalid.
  */
-export async function resolveUser(
-  handle: string,
-  webfingerUrl: string,
-): Promise<UserResolution> {
+export async function resolveUser(handle: string, webfingerUrl: string): Promise<UserResolution> {
   const url = `${webfingerUrl}?resource=acct:${encodeURIComponent(handle)}`;
 
   const response = await fetch(url, {
     signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
   });
   if (!response.ok) {
-    throw new Error(
-      `WebFinger lookup failed for ${handle}: HTTP ${response.status}`,
-    );
+    throw new Error(`WebFinger lookup failed for ${handle}: HTTP ${response.status}`);
   }
 
   const data: unknown = await response.json();
@@ -30,9 +25,7 @@ export async function resolveUser(
 
   const syncLink = data.links.find((link) => link.rel === SYNC_REL);
   if (!syncLink) {
-    throw new Error(
-      `WebFinger response for ${handle} has no sync endpoint link`,
-    );
+    throw new Error(`WebFinger response for ${handle} has no sync endpoint link`);
   }
 
   return {
@@ -42,9 +35,7 @@ export async function resolveUser(
 }
 
 /** Validate that an unknown value is a valid WebFingerResponse. */
-function validateWebFingerResponse(
-  data: unknown,
-): asserts data is WebFingerResponse {
+function validateWebFingerResponse(data: unknown): asserts data is WebFingerResponse {
   if (typeof data !== "object" || data === null) {
     throw new Error("Invalid WebFinger response: expected object");
   }

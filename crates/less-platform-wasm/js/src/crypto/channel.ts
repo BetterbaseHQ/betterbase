@@ -17,10 +17,7 @@ import { ensureWasm } from "../wasm-init.js";
  * @param spaceId - Space ID for domain separation
  * @returns Channel key (32 bytes)
  */
-export function deriveChannelKey(
-  epochKey: Uint8Array,
-  spaceId: string,
-): Uint8Array {
+export function deriveChannelKey(epochKey: Uint8Array, spaceId: string): Uint8Array {
   return ensureWasm().deriveChannelKey(epochKey, spaceId);
 }
 

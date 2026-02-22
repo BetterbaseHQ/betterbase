@@ -32,6 +32,7 @@ import { PresenceManager } from "./presence.js";
 import { EventManager } from "./event-manager.js";
 import { encodeDIDKeyFromJwk } from "../crypto/index.js";
 import { deriveChannelKey, buildPresenceAAD, buildEventAAD } from "../crypto/internals.js";
+import { webcryptoDeriveChannelKey } from "../crypto/webcrypto.js";
 import type { EditChainIdentity } from "./transport.js";
 import { encode as cborEncode, decode as cborDecode } from "cborg";
 import { channelEncrypt, channelDecrypt } from "./channel-crypto.js";
@@ -72,12 +73,18 @@ export interface SyncEngineConfig {
   accountsBaseUrl: string;
   /** Current epoch number for forward secrecy. */
   epoch?: number;
-  /** Current epoch key for forward secrecy. */
-  epochKey?: Uint8Array;
+  /** Current epoch key for forward secrecy (CryptoKey for personal space, Uint8Array for shared). */
+  epochKey?: Uint8Array | CryptoKey;
+  /** HKDF derive key for CryptoKey path (non-extractable, for epoch derivation). */
+  epochDeriveKey?: CryptoKey;
   /** Timestamp (ms) when the current epoch was established. */
   epochAdvancedAt?: number;
   /** Callback when epoch advances during re-encryption. */
-  onEpochAdvanced?: (epoch: number, key: Uint8Array) => void | Promise<void>;
+  onEpochAdvanced?: (
+    epoch: number,
+    key: Uint8Array | CryptoKey,
+    deriveKey?: CryptoKey,
+  ) => void | Promise<void>;
   /** Collection names that have edit chain tracking enabled. */
   editChainCollections?: Set<string>;
   /** Pre-created FileStore instance. If omitted, one is created internally. */
@@ -126,7 +133,11 @@ export class SyncEngine {
   onAuthError?: () => void;
   onConflict?: SyncManagerOptions["onConflict"];
   onRemoteDelete?: (event: RemoteDeleteEvent) => void;
-  onEpochAdvanced?: (epoch: number, key: Uint8Array) => void | Promise<void>;
+  onEpochAdvanced?: (
+    epoch: number,
+    key: Uint8Array | CryptoKey,
+    deriveKey?: CryptoKey,
+  ) => void | Promise<void>;
   fileFields?: Record<string, string[]>;
 
   private constructor() {
@@ -210,6 +221,7 @@ export class SyncEngine {
       accountsBaseUrl,
       epoch,
       epochKey,
+      epochDeriveKey,
       epochAdvancedAt,
       editChainCollections,
       maxCacheBytes,
@@ -261,18 +273,30 @@ export class SyncEngine {
       personalEpochConfig = {
         epoch,
         epochKey,
+        epochDeriveKey,
         epochAdvancedAt,
-        onEpochAdvanced: (newEpoch, newKey) => engine.onEpochAdvanced?.(newEpoch, newKey),
+        onEpochAdvanced: (newEpoch, newKey, newDeriveKey) =>
+          engine.onEpochAdvanced?.(newEpoch, newKey, newDeriveKey),
       };
     }
 
     // Channel key resolver for presence/events.
-    // Captures epochKey from config — safe because the React binding
-    // disposes and recreates the entire engine when epoch changes.
-    const getChannelKey = (spaceId: string): Uint8Array | null => {
+    // Derives fresh each call — avoids caching raw key material in memory.
+    // CryptoKey path: Web Crypto HKDF derivation (fast).
+    // Raw bytes path: WASM HKDF derivation (fast, synchronous).
+    const getChannelKey = async (spaceId: string): Promise<Uint8Array | null> => {
       if (spaceId === personalSpaceId) {
         if (!epochKey) return null;
-        return deriveChannelKey(epochKey, spaceId);
+        if (epochDeriveKey) {
+          return webcryptoDeriveChannelKey(epochDeriveKey, spaceId);
+        } else if (epochKey instanceof Uint8Array) {
+          return deriveChannelKey(epochKey, spaceId);
+        }
+        // CryptoKey without deriveKey — should not happen in normal operation
+        console.warn(
+          "[less-sync] CryptoKey epochKey set but no epochDeriveKey for channel key derivation",
+        );
+        return null;
       }
       const spaceKey = spaceManager.getSpaceKey(spaceId);
       if (!spaceKey) return null;
@@ -360,12 +384,12 @@ export class SyncEngine {
     pm = new PresenceManager({
       ws,
       encrypt: async (spaceId, data) => {
-        const ck = getChannelKey(spaceId);
+        const ck = await getChannelKey(spaceId);
         if (!ck) return null;
         return channelEncrypt(ck, data, buildPresenceAAD(spaceId));
       },
       decrypt: async (spaceId, data) => {
-        const ck = getChannelKey(spaceId);
+        const ck = await getChannelKey(spaceId);
         if (!ck) return null;
         return channelDecrypt(ck, data, buildPresenceAAD(spaceId));
       },
@@ -377,12 +401,12 @@ export class SyncEngine {
     em = new EventManager({
       ws,
       encrypt: async (spaceId, data) => {
-        const ck = getChannelKey(spaceId);
+        const ck = await getChannelKey(spaceId);
         if (!ck) return null;
         return channelEncrypt(ck, data, buildEventAAD(spaceId));
       },
       decrypt: async (spaceId, data) => {
-        const ck = getChannelKey(spaceId);
+        const ck = await getChannelKey(spaceId);
         if (!ck) return null;
         return channelDecrypt(ck, data, buildEventAAD(spaceId));
       },
@@ -499,6 +523,7 @@ export class SyncEngine {
         .connect({
           filesClient,
           epochKey,
+          epochDeriveKey,
           epoch,
           spaceId: personalSpaceId,
           ensureSynced: async () => {

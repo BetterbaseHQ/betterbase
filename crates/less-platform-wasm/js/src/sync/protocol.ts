@@ -77,12 +77,7 @@ export type {
 } from "./ws-frames.js";
 
 // Binary encoding utilities
-export {
-  bytesToBase64,
-  base64ToBytes,
-  bytesToBase64Url,
-  base64UrlToBytes,
-} from "./encoding.js";
+export { bytesToBase64, base64ToBytes, bytesToBase64Url, base64UrlToBytes } from "./encoding.js";
 
 // URL helpers
 export { buildWsUrl } from "./url.js";

@@ -19,8 +19,8 @@ pub use edit_chain::{
     value_diff, verify_edit_chain, verify_edit_entry, EditDiff, EditEntry,
 };
 pub use epoch::{derive_epoch_key_from_root, derive_next_epoch_key};
-pub use hkdf::hkdf_derive;
 pub use error::CryptoError;
+pub use hkdf::hkdf_derive;
 pub use signing::{
     export_private_key_jwk, export_public_key_jwk, generate_p256_keypair, import_private_key_jwk,
     import_public_key_jwk, sign, verify,

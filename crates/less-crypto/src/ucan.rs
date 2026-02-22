@@ -175,8 +175,7 @@ fn varint_decode(bytes: &[u8]) -> Result<(u32, usize), CryptoError> {
 /// Generate a random nonce (16 bytes, base64url).
 fn generate_nonce() -> Result<String, CryptoError> {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes)
-        .map_err(|e| CryptoError::RngFailed(e.to_string()))?;
+    getrandom::getrandom(&mut bytes).map_err(|e| CryptoError::RngFailed(e.to_string()))?;
     Ok(base64url_encode(&bytes))
 }
 
@@ -224,6 +223,7 @@ pub fn issue_root_ucan(
 /// Delegate a UCAN by issuing a new token with a proof chain.
 ///
 /// `now_seconds` is the current time as seconds since UNIX epoch.
+#[allow(clippy::too_many_arguments)]
 pub fn delegate_ucan(
     private_key: &SigningKey,
     issuer_did: &str,

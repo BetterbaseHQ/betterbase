@@ -66,16 +66,26 @@ export interface SyncCryptoInterface {
 
 /**
  * Configuration for epoch-based forward secrecy.
+ *
+ * When `epochKey` is a CryptoKey (non-extractable AES-KW), the transport uses
+ * Web Crypto for DEK wrap/unwrap and epoch derivation (personal space path).
+ * When it's a Uint8Array, the transport uses WASM (shared space path).
  */
 export interface EpochConfig {
   /** Current epoch number. */
   epoch: number;
-  /** Current epoch key material (raw 32 bytes). */
-  epochKey: Uint8Array;
+  /** Current epoch key material — raw bytes (shared spaces) or CryptoKey (personal space). */
+  epochKey: Uint8Array | CryptoKey;
+  /** HKDF derive key for CryptoKey path (non-extractable, for epoch derivation). */
+  epochDeriveKey?: CryptoKey;
   /** Interval in ms before triggering re-encryption (default: 30 days). */
   epochAdvanceIntervalMs?: number;
   /** Timestamp (ms since epoch) when the current epoch was created/advanced. */
   epochAdvancedAt?: number;
   /** Callback when epoch advances. Persist the new key and epoch. */
-  onEpochAdvanced?: (epoch: number, key: Uint8Array) => void | Promise<void>;
+  onEpochAdvanced?: (
+    epoch: number,
+    key: Uint8Array | CryptoKey,
+    deriveKey?: CryptoKey,
+  ) => void | Promise<void>;
 }

@@ -5,8 +5,8 @@
  * reactive refresh on getToken(), cross-tab sync via StorageEvent,
  * and concurrency coalescing for refresh requests.
  *
- * Keys are stored as raw bytes (Uint8Array) or JWK objects in IndexedDB via KeyStore.
- * All crypto operations happen inside the WASM sandbox.
+ * Keys are stored as non-extractable CryptoKey objects in IndexedDB via KeyStore.
+ * Crypto operations use WASM for algorithms and Web Crypto for key protection.
  */
 
 import type { AuthResult, AuthSessionConfig, TokenResponse } from "./types.js";
@@ -91,7 +91,7 @@ export class AuthSession {
 
   /**
    * Create a new session from a fresh OAuth callback result.
-   * Imports keys to KeyStore as raw bytes / JWK objects.
+   * Imports keys to KeyStore as non-extractable CryptoKeys (or uses pre-imported keys).
    * Persists to localStorage, schedules proactive refresh, and listens for cross-tab changes.
    */
   static async create(config: AuthSessionConfig, authResult: AuthResult): Promise<AuthSession> {
@@ -102,23 +102,29 @@ export class AuthSession {
     const keyStore = KeyStore.getInstance();
     await keyStore.initialize();
 
-    // Import encryption key to KeyStore if present.
-    // Derive separate purpose-specific keys from the OPAQUE export key:
-    // - encKey: AES-GCM for direct encryption
-    // - epochKey: AES-KW for DEK wrapping in epoch-based forward secrecy
+    // Import encryption key to KeyStore if not already done by handleCallback.
+    // When keysImported is set, handleCallback already derived purpose-specific keys,
+    // imported them to KeyStore, and zeroed the raw bytes.
     let hasEncryptionKey = false;
     let hasEpochKey = false;
-    if (authResult.encryptionKey) {
+    if (authResult.keysImported) {
+      // Keys already imported by handleCallback — raw bytes already zeroed
+      hasEncryptionKey = true;
+      hasEpochKey = true;
+    } else if (authResult.encryptionKey) {
+      // Legacy path: derive and import from raw bytes
       const encKey = hkdfDerive(authResult.encryptionKey, ENCRYPT_INFO);
       const epochKey = hkdfDerive(authResult.encryptionKey, EPOCH_ROOT_INFO);
-      await keyStore.importEncryptionKey(encKey);
-      hasEncryptionKey = true;
-      await keyStore.importEpochKey(epochKey);
-      hasEpochKey = true;
-      // Zero intermediates
-      encKey.fill(0);
-      epochKey.fill(0);
-      authResult.encryptionKey.fill(0);
+      try {
+        await keyStore.importEncryptionKey(encKey);
+        hasEncryptionKey = true;
+        await keyStore.importEpochKey(epochKey);
+        hasEpochKey = true;
+      } finally {
+        encKey.fill(0);
+        epochKey.fill(0);
+        authResult.encryptionKey.fill(0);
+      }
     }
 
     // Import app keypair to KeyStore if present
@@ -261,12 +267,12 @@ export class AuthSession {
   }
 
   /**
-   * Get the encryption key as raw bytes.
+   * Get the encryption key as a non-extractable CryptoKey.
    * Returns null if no key is stored.
    */
-  async getEncryptionKey(): Promise<Uint8Array | null> {
+  async getEncryptionKey(): Promise<CryptoKey | null> {
     if (!this.hasEncryptionKeyFlag) return null;
-    return this.keyStore.getRawKey("encryption-key");
+    return this.keyStore.getCryptoKey("encryption-key");
   }
 
   /**
@@ -278,12 +284,21 @@ export class AuthSession {
   }
 
   /**
-   * Get the current epoch key as raw bytes.
+   * Get the current epoch KW key as a non-extractable CryptoKey.
    * Returns null if no epoch key is stored.
    */
-  async getEpochKey(): Promise<Uint8Array | null> {
+  async getEpochKey(): Promise<CryptoKey | null> {
     if (!this.hasEpochKeyFlag) return null;
-    return this.keyStore.getRawKey("epoch-key");
+    return this.keyStore.getCryptoKey("epoch-key");
+  }
+
+  /**
+   * Get the current epoch derive key as a non-extractable HKDF CryptoKey.
+   * Returns null if no epoch key is stored.
+   */
+  async getEpochDeriveKey(): Promise<CryptoKey | null> {
+    if (!this.hasEpochKeyFlag) return null;
+    return this.keyStore.getCryptoKey("epoch-derive-key");
   }
 
   /**
@@ -299,10 +314,26 @@ export class AuthSession {
    * Imports the new epoch key to KeyStore and persists state to localStorage.
    *
    * @param epoch - New epoch number
-   * @param epochKey - Raw epoch key bytes (will be zeroed after import)
+   * @param epochKey - Raw epoch key bytes (will be zeroed after import) or CryptoKey (already imported)
+   * @param epochDeriveKey - HKDF derive key (required when epochKey is CryptoKey, for forward derivation)
    */
-  async updateEpoch(epoch: number, epochKey: Uint8Array): Promise<void> {
-    await this.keyStore.importEpochKey(epochKey);
+  async updateEpoch(
+    epoch: number,
+    epochKey: Uint8Array | CryptoKey,
+    epochDeriveKey?: CryptoKey,
+  ): Promise<void> {
+    if (epochKey instanceof CryptoKey) {
+      // CryptoKey path — store both KW key and derive key atomically.
+      const entries: { id: import("./key-store.js").KeyId; value: CryptoKey }[] = [
+        { id: "epoch-key", value: epochKey },
+      ];
+      if (epochDeriveKey) {
+        entries.push({ id: "epoch-derive-key", value: epochDeriveKey });
+      }
+      await this.keyStore.storeKeys(entries);
+    } else {
+      await this.keyStore.importEpochKey(epochKey);
+    }
     this.epochValue = epoch;
     this.hasEpochKeyFlag = true;
     this.epochAdvancedAtValue = Date.now();

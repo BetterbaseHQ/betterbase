@@ -113,16 +113,10 @@ export class WSClient {
     // Register notification handlers
     this.rpc.onNotification("sync", (p) => config.onSync?.(p as WSSyncData));
     this.rpc.onNotification("invitation", () => config.onInvitation?.());
-    this.rpc.onNotification("revoked", (p) =>
-      config.onRevoked?.(p as WSRevokedData),
-    );
-    this.rpc.onNotification("membership", (p) =>
-      config.onMembership?.(p as WSMembershipData),
-    );
+    this.rpc.onNotification("revoked", (p) => config.onRevoked?.(p as WSRevokedData));
+    this.rpc.onNotification("membership", (p) => config.onMembership?.(p as WSMembershipData));
     this.rpc.onNotification("file", (p) => config.onFile?.(p as WSFileData));
-    this.rpc.onNotification("presence", (p) =>
-      config.onPresence?.(p as WSPresenceData),
-    );
+    this.rpc.onNotification("presence", (p) => config.onPresence?.(p as WSPresenceData));
     this.rpc.onNotification("presence.leave", (p) =>
       config.onPresenceLeave?.(p as WSPresenceLeaveData),
     );
@@ -157,11 +151,7 @@ export class WSClient {
   }
 
   /** Push changes to a space. */
-  async push(
-    space: string,
-    changes: WSPushChange[],
-    ucan?: string,
-  ): Promise<WSPushResult> {
+  async push(space: string, changes: WSPushChange[], ucan?: string): Promise<WSPushResult> {
     return this.rpc.call<WSPushResult>("push", {
       space,
       ...(ucan ? { ucan } : {}),
@@ -173,64 +163,57 @@ export class WSClient {
   async pull(spaces: WSPullSpace[]): Promise<PullResult> {
     const result: PullResult = { spaces: new Map() };
 
-    await this.rpc.callChunked(
-      "pull",
-      { spaces },
-      (name: string, data: unknown) => {
-        switch (name) {
-          case "pull.begin": {
-            const d = data as WSPullBeginData;
-            const spaceResult: PullSpaceResult = {
-              space: d.space,
-              prev: d.prev,
-              cursor: d.cursor,
-              keyGeneration: d.key_generation,
-              rewrapEpoch: d.rewrap_epoch,
-              records: [],
-              files: [],
-              membership: [],
-            };
-            result.spaces.set(d.space, spaceResult);
-            break;
-          }
-          case "pull.record": {
-            const d = data as WSPullRecordData;
-            const target = result.spaces.get(d.space);
-            if (target) target.records.push(d);
-            break;
-          }
-          case "pull.membership": {
-            const d = data as WSMembershipData;
-            const target = result.spaces.get(d.space);
-            if (target) target.membership.push(d);
-            break;
-          }
-          case "pull.file": {
-            const d = data as WSPullFileData;
-            const target = result.spaces.get(d.space);
-            if (target) target.files.push(d);
-            break;
-          }
-          case "pull.commit": {
-            const d = data as WSPullCommitData;
-            const target = result.spaces.get(d.space);
-            if (target) {
-              const received =
-                target.records.length +
-                target.membership.length +
-                target.files.length;
-              if (d.count !== received) {
-                throw new Error(
-                  `pull record count mismatch for space ${d.space}: ` +
-                    `server=${d.count}, received=${received}`,
-                );
-              }
-            }
-            break;
-          }
+    await this.rpc.callChunked("pull", { spaces }, (name: string, data: unknown) => {
+      switch (name) {
+        case "pull.begin": {
+          const d = data as WSPullBeginData;
+          const spaceResult: PullSpaceResult = {
+            space: d.space,
+            prev: d.prev,
+            cursor: d.cursor,
+            keyGeneration: d.key_generation,
+            rewrapEpoch: d.rewrap_epoch,
+            records: [],
+            files: [],
+            membership: [],
+          };
+          result.spaces.set(d.space, spaceResult);
+          break;
         }
-      },
-    );
+        case "pull.record": {
+          const d = data as WSPullRecordData;
+          const target = result.spaces.get(d.space);
+          if (target) target.records.push(d);
+          break;
+        }
+        case "pull.membership": {
+          const d = data as WSMembershipData;
+          const target = result.spaces.get(d.space);
+          if (target) target.membership.push(d);
+          break;
+        }
+        case "pull.file": {
+          const d = data as WSPullFileData;
+          const target = result.spaces.get(d.space);
+          if (target) target.files.push(d);
+          break;
+        }
+        case "pull.commit": {
+          const d = data as WSPullCommitData;
+          const target = result.spaces.get(d.space);
+          if (target) {
+            const received = target.records.length + target.membership.length + target.files.length;
+            if (d.count !== received) {
+              throw new Error(
+                `pull record count mismatch for space ${d.space}: ` +
+                  `server=${d.count}, received=${received}`,
+              );
+            }
+          }
+          break;
+        }
+      }
+    });
 
     return result;
   }
@@ -242,25 +225,16 @@ export class WSClient {
 
   // --- Invitation RPC ---
 
-  async createInvitation(
-    params: WSInvitationCreateParams,
-  ): Promise<WSInvitationResult> {
+  async createInvitation(params: WSInvitationCreateParams): Promise<WSInvitationResult> {
     return this.rpc.call<WSInvitationResult>("invitation.create", params);
   }
 
-  async listInvitations(
-    params?: WSInvitationListParams,
-  ): Promise<WSInvitationResult[]> {
-    const result = await this.rpc.call<WSInvitationListResult>(
-      "invitation.list",
-      params ?? {},
-    );
+  async listInvitations(params?: WSInvitationListParams): Promise<WSInvitationResult[]> {
+    const result = await this.rpc.call<WSInvitationListResult>("invitation.list", params ?? {});
     return result.invitations;
   }
 
-  async getInvitation(
-    params: WSInvitationGetParams,
-  ): Promise<WSInvitationResult> {
+  async getInvitation(params: WSInvitationGetParams): Promise<WSInvitationResult> {
     return this.rpc.call<WSInvitationResult>("invitation.get", params);
   }
 
@@ -276,15 +250,11 @@ export class WSClient {
 
   // --- Membership RPC ---
 
-  async appendMember(
-    params: WSMembershipAppendParams,
-  ): Promise<WSMembershipAppendResult> {
+  async appendMember(params: WSMembershipAppendParams): Promise<WSMembershipAppendResult> {
     return this.rpc.call<WSMembershipAppendResult>("membership.append", params);
   }
 
-  async listMembers(
-    params: WSMembershipListParams,
-  ): Promise<WSMembershipListResult> {
+  async listMembers(params: WSMembershipListParams): Promise<WSMembershipListResult> {
     return this.rpc.call<WSMembershipListResult>("membership.list", params);
   }
 
@@ -297,10 +267,7 @@ export class WSClient {
   async epochBegin(
     params: WSEpochBeginParams,
   ): Promise<WSEpochBeginResult | WSEpochConflictResult> {
-    return this.rpc.call<WSEpochBeginResult | WSEpochConflictResult>(
-      "epoch.begin",
-      params,
-    );
+    return this.rpc.call<WSEpochBeginResult | WSEpochConflictResult>("epoch.begin", params);
   }
 
   async epochComplete(params: WSEpochCompleteParams): Promise<void> {
@@ -312,15 +279,11 @@ export class WSClient {
   async getDEKs(params: WSDEKsGetParams): Promise<WSDEKRecord[]> {
     const records: WSDEKRecord[] = [];
 
-    await this.rpc.callChunked(
-      "deks.get",
-      params,
-      (name: string, data: unknown) => {
-        if (name === "deks.record") {
-          records.push(data as WSDEKRecord);
-        }
-      },
-    );
+    await this.rpc.callChunked("deks.get", params, (name: string, data: unknown) => {
+      if (name === "deks.record") {
+        records.push(data as WSDEKRecord);
+      }
+    });
 
     return records;
   }
@@ -332,22 +295,16 @@ export class WSClient {
   async getFileDEKs(params: WSFileDEKsGetParams): Promise<WSFileDEKRecord[]> {
     const records: WSFileDEKRecord[] = [];
 
-    await this.rpc.callChunked(
-      "deks.getFiles",
-      params,
-      (name: string, data: unknown) => {
-        if (name === "deks.files.record") {
-          records.push(data as WSFileDEKRecord);
-        }
-      },
-    );
+    await this.rpc.callChunked("deks.getFiles", params, (name: string, data: unknown) => {
+      if (name === "deks.files.record") {
+        records.push(data as WSFileDEKRecord);
+      }
+    });
 
     return records;
   }
 
-  async rewrapFileDEKs(
-    params: WSFileDEKsRewrapParams,
-  ): Promise<WSFileDEKsRewrapResult> {
+  async rewrapFileDEKs(params: WSFileDEKsRewrapParams): Promise<WSFileDEKsRewrapResult> {
     return this.rpc.call<WSFileDEKsRewrapResult>("deks.rewrapFiles", params);
   }
 

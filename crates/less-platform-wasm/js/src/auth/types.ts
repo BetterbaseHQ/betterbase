@@ -40,6 +40,8 @@ export interface AuthResult {
   mailboxId?: string;
   /** Handle (user@domain) from the token response (not in the JWT — avoids leaking to resource servers) */
   handle?: string;
+  /** True if keys were already imported to KeyStore during handleCallback (raw bytes zeroed). */
+  keysImported?: boolean;
 }
 
 /**
@@ -120,6 +122,6 @@ export const STORAGE_KEYS = {
   codeVerifier: "oauth_code_verifier",
   state: "oauth_state",
   keysJwkThumbprint: "oauth_keys_jwk_thumbprint",
-  /** Ephemeral private key JWK stored in sessionStorage for OAuth flow */
-  ephemeralPrivateKey: "oauth_ephemeral_private_key",
+  // Note: ephemeral ECDH key is stored as a non-extractable CryptoKey in IndexedDB
+  // via KeyStore.storeEphemeralOAuthKey(), not in sessionStorage.
 } as const;

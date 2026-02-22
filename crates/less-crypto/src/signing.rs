@@ -96,7 +96,11 @@ pub fn export_private_key_jwk(key: &SigningKey) -> Value {
     let point = verifying_key.to_encoded_point(false);
     let x = crate::base64url::base64url_encode(point.x().unwrap().as_slice());
     let y = crate::base64url::base64url_encode(point.y().unwrap().as_slice());
-    let d = crate::base64url::base64url_encode(&key.to_bytes());
+    // to_bytes() returns a zeroize-on-drop FieldBytes, but we need to
+    // explicitly zeroize the intermediate Vec used for base64url encoding.
+    let mut scalar_bytes = key.to_bytes().to_vec();
+    let d = crate::base64url::base64url_encode(&scalar_bytes);
+    zeroize::Zeroize::zeroize(&mut scalar_bytes);
 
     serde_json::json!({
         "kty": "EC",

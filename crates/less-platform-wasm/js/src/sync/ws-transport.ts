@@ -22,21 +22,13 @@ import type {
   SyncController,
 } from "@less-platform/db";
 import type { RemoteRecord } from "@less-platform/db";
-import type {
-  Change,
-  PushResult,
-  SyncEventData,
-  EpochConfig,
-} from "./types.js";
+import type { Change, PushResult, SyncEventData, EpochConfig } from "./types.js";
 import { LessSyncTransport, type EditChainIdentity } from "./transport.js";
 import type { WSClient } from "./ws-client.js";
-import type {
-  WSSyncData,
-  WSSubscribeSpace,
-  WSPullSpace,
-  WSPushChange,
-} from "./ws-frames.js";
+import type { WSSyncData, WSSubscribeSpace, WSPullSpace, WSPushChange } from "./ws-frames.js";
 import type { SpaceManager } from "./space-manager.js";
+import { deriveForward } from "./reencrypt.js";
+import { webcryptoDeriveEpochKey } from "../crypto/webcrypto.js";
 
 /** Persistent storage for per-space-per-collection cursors. */
 export interface CursorStore {
@@ -69,10 +61,7 @@ export interface WSTransportConfig {
   /** Subscribe with `presence: true` on all spaces (enables presence notifications). */
   presence?: boolean;
   /** Called with initial peers for each space when subscribing with presence. */
-  onInitialPeers?: (
-    spaceId: string,
-    peers: Array<{ peer: string; data: Uint8Array }>,
-  ) => void;
+  onInitialPeers?: (spaceId: string, peers: Array<{ peer: string; data: Uint8Array }>) => void;
   /** Identity for signing edit chain entries. */
   identity?: EditChainIdentity;
   /** Collections that have edit chain tracking enabled. */
@@ -162,14 +151,9 @@ export class WSTransport implements SyncTransport {
     // Handle per-space errors (e.g., revoked access)
     if (result.errors?.length) {
       for (const err of result.errors) {
-        console.error(
-          `[less-sync] Subscribe error for space ${err.space}: ${err.error}`,
-        );
+        console.error(`[less-sync] Subscribe error for space ${err.space}: ${err.error}`);
         this.config.spaceManager.handleRevocation(err.space).catch((e) => {
-          console.error(
-            `[less-sync] Failed to handle revocation for ${err.space}:`,
-            e,
-          );
+          console.error(`[less-sync] Failed to handle revocation for ${err.space}:`, e);
         });
       }
     }
@@ -224,16 +208,12 @@ export class WSTransport implements SyncTransport {
    * Push dirty records to the server.
    * Groups records by spaceId and pushes each group via WSClient.
    */
-  async push(
-    collection: string,
-    records: OutboundRecord[],
-  ): Promise<PushAck[]> {
+  async push(collection: string, records: OutboundRecord[]): Promise<PushAck[]> {
     if (records.length === 0) return [];
 
     const groups = new Map<string, OutboundRecord[]>();
     for (const record of records) {
-      const spaceId =
-        (record.meta?.spaceId as string) ?? this.config.personalSpaceId;
+      const spaceId = (record.meta?.spaceId as string) ?? this.config.personalSpaceId;
       let group = groups.get(spaceId);
       if (!group) {
         group = [];
@@ -267,10 +247,7 @@ export class WSTransport implements SyncTransport {
     const spaces: WSPullSpace[] = [];
 
     // Personal space
-    const personalCursor = await this.loadCursor(
-      collection,
-      this.config.personalSpaceId,
-    );
+    const personalCursor = await this.loadCursor(collection, this.config.personalSpaceId);
     spaces.push({ id: this.config.personalSpaceId, since: personalCursor });
 
     // Active shared spaces
@@ -286,18 +263,40 @@ export class WSTransport implements SyncTransport {
 
     // Process each space's results
     for (const [spaceId, spaceResult] of pullResult.spaces) {
-      // Detect epoch advancement for personal space
+      // Detect epoch advancement for personal space — derive forward to the
+      // server's keyGeneration before notifying the callback so it persists
+      // the correct (advanced) key, not the stale current key.
       if (
         spaceId === this.config.personalSpaceId &&
         spaceResult.keyGeneration !== undefined &&
         this.config.personalEpochConfig &&
         spaceResult.keyGeneration > this.config.personalEpochConfig.epoch
       ) {
+        const currentEpoch = this.config.personalEpochConfig.epoch;
+        const targetEpoch = spaceResult.keyGeneration;
         const epochKey = this.config.personalEpochConfig.epochKey;
-        this.config.personalEpochConfig.onEpochAdvanced?.(
-          spaceResult.keyGeneration,
-          epochKey,
-        );
+        const epochDeriveKey = this.config.personalEpochConfig.epochDeriveKey;
+
+        const distance = targetEpoch - currentEpoch;
+        if (distance > 1000) {
+          console.error(
+            `[less-sync] Epoch gap too large for personal space: ${distance} (max: 1000). Ignoring advancement.`,
+          );
+        } else if (epochKey instanceof CryptoKey && epochDeriveKey) {
+          // CryptoKey path: derive forward via Web Crypto HKDF chain
+          let kwKey = epochKey;
+          let dk = epochDeriveKey;
+          for (let e = currentEpoch + 1; e <= targetEpoch; e++) {
+            const derived = await webcryptoDeriveEpochKey(dk, spaceId, e);
+            kwKey = derived.kwKey;
+            dk = derived.deriveKey;
+          }
+          await this.config.personalEpochConfig.onEpochAdvanced?.(targetEpoch, kwKey, dk);
+        } else if (epochKey instanceof Uint8Array) {
+          // Raw bytes path: derive forward via WASM HKDF chain
+          const advancedKey = deriveForward(epochKey, spaceId, currentEpoch, targetEpoch);
+          await this.config.personalEpochConfig.onEpochAdvanced?.(targetEpoch, advancedKey);
+        }
       }
 
       const transport = this.getTransportForSpace(spaceId);
@@ -334,21 +333,14 @@ export class WSTransport implements SyncTransport {
 
       const localEpoch = this.config.spaceManager.getSpaceEpoch(spaceId) ?? 0;
       if (spaceResult.keyGeneration <= localEpoch) continue;
-
       try {
-        if (
-          spaceResult.rewrapEpoch !== undefined &&
-          this.config.spaceManager.isAdmin(spaceId)
-        ) {
+        if (spaceResult.rewrapEpoch !== undefined && this.config.spaceManager.isAdmin(spaceId)) {
           await this.config.spaceManager.completeInterruptedRewrap(
             spaceId,
             spaceResult.rewrapEpoch,
           );
         } else if (spaceResult.rewrapEpoch === undefined) {
-          await this.config.spaceManager.adoptServerEpoch(
-            spaceId,
-            spaceResult.keyGeneration,
-          );
+          await this.config.spaceManager.adoptServerEpoch(spaceId, spaceResult.keyGeneration);
         }
       } catch (err) {
         console.error(`Epoch update failed for space ${spaceId}:`, err);
@@ -360,11 +352,7 @@ export class WSTransport implements SyncTransport {
       if (spaceId === this.config.personalSpaceId) continue;
 
       this.config.spaceManager
-        .updateSpaceMetadata(
-          spaceId,
-          spaceResult.keyGeneration,
-          spaceResult.rewrapEpoch,
-        )
+        .updateSpaceMetadata(spaceId, spaceResult.keyGeneration, spaceResult.rewrapEpoch)
         .catch((err) => {
           console.error(`Failed to update space metadata for ${spaceId}:`, err);
         });
@@ -427,10 +415,7 @@ export class WSTransport implements SyncTransport {
   /**
    * Handle a sync event by routing to the correct space's transport.
    */
-  async applySyncEvent(
-    eventData: SyncEventData,
-    controller: SyncController,
-  ): Promise<SyncResult> {
+  async applySyncEvent(eventData: SyncEventData, controller: SyncController): Promise<SyncResult> {
     const transport = this.getTransportForSpace(eventData.space);
     if (!transport) {
       return { pushed: 0, pulled: 0, merged: 0, errors: [] };
@@ -484,8 +469,12 @@ export class WSTransport implements SyncTransport {
       return this.personalTransport;
     }
 
-    let transport = this.spaceTransports.get(spaceId);
+    const transport = this.spaceTransports.get(spaceId);
     if (transport) {
+      // Keep the existing transport (its base key is a defensive copy that survives
+      // zeroing by updateLocalEpochState). Just bump the encryption epoch so new
+      // records are wrapped at the latest epoch. The transport can still derive
+      // forward from its base to decrypt records from any epoch >= base.
       const smEpoch = this.config.spaceManager.getSpaceEpoch(spaceId) ?? 0;
       if (smEpoch > transport.epoch) {
         transport.updateEncryptionEpoch(smEpoch);
@@ -496,16 +485,19 @@ export class WSTransport implements SyncTransport {
     // Verify the space is activated in SpaceManager (has crypto state)
     if (!this.config.spaceManager.hasSpace(spaceId)) return undefined;
 
+    return this.createSharedTransport(spaceId);
+  }
+
+  /** Create (or replace) a shared-space transport with the current key from SpaceManager. */
+  private createSharedTransport(spaceId: string): LessSyncTransport {
     const spaceKey = this.config.spaceManager.getSpaceKey(spaceId);
     const spaceEpoch = this.config.spaceManager.getSpaceEpoch(spaceId) ?? 0;
 
-    transport = new LessSyncTransport({
+    const transport = new LessSyncTransport({
       push: (changes) => this.wsPush(spaceId, changes),
       spaceId,
       paddingBuckets: this.config.paddingBuckets,
-      ...(spaceKey
-        ? { epochConfig: { epoch: spaceEpoch, epochKey: spaceKey } }
-        : {}),
+      ...(spaceKey ? { epochConfig: { epoch: spaceEpoch, epochKey: spaceKey } } : {}),
       identity: this.config.identity,
       editChainCollections: this.config.editChainCollections,
     });
@@ -521,10 +513,7 @@ export class WSTransport implements SyncTransport {
     return `${collection}:${spaceId}`;
   }
 
-  private async loadCursor(
-    collection: string,
-    spaceId: string,
-  ): Promise<number> {
+  private async loadCursor(collection: string, spaceId: string): Promise<number> {
     const key = this.cursorKey(collection, spaceId);
     const cached = this.cursors.get(key);
     if (cached !== undefined && cached > 0) return cached;

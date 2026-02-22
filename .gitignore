@@ -1,8 +1,7 @@
 /target
-Cargo.lock
-pkg/
-node_modules/
-dist/
 *.swp
-*.swo
 .DS_Store
+node_modules/
+crates/less-platform-wasm/pkg/
+crates/less-platform-wasm/js/dist/
+__screenshots__/

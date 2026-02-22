@@ -18,11 +18,7 @@ export type { SyncClientConfig } from "./client.js";
 
 // Files
 export { FilesClient, FileNotFoundError } from "./files.js";
-export type {
-  FileUploadResult,
-  FileDownloadResult,
-  FileMetadata,
-} from "./files.js";
+export type { FileUploadResult, FileDownloadResult, FileMetadata } from "./files.js";
 
 // File store (encrypted file cache)
 export { FileStore } from "./file-store.js";
@@ -35,10 +31,7 @@ export type {
 
 // Transport (per-space encryption layer)
 export { LessSyncTransport } from "./transport.js";
-export type {
-  LessSyncTransportConfig,
-  EditChainIdentity,
-} from "./transport.js";
+export type { LessSyncTransportConfig, EditChainIdentity } from "./transport.js";
 
 // Types
 export type {
@@ -84,11 +77,7 @@ export type {
 } from "./invitations.js";
 
 // Membership log
-export {
-  MembershipClient,
-  VersionConflictError,
-  SpaceNotFoundError,
-} from "./membership.js";
+export { MembershipClient, VersionConflictError, SpaceNotFoundError } from "./membership.js";
 export type {
   MembershipEntry,
   MembershipLogResponse,
@@ -105,20 +94,11 @@ export type { SpaceStatus, SpaceRole } from "./spaces-collection.js";
 
 // Spaces middleware
 export { createSpacesMiddleware } from "./spaces-middleware.js";
-export type {
-  SpaceFields,
-  SpaceWriteOptions,
-  SpaceQueryOptions,
-} from "./spaces-middleware.js";
+export type { SpaceFields, SpaceWriteOptions, SpaceQueryOptions } from "./spaces-middleware.js";
 
 // Space manager
 export { SpaceManager } from "./space-manager.js";
-export type {
-  SpaceManagerConfig,
-  SpaceRecord,
-  Member,
-  MemberStatus,
-} from "./space-manager.js";
+export type { SpaceManagerConfig, SpaceRecord, Member, MemberStatus } from "./space-manager.js";
 
 // Space operations
 export { moveToSpace, bulkMoveToSpace, spaceOf } from "./move-to-space.js";

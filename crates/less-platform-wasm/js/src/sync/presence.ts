@@ -119,11 +119,7 @@ export class PresenceManager {
   }
 
   /** Handle inbound "presence" notification (peer joined or updated). */
-  async handlePresence(
-    spaceId: string,
-    peer: string,
-    encryptedData: Uint8Array,
-  ): Promise<void> {
+  async handlePresence(spaceId: string, peer: string, encryptedData: Uint8Array): Promise<void> {
     const data = await this.decryptAndUnwrap(spaceId, encryptedData);
     if (data === undefined) return; // Decryption failed or stale replay — silently drop
 
@@ -222,10 +218,7 @@ export class PresenceManager {
         this.config.ws.setPresence(spaceId, encrypted);
       },
       (err) => {
-        console.error(
-          `[less-sync] Failed to encrypt presence for space ${spaceId}:`,
-          err,
-        );
+        console.error(`[less-sync] Failed to encrypt presence for space ${spaceId}:`, err);
       },
     );
   }
@@ -243,8 +236,7 @@ export class PresenceManager {
         d: unknown;
         t: number;
       };
-      if (!wrapper.t || Date.now() - wrapper.t > PRESENCE_MAX_AGE)
-        return undefined;
+      if (!wrapper.t || Date.now() - wrapper.t > PRESENCE_MAX_AGE) return undefined;
       return wrapper.d;
     } catch {
       return undefined; // Malformed payload

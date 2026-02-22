@@ -34,9 +34,7 @@ export interface UseAuthSessionResult {
  *
  * Returns `{ session, isAuthenticated, isLoading, error, logout }`.
  */
-export function useAuthSession(
-  client: OAuthClient | null,
-): UseAuthSessionResult {
+export function useAuthSession(client: OAuthClient | null): UseAuthSessionResult {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -90,10 +88,7 @@ export function useAuthSession(
         callbackPromiseRef.current = null;
 
         if (result) {
-          const session = await AuthSession.create(
-            { client, onExpired },
-            result,
-          );
+          const session = await AuthSession.create({ client, onExpired }, result);
           if (cancelled) return;
           setSession(session);
           return;
@@ -144,10 +139,10 @@ export function useAuthSession(
 export interface UseSessionTokenResult {
   /** Stable function reference that returns a token (or null). Never changes identity. */
   getToken: () => Promise<string | null>;
-  /** Encryption key from the session (raw AES-GCM key bytes), or null if not available. */
-  encryptionKey: Uint8Array | null;
-  /** Epoch key for DEK wrapping (raw AES-KW key bytes), or null if not available. */
-  epochKey: Uint8Array | null;
+  /** Encryption key from the session (non-extractable CryptoKey), or null if not available. */
+  encryptionKey: CryptoKey | null;
+  /** Epoch key for DEK wrapping (non-extractable CryptoKey), or null if not available. */
+  epochKey: CryptoKey | null;
   /** Precomputed personal space ID from the JWT, or null if not available. */
   personalSpaceId: string | null;
   /** App signing keypair (P-256 ECDSA JWK pair), or null if not available. */
@@ -163,22 +158,17 @@ export interface UseSessionTokenResult {
  *
  * Also exposes the session's `encryptionKey`, `personalSpaceId`, `keypair`, and `handle`.
  */
-export function useSessionToken(
-  session: AuthSession | null,
-): UseSessionTokenResult {
+export function useSessionToken(session: AuthSession | null): UseSessionTokenResult {
   const sessionRef = useRef(session);
   sessionRef.current = session;
 
-  const getToken = useCallback(
-    () => sessionRef.current?.getToken() ?? Promise.resolve(null),
-    [],
-  );
+  const getToken = useCallback(() => sessionRef.current?.getToken() ?? Promise.resolve(null), []);
 
   const personalSpaceId = session?.getPersonalSpaceId() ?? null;
   const handle = session?.getHandle() ?? null;
 
-  const [encryptionKey, setEncryptionKey] = useState<Uint8Array | null>(null);
-  const [epochKey, setEpochKey] = useState<Uint8Array | null>(null);
+  const [encryptionKey, setEncryptionKey] = useState<CryptoKey | null>(null);
+  const [epochKey, setEpochKey] = useState<CryptoKey | null>(null);
   const [keypair, setKeypair] = useState<{
     privateKeyJwk: JsonWebKey;
     publicKeyJwk: JsonWebKey;
@@ -238,10 +228,10 @@ export interface UseAuthResult {
   error: string | null;
   logout: () => void;
   getToken: () => Promise<string | null>;
-  /** Encryption key from the session (raw AES-GCM key bytes), or null if not available. */
-  encryptionKey: Uint8Array | null;
-  /** Epoch key for DEK wrapping (raw AES-KW key bytes), or null if not available. */
-  epochKey: Uint8Array | null;
+  /** Encryption key from the session (non-extractable CryptoKey), or null if not available. */
+  encryptionKey: CryptoKey | null;
+  /** Epoch key for DEK wrapping (non-extractable CryptoKey), or null if not available. */
+  epochKey: CryptoKey | null;
   personalSpaceId: string | null;
   keypair: { privateKeyJwk: JsonWebKey; publicKeyJwk: JsonWebKey } | null;
   handle: string | null;
@@ -254,16 +244,9 @@ export interface UseAuthResult {
  * full session lifecycle plus token/key accessors in a single call.
  */
 export function useAuth(client: OAuthClient | null): UseAuthResult {
-  const { session, isAuthenticated, isLoading, error, logout } =
-    useAuthSession(client);
-  const {
-    getToken,
-    encryptionKey,
-    epochKey,
-    personalSpaceId,
-    keypair,
-    handle,
-  } = useSessionToken(session);
+  const { session, isAuthenticated, isLoading, error, logout } = useAuthSession(client);
+  const { getToken, encryptionKey, epochKey, personalSpaceId, keypair, handle } =
+    useSessionToken(session);
 
   return {
     session,

@@ -4,11 +4,7 @@
 
 import type { OAuthConfig, AuthResult, TokenResponse } from "./types.js";
 import { STORAGE_KEYS } from "./types.js";
-import {
-  generateCodeVerifier,
-  generateCodeChallenge,
-  generateState,
-} from "./pkce.js";
+import { generateCodeVerifier, generateCodeChallenge, generateState } from "./pkce.js";
 import {
   generateEphemeralKeyPair,
   encodePublicJwk,
@@ -16,11 +12,13 @@ import {
   extractEncryptionKey,
   extractAppKeypair,
   deriveMailboxId,
+  hkdfDerive,
 } from "./crypto.js";
 import { CallbackError, CSRFError, OAuthTokenError } from "./errors.js";
 import { decodeJwtClaim } from "./jwt.js";
 import { fetchServerMetadata } from "../discovery/metadata.js";
 import type { ServerMetadata } from "../discovery/types.js";
+import { KeyStore } from "./key-store.js";
 
 export class OAuthClient {
   private config: OAuthConfig;
@@ -63,7 +61,7 @@ export class OAuthClient {
     let keysJwk: string | undefined;
 
     if (this.hasSyncScope()) {
-      const keyPair = generateEphemeralKeyPair();
+      const keyPair = await generateEphemeralKeyPair();
 
       // Extended PKCE: code_challenge = SHA256(code_verifier || thumbprint)
       codeChallenge = generateCodeChallenge(codeVerifier, keyPair.thumbprint);
@@ -71,17 +69,15 @@ export class OAuthClient {
       // Encode public key for URL parameter
       keysJwk = encodePublicJwk(keyPair.publicKeyJwk);
 
-      // Store ephemeral private key in sessionStorage as JWK
-      sessionStorage.setItem(
-        STORAGE_KEYS.ephemeralPrivateKey,
-        JSON.stringify(keyPair.privateKeyJwk),
-      );
+      // Store non-extractable CryptoKey in IndexedDB.
+      // Clean up any orphan from a prior aborted flow first.
+      const keyStore = KeyStore.getInstance();
+      await keyStore.initialize();
+      await keyStore.deleteEphemeralOAuthKey();
+      await keyStore.storeEphemeralOAuthKey(keyPair.privateKey);
 
       // Store thumbprint in sessionStorage
-      sessionStorage.setItem(
-        STORAGE_KEYS.keysJwkThumbprint,
-        keyPair.thumbprint,
-      );
+      sessionStorage.setItem(STORAGE_KEYS.keysJwkThumbprint, keyPair.thumbprint);
     } else {
       // Standard PKCE (no encryption key needed)
       codeChallenge = generateCodeChallenge(codeVerifier);
@@ -150,10 +146,7 @@ export class OAuthClient {
     // Extract JWT claims
     const issuer = decodeJwtClaim(tokenResponse.access_token, "iss");
     const userId = decodeJwtClaim(tokenResponse.access_token, "sub");
-    const personalSpaceId = decodeJwtClaim(
-      tokenResponse.access_token,
-      "personal_space_id",
-    );
+    const personalSpaceId = decodeJwtClaim(tokenResponse.access_token, "personal_space_id");
 
     const result: AuthResult = {
       accessToken: tokenResponse.access_token,
@@ -164,103 +157,96 @@ export class OAuthClient {
       handle: tokenResponse.handle,
     };
 
-    // Decrypt encryption key and app keypair if present
+    // Decrypt encryption key, import to KeyStore, and zero raw bytes eagerly.
+    // Raw key material must not survive across network calls (registerMailboxId,
+    // refreshToken) to minimize the XSS exfiltration window.
     if (tokenResponse.keys_jwe) {
-      const privateKeyStr = sessionStorage.getItem(
-        STORAGE_KEYS.ephemeralPrivateKey,
-      );
+      const keyStore = KeyStore.getInstance();
+      await keyStore.initialize();
+      const privateKey = await keyStore.getEphemeralOAuthKey();
 
-      if (privateKeyStr) {
+      if (privateKey) {
         try {
-          const privateKeyJwk = JSON.parse(privateKeyStr) as JsonWebKey;
+          const scopedKeys = await decryptKeysJwe(tokenResponse.keys_jwe, privateKey);
 
-          try {
-            const scopedKeys = decryptKeysJwe(
-              tokenResponse.keys_jwe,
-              privateKeyJwk,
-            );
-
-            // Extract symmetric encryption key
-            const extracted = extractEncryptionKey(scopedKeys);
-            if (extracted) {
-              result.encryptionKey = extracted.key;
-              result.keyId = extracted.keyId;
-            }
-
-            // Extract app keypair
+          // Extract and immediately import symmetric encryption key
+          const extracted = extractEncryptionKey(scopedKeys);
+          if (extracted) {
+            result.keyId = extracted.keyId;
+            // Derive purpose-specific keys, import to KeyStore, and zero immediately
+            const encKey = hkdfDerive(extracted.key, "less:encrypt:v1");
+            const epochKey = hkdfDerive(extracted.key, "less:epoch-root:v1");
             try {
-              const appKeypair = extractAppKeypair(scopedKeys);
-              if (appKeypair) {
-                result.appKeypair = appKeypair;
+              // Derive mailbox ID while raw key bytes are still available
+              if (issuer && userId) {
+                try {
+                  result.mailboxId = deriveMailboxId(extracted.key, issuer, userId);
+                } catch (err) {
+                  console.error("[less-auth] Failed to derive mailbox ID:", err);
+                }
               }
-            } catch (err) {
-              result.appKeypairError =
-                err instanceof Error ? err : new Error(String(err));
+              await keyStore.importEncryptionKey(encKey);
+              await keyStore.importEpochKey(epochKey);
+              result.keysImported = true;
+            } finally {
+              encKey.fill(0);
+              epochKey.fill(0);
+              extracted.key.fill(0);
+            }
+          }
+
+          // Extract app keypair
+          try {
+            const appKeypair = extractAppKeypair(scopedKeys);
+            if (appKeypair) {
+              result.appKeypair = appKeypair;
             }
           } catch (err) {
-            result.encryptionKeyError =
-              err instanceof Error ? err : new Error(String(err));
+            result.appKeypairError = err instanceof Error ? err : new Error(String(err));
           }
         } catch (err) {
-          result.encryptionKeyError =
-            err instanceof Error ? err : new Error(String(err));
-          console.error(
-            "[less-auth] Failed to parse ephemeral private key:",
-            err,
-          );
+          result.encryptionKeyError = err instanceof Error ? err : new Error(String(err));
         }
+
+        // Clean up ephemeral key
+        await keyStore.deleteEphemeralOAuthKey();
       } else {
-        const error = new Error(
-          "Missing ephemeral private key for JWE decryption",
-        );
+        const error = new Error("Missing ephemeral private key for JWE decryption");
         result.encryptionKeyError = error;
-        console.error(
-          "[less-auth] Failed to decrypt encryption key:",
-          error.message,
-        );
+        console.error("[less-auth] Failed to decrypt encryption key:", error.message);
       }
     }
 
     // Sync scope requires encryption key
-    if (this.hasSyncScope() && !result.encryptionKey) {
+    if (this.hasSyncScope() && !result.keysImported) {
       this.clearOAuthState();
       throw new CallbackError(
         "Sync requires encryption key but JWE decryption failed. Please log in again." +
-          (result.encryptionKeyError
-            ? ` Cause: ${result.encryptionKeyError.message}`
-            : ""),
+          (result.encryptionKeyError ? ` Cause: ${result.encryptionKeyError.message}` : ""),
         { cause: result.encryptionKeyError },
       );
     }
 
-    // Derive mailbox ID and register with server
-    if (result.encryptionKey && issuer && userId) {
+    // Register mailbox ID and refresh token (no raw key material needed)
+    if (result.mailboxId) {
       try {
-        const mailboxId = deriveMailboxId(result.encryptionKey, issuer, userId);
-        result.mailboxId = mailboxId;
-
-        await this.registerMailboxId(tokenResponse.access_token, mailboxId);
+        await this.registerMailboxId(tokenResponse.access_token, result.mailboxId);
 
         // Refresh token so JWT includes mailbox_id claim
         if (tokenResponse.refresh_token) {
           try {
-            const refreshed = await this.refreshToken(
-              tokenResponse.refresh_token,
-            );
+            const refreshed = await this.refreshToken(tokenResponse.refresh_token);
             result.accessToken = refreshed.access_token;
             if (refreshed.refresh_token) {
               result.refreshToken = refreshed.refresh_token;
             }
             result.expiresIn = refreshed.expires_in;
           } catch (err) {
-            console.error(
-              "[less-auth] Token refresh after mailbox registration failed:",
-              err,
-            );
+            console.error("[less-auth] Token refresh after mailbox registration failed:", err);
           }
         }
       } catch (err) {
-        console.error("[less-auth] Failed to derive/register mailbox ID:", err);
+        console.error("[less-auth] Failed to register mailbox ID:", err);
       }
     }
 
@@ -270,9 +256,7 @@ export class OAuthClient {
 
   private async exchangeCode(code: string): Promise<TokenResponse> {
     const codeVerifier = sessionStorage.getItem(STORAGE_KEYS.codeVerifier);
-    const keysJwkThumbprint = sessionStorage.getItem(
-      STORAGE_KEYS.keysJwkThumbprint,
-    );
+    const keysJwkThumbprint = sessionStorage.getItem(STORAGE_KEYS.keysJwkThumbprint);
 
     if (!codeVerifier) {
       throw new Error("Missing code verifier - please try again");
@@ -347,10 +331,7 @@ export class OAuthClient {
     return data as TokenResponse;
   }
 
-  private async registerMailboxId(
-    accessToken: string,
-    mailboxId: string,
-  ): Promise<void> {
+  private async registerMailboxId(accessToken: string, mailboxId: string): Promise<void> {
     const accountsServer = await this.accountsUrl();
     const response = await fetch(`${accountsServer}/oauth/mailbox`, {
       method: "POST",
@@ -370,6 +351,6 @@ export class OAuthClient {
     sessionStorage.removeItem(STORAGE_KEYS.codeVerifier);
     sessionStorage.removeItem(STORAGE_KEYS.state);
     sessionStorage.removeItem(STORAGE_KEYS.keysJwkThumbprint);
-    sessionStorage.removeItem(STORAGE_KEYS.ephemeralPrivateKey);
+    // Ephemeral ECDH key is in IndexedDB (cleaned up in handleCallback)
   }
 }

@@ -13,34 +13,13 @@ export interface WasmModule {
   SUPPORTED_VERSIONS(): number[];
   base64urlEncode(data: Uint8Array): string;
   base64urlDecode(encoded: string): Uint8Array;
-  encryptV4(
-    data: Uint8Array,
-    dek: Uint8Array,
-    spaceId?: string,
-    recordId?: string,
-  ): Uint8Array;
-  decryptV4(
-    blob: Uint8Array,
-    dek: Uint8Array,
-    spaceId?: string,
-    recordId?: string,
-  ): Uint8Array;
+  encryptV4(data: Uint8Array, dek: Uint8Array, spaceId?: string, recordId?: string): Uint8Array;
+  decryptV4(blob: Uint8Array, dek: Uint8Array, spaceId?: string, recordId?: string): Uint8Array;
   generateDEK(): Uint8Array;
   wrapDEK(dek: Uint8Array, kek: Uint8Array, epoch: number): Uint8Array;
-  unwrapDEK(
-    wrappedDek: Uint8Array,
-    kek: Uint8Array,
-  ): { dek: Uint8Array; epoch: number };
-  deriveNextEpochKey(
-    currentKey: Uint8Array,
-    spaceId: string,
-    nextEpoch: number,
-  ): Uint8Array;
-  deriveEpochKeyFromRoot(
-    rootKey: Uint8Array,
-    spaceId: string,
-    targetEpoch: number,
-  ): Uint8Array;
+  unwrapDEK(wrappedDek: Uint8Array, kek: Uint8Array): { dek: Uint8Array; epoch: number };
+  deriveNextEpochKey(currentKey: Uint8Array, spaceId: string, nextEpoch: number): Uint8Array;
+  deriveEpochKeyFromRoot(rootKey: Uint8Array, spaceId: string, targetEpoch: number): Uint8Array;
   deriveChannelKey(epochKey: Uint8Array, spaceId: string): Uint8Array;
   buildPresenceAad(spaceId: string): Uint8Array;
   buildEventAad(spaceId: string): Uint8Array;
@@ -49,11 +28,7 @@ export interface WasmModule {
     publicKeyJwk: JsonWebKey;
   };
   sign(privateKeyJwk: JsonWebKey, message: Uint8Array): Uint8Array;
-  verify(
-    publicKeyJwk: JsonWebKey,
-    message: Uint8Array,
-    signature: Uint8Array,
-  ): boolean;
+  verify(publicKeyJwk: JsonWebKey, message: Uint8Array, signature: Uint8Array): boolean;
   encodeDIDKeyFromJwk(publicKeyJwk: JsonWebKey): string;
   encodeDIDKey(privateKeyJwk: JsonWebKey): string;
   compressP256PublicKey(publicKeyJwk: JsonWebKey): Uint8Array;
@@ -89,35 +64,16 @@ export interface WasmModule {
     diffs: EditDiff[],
     prevEntry: EditEntry | null,
   ): EditEntry;
-  verifyEditEntry(
-    entry: EditEntry,
-    collection: string,
-    recordId: string,
-  ): boolean;
-  verifyEditChain(
-    entries: EditEntry[],
-    collection: string,
-    recordId: string,
-  ): boolean;
+  verifyEditEntry(entry: EditEntry, collection: string, recordId: string): boolean;
+  verifyEditChain(entries: EditEntry[], collection: string, recordId: string): boolean;
   serializeEditChain(entries: EditEntry[]): string;
   parseEditChain(serialized: string): EditEntry[];
-  reconstructState(
-    entries: EditEntry[],
-    upToIndex: number,
-  ): Record<string, unknown>;
+  reconstructState(entries: EditEntry[], upToIndex: number): Record<string, unknown>;
   canonicalJSON(value: unknown): string;
   hkdfDerive(ikm: Uint8Array, salt: string, info: string): Uint8Array;
   sha256(data: Uint8Array): Uint8Array;
-  encryptWithAad(
-    key: Uint8Array,
-    data: Uint8Array,
-    aad: Uint8Array,
-  ): Uint8Array;
-  decryptWithAad(
-    key: Uint8Array,
-    encrypted: Uint8Array,
-    aad: Uint8Array,
-  ): Uint8Array;
+  encryptWithAad(key: Uint8Array, data: Uint8Array, aad: Uint8Array): Uint8Array;
+  decryptWithAad(key: Uint8Array, encrypted: Uint8Array, aad: Uint8Array): Uint8Array;
 
   // --- auth ---
   generateCodeVerifier(): string;
@@ -126,14 +82,8 @@ export interface WasmModule {
   computeJwkThumbprint(kty: string, crv: string, x: string, y: string): string;
   encryptJwe(payload: Uint8Array, recipientPublicKeyJwk: JsonWebKey): string;
   decryptJwe(jwe: string, privateKeyJwk: JsonWebKey): Uint8Array;
-  deriveMailboxId(
-    encryptionKey: Uint8Array,
-    issuer: string,
-    userId: string,
-  ): string;
-  extractEncryptionKey(
-    scopedKeysJson: string,
-  ): { key: Uint8Array; keyId: string } | null;
+  deriveMailboxId(encryptionKey: Uint8Array, issuer: string, userId: string): string;
+  extractEncryptionKey(scopedKeysJson: string): { key: Uint8Array; keyId: string } | null;
   extractAppKeypair(scopedKeysJson: string): AppKeypairJwk | null;
 
   // --- discovery ---
@@ -168,12 +118,7 @@ export interface WasmModule {
     editChain?: string;
   };
   peekEpoch(wrappedDek: Uint8Array): number;
-  deriveForward(
-    key: Uint8Array,
-    spaceId: string,
-    fromEpoch: number,
-    toEpoch: number,
-  ): Uint8Array;
+  deriveForward(key: Uint8Array, spaceId: string, fromEpoch: number, toEpoch: number): Uint8Array;
   rewrapDEKs(
     wrappedDeksJson: string,
     currentKey: Uint8Array,
@@ -276,9 +221,7 @@ export async function initWasm(): Promise<WasmModule> {
  */
 export function ensureWasm(): WasmModule {
   if (!wasmModule) {
-    throw new Error(
-      "WASM module not initialized. Call `await initWasm()` first.",
-    );
+    throw new Error("WASM module not initialized. Call `await initWasm()` first.");
   }
   return wasmModule;
 }

@@ -68,14 +68,10 @@ export class SyncClient {
       if (ucan) {
         headers["X-UCAN"] = ucan;
       } else if (!token) {
-        throw new AuthenticationError(
-          "No valid authentication available — re-login required",
-        );
+        throw new AuthenticationError("No valid authentication available — re-login required");
       }
     } else if (!token) {
-      throw new AuthenticationError(
-        "No valid authentication available — re-login required",
-      );
+      throw new AuthenticationError("No valid authentication available — re-login required");
     }
 
     return headers;

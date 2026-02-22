@@ -1,21 +1,34 @@
 /**
  * KeyStore — secure storage for key material in IndexedDB.
  *
- * Stores raw key bytes (Uint8Array) and JWK objects. With WASM-based crypto,
- * we no longer use non-extractable CryptoKey objects — all crypto operations
- * happen inside the WASM sandbox instead.
+ * High-value keys are stored as non-extractable CryptoKey objects:
+ * - encryption-key: AES-GCM CryptoKey (non-extractable)
+ * - epoch-key: AES-KW CryptoKey (non-extractable)
+ * - epoch-derive-key: HKDF CryptoKey (non-extractable)
+ * - ephemeral-oauth-key: ECDH CryptoKey (non-extractable, transient)
  *
- * Keys stored:
- * - encryption-key: 32-byte AES-GCM key for sync encryption
- * - epoch-key: 32-byte key for DEK wrapping/unwrapping + derivation
- * - app-private-key: P-256 ECDSA private key JWK for signing
+ * Other keys remain as raw data:
+ * - app-private-key: P-256 ECDSA private key as JWK (extractable, needed for signing)
+ *
+ * Migration: getCryptoKey() transparently upgrades legacy raw bytes to CryptoKey.
  */
+
+import {
+  importEncryptionCryptoKey,
+  importEpochKwKey,
+  importEpochDeriveKey,
+} from "../crypto/webcrypto.js";
 
 const DB_NAME = "less-key-store";
 const DB_VERSION = 2;
 const STORE_NAME = "keys";
 
-export type KeyId = "encryption-key" | "epoch-key" | "app-private-key";
+export type KeyId =
+  | "encryption-key"
+  | "epoch-key"
+  | "epoch-derive-key"
+  | "app-private-key"
+  | "ephemeral-oauth-key";
 
 /**
  * Singleton class for managing key storage in IndexedDB.
@@ -25,11 +38,11 @@ export type KeyId = "encryption-key" | "epoch-key" | "app-private-key";
  * const keyStore = KeyStore.getInstance();
  * await keyStore.initialize();
  *
- * // Store raw key bytes
+ * // Store encryption key as non-extractable CryptoKey
  * await keyStore.importEncryptionKey(rawKeyBytes);
  *
- * // Retrieve for use in WASM crypto operations
- * const key = await keyStore.getRawKey("encryption-key");
+ * // Retrieve CryptoKey handle for Web Crypto operations
+ * const key = await keyStore.getCryptoKey("encryption-key");
  * ```
  */
 export class KeyStore {
@@ -74,11 +87,7 @@ export class KeyStore {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
 
       request.onerror = () => {
-        reject(
-          new Error(
-            `Failed to open KeyStore database: ${request.error?.message}`,
-          ),
-        );
+        reject(new Error(`Failed to open KeyStore database: ${request.error?.message}`));
       };
 
       request.onsuccess = () => {
@@ -107,7 +116,7 @@ export class KeyStore {
   /**
    * Store a value in IndexedDB.
    */
-  async storeValue(id: KeyId, value: Uint8Array | JsonWebKey): Promise<void> {
+  async storeValue(id: KeyId, value: Uint8Array | JsonWebKey | CryptoKey): Promise<void> {
     await this.ensureInitialized();
 
     return new Promise((resolve, reject) => {
@@ -116,13 +125,13 @@ export class KeyStore {
       store.put(value, id);
 
       transaction.oncomplete = () => resolve();
-      transaction.onerror = () =>
-        reject(new Error(`Transaction failed while storing key "${id}"`));
+      transaction.onerror = () => reject(new Error(`Transaction failed while storing key "${id}"`));
     });
   }
 
   /**
    * Retrieve a raw key (Uint8Array) from IndexedDB.
+   * Use only for keys stored as raw bytes (e.g., legacy data).
    */
   async getRawKey(id: KeyId): Promise<Uint8Array | null> {
     await this.ensureInitialized();
@@ -133,20 +142,82 @@ export class KeyStore {
       const request = store.get(id);
 
       request.onerror = () =>
-        reject(
-          new Error(`Failed to get key "${id}": ${request.error?.message}`),
-        );
+        reject(new Error(`Failed to get key "${id}": ${request.error?.message}`));
       request.onsuccess = () => {
         const result = request.result;
         if (result instanceof Uint8Array) {
           resolve(result);
-        } else if (result) {
-          // Handle ArrayBuffer (IndexedDB may return ArrayBuffer)
-          resolve(new Uint8Array(result as ArrayBuffer));
+        } else if (result instanceof ArrayBuffer) {
+          resolve(new Uint8Array(result));
         } else {
           resolve(null);
         }
       };
+    });
+  }
+
+  /**
+   * Retrieve a CryptoKey from IndexedDB.
+   *
+   * Handles migration: if the stored value is raw bytes (Uint8Array/ArrayBuffer),
+   * re-imports as a non-extractable CryptoKey and updates the stored value.
+   */
+  async getCryptoKey(id: KeyId): Promise<CryptoKey | null> {
+    await this.ensureInitialized();
+
+    const value = await this.getRawValue(id);
+    if (value === null) return null;
+
+    // Already a CryptoKey
+    if (value instanceof CryptoKey) return value;
+
+    // Migration: raw bytes → CryptoKey
+    // Copy to avoid zeroing IDB's internal buffer (which may be the same object)
+    const raw = new Uint8Array(
+      value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBuffer),
+    );
+    let cryptoKey: CryptoKey;
+    try {
+      cryptoKey = await this.importRawToCryptoKey(id, raw);
+    } finally {
+      raw.fill(0); // Zero raw bytes after import
+    }
+
+    // Update stored value to CryptoKey
+    await this.storeValue(id, cryptoKey);
+    return cryptoKey;
+  }
+
+  /**
+   * Import raw bytes as the appropriate CryptoKey type based on KeyId.
+   */
+  private async importRawToCryptoKey(id: KeyId, raw: Uint8Array): Promise<CryptoKey> {
+    switch (id) {
+      case "encryption-key":
+        return importEncryptionCryptoKey(raw);
+      case "epoch-key":
+        return importEpochKwKey(raw);
+      case "epoch-derive-key":
+        return importEpochDeriveKey(raw);
+      default:
+        throw new Error(`Cannot import "${id}" as CryptoKey`);
+    }
+  }
+
+  /**
+   * Get any stored value without type coercion.
+   */
+  private async getRawValue(id: KeyId): Promise<unknown> {
+    await this.ensureInitialized();
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(STORE_NAME, "readonly");
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.get(id);
+
+      request.onerror = () =>
+        reject(new Error(`Failed to get key "${id}": ${request.error?.message}`));
+      request.onsuccess = () => resolve(request.result ?? null);
     });
   }
 
@@ -162,9 +233,7 @@ export class KeyStore {
       const request = store.get(id);
 
       request.onerror = () =>
-        reject(
-          new Error(`Failed to get key "${id}": ${request.error?.message}`),
-        );
+        reject(new Error(`Failed to get key "${id}": ${request.error?.message}`));
       request.onsuccess = () => resolve(request.result ?? null);
     });
   }
@@ -181,8 +250,7 @@ export class KeyStore {
       store.delete(id);
 
       transaction.oncomplete = () => resolve();
-      transaction.onerror = () =>
-        reject(new Error(`Failed to delete key "${id}"`));
+      transaction.onerror = () => reject(new Error(`Failed to delete key "${id}"`));
     });
   }
 
@@ -203,40 +271,65 @@ export class KeyStore {
   }
 
   /**
-   * Import a raw 256-bit encryption key and store it.
-   * The input array is zeroed after storage.
+   * Import a raw 256-bit encryption key as a non-extractable AES-GCM CryptoKey.
+   * The input array is zeroed after import.
    */
   async importEncryptionKey(rawKey: Uint8Array): Promise<void> {
     if (rawKey.length !== 32) {
-      throw new Error(
-        `Invalid encryption key length: expected 32 bytes, got ${rawKey.length}`,
-      );
+      throw new Error(`Invalid encryption key length: expected 32 bytes, got ${rawKey.length}`);
     }
 
     try {
-      // Store a copy (input will be zeroed)
-      await this.storeValue("encryption-key", new Uint8Array(rawKey));
+      const cryptoKey = await importEncryptionCryptoKey(rawKey);
+      await this.storeValue("encryption-key", cryptoKey);
     } finally {
       rawKey.fill(0);
     }
   }
 
   /**
-   * Import a raw 256-bit epoch key and store it.
-   * The input array is zeroed after storage.
+   * Import a raw 256-bit epoch key as non-extractable CryptoKeys.
+   * Creates TWO CryptoKeys: AES-KW (for DEK wrap/unwrap) and HKDF (for derivation).
+   * Both are stored atomically in a single IndexedDB transaction.
+   * The input array is zeroed after import.
    */
   async importEpochKey(rawKey: Uint8Array): Promise<void> {
     if (rawKey.length !== 32) {
-      throw new Error(
-        `Invalid epoch key length: expected 32 bytes, got ${rawKey.length}`,
-      );
+      throw new Error(`Invalid epoch key length: expected 32 bytes, got ${rawKey.length}`);
     }
 
     try {
-      await this.storeValue("epoch-key", new Uint8Array(rawKey));
+      const [kwKey, deriveKey] = await Promise.all([
+        importEpochKwKey(rawKey),
+        importEpochDeriveKey(rawKey),
+      ]);
+      await this.storeKeys([
+        { id: "epoch-key", value: kwKey },
+        { id: "epoch-derive-key", value: deriveKey },
+      ]);
     } finally {
       rawKey.fill(0);
     }
+  }
+
+  /**
+   * Store multiple keys atomically in a single IndexedDB transaction.
+   * If any write fails, all writes are rolled back.
+   */
+  async storeKeys(entries: { id: KeyId; value: CryptoKey }[]): Promise<void> {
+    await this.ensureInitialized();
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(STORE_NAME, "readwrite");
+      const store = transaction.objectStore(STORE_NAME);
+
+      for (const entry of entries) {
+        store.put(entry.value, entry.id);
+      }
+
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(new Error("Transaction failed while storing keys"));
+    });
   }
 
   /**
@@ -244,28 +337,49 @@ export class KeyStore {
    */
   async importAppPrivateKey(jwk: JsonWebKey): Promise<void> {
     if (jwk.kty !== "EC" || jwk.crv !== "P-256") {
-      throw new Error(
-        `Invalid app key: expected P-256 EC key, got kty=${jwk.kty}, crv=${jwk.crv}`,
-      );
+      throw new Error(`Invalid app key: expected P-256 EC key, got kty=${jwk.kty}, crv=${jwk.crv}`);
     }
 
     await this.storeValue("app-private-key", jwk);
   }
 
   /**
+   * Store a non-extractable ECDH CryptoKey for OAuth JWE decryption.
+   */
+  async storeEphemeralOAuthKey(key: CryptoKey): Promise<void> {
+    await this.storeValue("ephemeral-oauth-key", key);
+  }
+
+  /**
+   * Retrieve the ephemeral OAuth ECDH CryptoKey.
+   */
+  async getEphemeralOAuthKey(): Promise<CryptoKey | null> {
+    const value = await this.getRawValue("ephemeral-oauth-key");
+    if (value instanceof CryptoKey) return value;
+    return null;
+  }
+
+  /**
+   * Delete the ephemeral OAuth key after use.
+   */
+  async deleteEphemeralOAuthKey(): Promise<void> {
+    await this.deleteKey("ephemeral-oauth-key");
+  }
+
+  /**
    * Check if the encryption key exists in storage.
    */
   async hasEncryptionKey(): Promise<boolean> {
-    const key = await this.getRawKey("encryption-key");
-    return key !== null;
+    const value = await this.getRawValue("encryption-key");
+    return value !== null;
   }
 
   /**
    * Check if the epoch key exists in storage.
    */
   async hasEpochKey(): Promise<boolean> {
-    const key = await this.getRawKey("epoch-key");
-    return key !== null;
+    const value = await this.getRawValue("epoch-key");
+    return value !== null;
   }
 
   /**

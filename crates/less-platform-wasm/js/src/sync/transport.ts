@@ -20,12 +20,7 @@ import type {
 } from "@less-platform/db";
 import type { RemoteRecord } from "@less-platform/db";
 import type { SyncController } from "@less-platform/db";
-import type {
-  Change,
-  PushResult,
-  SyncEventData,
-  EpochConfig,
-} from "./types.js";
+import type { Change, PushResult, SyncEventData, EpochConfig } from "./types.js";
 import { cborEncode, cborDecode } from "./cbor.js";
 import {
   deriveNextEpochKey,
@@ -37,13 +32,12 @@ import {
   parseEditChain,
   type EditEntry,
 } from "../crypto/index.js";
+import { generateDEK, wrapDEK, unwrapDEK, encryptV4, decryptV4 } from "../crypto/internals.js";
 import {
-  generateDEK,
-  wrapDEK,
-  unwrapDEK,
-  encryptV4,
-  decryptV4,
-} from "../crypto/internals.js";
+  webcryptoWrapDEK,
+  webcryptoUnwrapDEK,
+  webcryptoDeriveEpochKey,
+} from "../crypto/webcrypto.js";
 import { Model } from "json-joy/lib/json-crdt/index.js";
 
 /**
@@ -74,9 +68,7 @@ interface ConversionResult {
  * Default padding bucket sizes in bytes.
  * Data is padded to the smallest bucket that fits.
  */
-export const DEFAULT_PADDING_BUCKETS = [
-  256, 1024, 4096, 16384, 65536, 262144, 1048576,
-] as const;
+export const DEFAULT_PADDING_BUCKETS = [256, 1024, 4096, 16384, 65536, 262144, 1048576] as const;
 
 /** Length prefix size for padding (4 bytes, u32 LE). */
 const PADDING_LENGTH_PREFIX = 4;
@@ -127,14 +119,20 @@ export class LessSyncTransport implements SyncTransport {
   private editChainCollections?: Set<string>;
   private warnedIdentityMissing = false;
 
-  /** Base KEK (Key Encryption Key) — the key at baseEpoch. Never mutated. */
-  private baseKek?: Uint8Array;
+  /** Base KEK — raw bytes (shared spaces) or CryptoKey (personal space). */
+  private baseKek?: Uint8Array | CryptoKey;
+  /** Base HKDF derive key — only set for CryptoKey path (personal space). */
+  private baseDeriveKey?: CryptoKey;
   /** Base epoch — the epoch that baseKek corresponds to. Never mutated. */
   private baseEpoch: number;
   /** Encryption epoch — updated after rotation. New records are wrapped at this epoch. */
   private currentEpoch: number;
-  /** Derived key cache: epoch → derived KEK. Avoids re-deriving for each record. */
+  /** Derived key cache: epoch → derived KEK (raw bytes, shared spaces). */
   private derivedKeyCache = new Map<number, Uint8Array>();
+  /** Derived KW key cache: epoch → CryptoKey (personal space). */
+  private derivedKwKeyCache = new Map<number, CryptoKey>();
+  /** Derived HKDF key cache: epoch → CryptoKey (personal space). */
+  private derivedDeriveKeyCache = new Map<number, CryptoKey>();
 
   /** Pre-pulled changes set by WSTransport before pull() is called. */
   private prepulledChanges: Change[] | null = null;
@@ -147,7 +145,13 @@ export class LessSyncTransport implements SyncTransport {
     this.epochConfig = config.epochConfig;
     this.identity = config.identity;
     this.editChainCollections = config.editChainCollections;
-    this.baseKek = config.epochConfig?.epochKey;
+    // Defensive copy of raw epoch key — SpaceManager.updateLocalEpochState() zeros
+    // the original Uint8Array in-place when the epoch advances, but the transport
+    // must keep deriving forward from the original base key to decrypt records
+    // from members who haven't adopted the new epoch yet.
+    const rawKey = config.epochConfig?.epochKey;
+    this.baseKek = rawKey instanceof Uint8Array ? new Uint8Array(rawKey) : rawKey;
+    this.baseDeriveKey = config.epochConfig?.epochDeriveKey;
     this.baseEpoch = config.epochConfig?.epoch ?? 0;
     this.currentEpoch = config.epochConfig?.epoch ?? 0;
 
@@ -184,9 +188,7 @@ export class LessSyncTransport implements SyncTransport {
    */
   shouldAdvanceEpoch(): boolean {
     if (!this.epochConfig) return false;
-    const interval =
-      this.epochConfig.epochAdvanceIntervalMs ??
-      DEFAULT_EPOCH_ADVANCE_INTERVAL_MS;
+    const interval = this.epochConfig.epochAdvanceIntervalMs ?? DEFAULT_EPOCH_ADVANCE_INTERVAL_MS;
     const advancedAt = this.epochConfig.epochAdvancedAt ?? 0;
     return Date.now() - advancedAt >= interval;
   }
@@ -203,13 +205,10 @@ export class LessSyncTransport implements SyncTransport {
   /**
    * Push dirty records to the server.
    */
-  async push(
-    collection: string,
-    records: OutboundRecord[],
-  ): Promise<PushAck[]> {
+  async push(collection: string, records: OutboundRecord[]): Promise<PushAck[]> {
     if (records.length === 0) return [];
 
-    const { changes, failedIds } = this.buildPushChanges(collection, records);
+    const { changes, failedIds } = await this.buildPushChanges(collection, records);
 
     if (changes.length === 0) return [];
 
@@ -223,26 +222,26 @@ export class LessSyncTransport implements SyncTransport {
     return this.buildPushAcks(records, failedIds, pushResult.sequence);
   }
 
-  private buildPushChanges(
+  private async buildPushChanges(
     collection: string,
     records: OutboundRecord[],
-  ): { changes: Change[]; failedIds: Set<string> } {
+  ): Promise<{ changes: Change[]; failedIds: Set<string> }> {
     const changes: Change[] = [];
     const failedIds = new Set<string>();
 
     for (const record of records) {
-      const change = this.buildChangeForPush(collection, record, failedIds);
+      const change = await this.buildChangeForPush(collection, record, failedIds);
       if (change) changes.push(change);
     }
 
     return { changes, failedIds };
   }
 
-  private buildChangeForPush(
+  private async buildChangeForPush(
     collection: string,
     record: OutboundRecord,
     failedIds: Set<string>,
-  ): Change | null {
+  ): Promise<Change | null> {
     if (record.deleted) {
       return {
         id: record.id,
@@ -275,7 +274,7 @@ export class LessSyncTransport implements SyncTransport {
         this.appendEditChainEntry(envelope, record, collection);
       }
 
-      const { blob, wrappedDEK } = this.encryptEnvelope(envelope, record.id);
+      const { blob, wrappedDEK } = await this.encryptEnvelope(envelope, record.id);
       return {
         id: record.id,
         blob,
@@ -310,15 +309,12 @@ export class LessSyncTransport implements SyncTransport {
       try {
         chain = parseEditChain(existingChainStr);
       } catch {
-        console.warn(
-          `[less-sync] Edit chain parse failed for ${record.id}; starting fresh chain`,
-        );
+        console.warn(`[less-sync] Edit chain parse failed for ${record.id}; starting fresh chain`);
       }
     }
 
     // Read last server view baseline
-    const lastServerView =
-      (meta?._lastServerView as Record<string, unknown>) ?? {};
+    const lastServerView = (meta?._lastServerView as Record<string, unknown>) ?? {};
 
     // Get current view from CRDT
     let currentView: Record<string, unknown>;
@@ -385,7 +381,7 @@ export class LessSyncTransport implements SyncTransport {
       return { records: [], latestSequence: 0 };
     }
 
-    const result = this.convertChangesToRemoteRecords(changes, collection);
+    const result = await this.convertChangesToRemoteRecords(changes, collection);
 
     const pullFailures: PullFailure[] | undefined =
       result.failures.length > 0
@@ -399,9 +395,7 @@ export class LessSyncTransport implements SyncTransport {
 
     if (result.failures.length > 0) {
       const ids = result.failures.map((f) => f.id).join(", ");
-      console.error(
-        `Failed to decrypt ${result.failures.length} record(s) during pull: ${ids}`,
-      );
+      console.error(`Failed to decrypt ${result.failures.length} record(s) during pull: ${ids}`);
     }
 
     return {
@@ -415,14 +409,11 @@ export class LessSyncTransport implements SyncTransport {
    * Convert update data to RemoteRecord[] for a specific collection.
    * Used for direct sync event application (fast-path).
    */
-  convertSyncEventToRemoteRecords(
+  async convertSyncEventToRemoteRecords(
     eventData: SyncEventData,
     collection: string,
-  ): RemoteRecord[] {
-    const result = this.convertChangesToRemoteRecords(
-      eventData.records,
-      collection,
-    );
+  ): Promise<RemoteRecord[]> {
+    const result = await this.convertChangesToRemoteRecords(eventData.records, collection);
 
     if (result.failures.length > 0) {
       const ids = result.failures.map((f) => f.id).join(", ");
@@ -441,10 +432,7 @@ export class LessSyncTransport implements SyncTransport {
    * @param eventData - The sync notification data
    * @param controller - SyncController to apply records and query sync state
    */
-  async applySyncEvent(
-    eventData: SyncEventData,
-    controller: SyncController,
-  ): Promise<SyncResult> {
+  async applySyncEvent(eventData: SyncEventData, controller: SyncController): Promise<SyncResult> {
     const collections = controller.getCollections();
     const first = collections[0];
     if (!first) return { pushed: 0, pulled: 0, merged: 0, errors: [] };
@@ -453,10 +441,7 @@ export class LessSyncTransport implements SyncTransport {
     try {
       currentSeq = await controller.getLastSequence(first.name);
     } catch (e) {
-      console.error(
-        "Sync event: getLastSequence failed, falling back to pull",
-        e,
-      );
+      console.error("Sync event: getLastSequence failed, falling back to pull", e);
       return this.pullAllCollections(collections, controller);
     }
 
@@ -471,7 +456,7 @@ export class LessSyncTransport implements SyncTransport {
     }
 
     // Decrypt all records. Any failure → fall back to pull.
-    const decrypted = this.decryptAllChanges(eventData.records);
+    const decrypted = await this.decryptAllChanges(eventData.records);
     if (decrypted === null) {
       return this.pullAllCollections(collections, controller);
     }
@@ -479,11 +464,7 @@ export class LessSyncTransport implements SyncTransport {
     const result: SyncResult = { pushed: 0, pulled: 0, merged: 0, errors: [] };
     for (const def of collections) {
       const records = this.filterRecordsForCollection(decrypted, def.name);
-      const applyResult = await controller.applyRemoteRecords(
-        def,
-        records,
-        eventData.seq,
-      );
+      const applyResult = await controller.applyRemoteRecords(def, records, eventData.seq);
       this.aggregateResult(result, applyResult);
     }
     return result;
@@ -493,14 +474,11 @@ export class LessSyncTransport implements SyncTransport {
    * Decrypt and apply sync event records without gap/stale detection.
    * The caller (WSTransport) handles gap/stale checks using per-space cursors.
    */
-  async decryptAndApply(
-    eventData: SyncEventData,
-    controller: SyncController,
-  ): Promise<SyncResult> {
+  async decryptAndApply(eventData: SyncEventData, controller: SyncController): Promise<SyncResult> {
     const collections = controller.getCollections();
 
     // Decrypt all records. Any failure → fall back to pull.
-    const decrypted = this.decryptAllChanges(eventData.records);
+    const decrypted = await this.decryptAllChanges(eventData.records);
     if (decrypted === null) {
       return this.pullAllCollections(collections, controller);
     }
@@ -508,11 +486,7 @@ export class LessSyncTransport implements SyncTransport {
     const result: SyncResult = { pushed: 0, pulled: 0, merged: 0, errors: [] };
     for (const def of collections) {
       const records = this.filterRecordsForCollection(decrypted, def.name);
-      const applyResult = await controller.applyRemoteRecords(
-        def,
-        records,
-        eventData.seq,
-      );
+      const applyResult = await controller.applyRemoteRecords(def, records, eventData.seq);
       this.aggregateResult(result, applyResult);
     }
     return result;
@@ -536,11 +510,11 @@ export class LessSyncTransport implements SyncTransport {
   /**
    * Decrypt and unwrap all changes. Returns null on any failure.
    */
-  private decryptAllChanges(changes: Change[]): Array<{
+  private async decryptAllChanges(changes: Change[]): Promise<Array<{
     id: string;
     envelope: BlobEnvelope | null;
     sequence: number;
-  }> | null {
+  }> | null> {
     const results: Array<{
       id: string;
       envelope: BlobEnvelope | null;
@@ -558,11 +532,7 @@ export class LessSyncTransport implements SyncTransport {
       }
 
       try {
-        const envelope = this.decryptEnvelope(
-          change.blob!,
-          change.id,
-          change.dek,
-        );
+        const envelope = await this.decryptEnvelope(change.blob!, change.id, change.dek);
         results.push({ id: change.id, envelope, sequence: change.sequence });
       } catch (e) {
         console.error(
@@ -603,12 +573,7 @@ export class LessSyncTransport implements SyncTransport {
           crdt: item.envelope.crdt,
           deleted: false,
           sequence: item.sequence,
-          meta: this.buildPullMeta(
-            item.envelope,
-            item.id,
-            collection,
-            baseMeta,
-          ),
+          meta: this.buildPullMeta(item.envelope, item.id, collection, baseMeta),
         });
       }
     }
@@ -647,31 +612,24 @@ export class LessSyncTransport implements SyncTransport {
       const chain = parseEditChain(envelope.h);
       editChainValid = verifyEditChain(chain, collection, recordId);
       if (!editChainValid) {
-        console.warn(
-          `[less-sync] Edit chain integrity check failed for record ${recordId}`,
-        );
+        console.warn(`[less-sync] Edit chain integrity check failed for record ${recordId}`);
       }
     } catch (err) {
-      console.warn(
-        `[less-sync] Edit chain parse/verify error for record ${recordId}:`,
-        err,
-      );
+      console.warn(`[less-sync] Edit chain parse/verify error for record ${recordId}:`, err);
     }
 
     return {
       ...baseMeta,
       _editChain: envelope.h,
       _editChainValid: editChainValid,
-      ...(lastServerView !== undefined
-        ? { _lastServerView: lastServerView }
-        : {}),
+      ...(lastServerView !== undefined ? { _lastServerView: lastServerView } : {}),
     };
   }
 
-  private convertChangesToRemoteRecords(
+  private async convertChangesToRemoteRecords(
     changes: Change[],
     collection: string,
-  ): ConversionResult {
+  ): Promise<ConversionResult> {
     const baseMeta = this.spaceId ? { spaceId: this.spaceId } : undefined;
     const records: RemoteRecord[] = [];
     const failures: Array<{ id: string; sequence: number; error: Error }> = [];
@@ -691,7 +649,7 @@ export class LessSyncTransport implements SyncTransport {
 
       let envelope: BlobEnvelope;
       try {
-        envelope = this.decryptEnvelope(change.blob!, change.id, change.dek);
+        envelope = await this.decryptEnvelope(change.blob!, change.id, change.dek);
       } catch (err) {
         const message =
           err instanceof Error
@@ -725,22 +683,34 @@ export class LessSyncTransport implements SyncTransport {
   /**
    * Encrypt an envelope using a fresh per-record DEK.
    * Returns the encrypted blob and the wrapped DEK.
+   *
+   * CryptoKey path (personal space): uses Web Crypto for AES-KW wrap.
+   * Uint8Array path (shared spaces): uses WASM for AES-KW wrap.
    */
-  private encryptEnvelope(
+  private async encryptEnvelope(
     envelope: BlobEnvelope,
     recordId: string,
-  ): { blob: Uint8Array; wrappedDEK?: Uint8Array } {
+  ): Promise<{ blob: Uint8Array; wrappedDEK?: Uint8Array }> {
     const bytes = cborEncode(envelope);
     const padded = this.pad(bytes);
 
     if (this.baseKek) {
       // spaceId is guaranteed by constructor when kek is set
       const context = { spaceId: this.spaceId!, recordId };
-      const encryptKey = this.getKEKForEpoch(this.currentEpoch);
       const dek = generateDEK();
       try {
         const blob = encryptV4(padded, dek, context);
-        const wrappedDEK = wrapDEK(dek, encryptKey, this.currentEpoch);
+
+        let wrappedDEK: Uint8Array;
+        if (this.baseKek instanceof CryptoKey) {
+          // Web Crypto path — personal space
+          const kek = await this.getKEKForEpochCryptoKey(this.currentEpoch);
+          wrappedDEK = await webcryptoWrapDEK(dek, kek, this.currentEpoch);
+        } else {
+          // WASM path — shared spaces
+          const kek = this.getKEKForEpoch(this.currentEpoch);
+          wrappedDEK = wrapDEK(dek, kek, this.currentEpoch);
+        }
         return { blob, wrappedDEK };
       } finally {
         dek.fill(0); // Zero plaintext DEK after use
@@ -759,14 +729,15 @@ export class LessSyncTransport implements SyncTransport {
 
   /**
    * Derive the KEK for a given epoch via forward derivation from the base key.
+   * Used for shared spaces (Uint8Array keys via WASM).
    *
    * Uses a non-destructive cache: the base key is never mutated, so keys for
    * ANY epoch >= baseEpoch can be derived. This is essential for shared spaces
    * where records from different members may arrive at different epochs.
    */
   private getKEKForEpoch(dekEpoch: number): Uint8Array {
-    if (!this.baseKek || !this.spaceId) {
-      throw new Error(`No KEK available for epoch ${dekEpoch}`);
+    if (!this.baseKek || !this.spaceId || this.baseKek instanceof CryptoKey) {
+      throw new Error(`No raw KEK available for epoch ${dekEpoch}`);
     }
 
     // Fast path: exact match with base epoch
@@ -785,14 +756,7 @@ export class LessSyncTransport implements SyncTransport {
     const cached = this.derivedKeyCache.get(dekEpoch);
     if (cached) return cached;
 
-    const distance = dekEpoch - this.baseEpoch;
-    if (distance > LessSyncTransport.MAX_EPOCH_ADVANCE) {
-      throw new Error(
-        `Epoch ${dekEpoch} is too far ahead of base epoch ${this.baseEpoch} ` +
-          `(distance: ${distance}, max: ${LessSyncTransport.MAX_EPOCH_ADVANCE}). ` +
-          `This may indicate a corrupted or malicious wrapped DEK.`,
-      );
-    }
+    this.validateEpochDistance(dekEpoch);
 
     // Derive forward from raw bytes
     let key: Uint8Array = this.baseKek;
@@ -810,23 +774,82 @@ export class LessSyncTransport implements SyncTransport {
   }
 
   /**
+   * Derive the AES-KW CryptoKey for a given epoch via forward HKDF derivation.
+   * Used for personal space (CryptoKey path via Web Crypto).
+   */
+  private async getKEKForEpochCryptoKey(dekEpoch: number): Promise<CryptoKey> {
+    if (!(this.baseKek instanceof CryptoKey) || !this.baseDeriveKey || !this.spaceId) {
+      throw new Error(`No CryptoKey KEK available for epoch ${dekEpoch}`);
+    }
+
+    // Fast path: exact match with base epoch
+    if (dekEpoch === this.baseEpoch) {
+      return this.baseKek;
+    }
+
+    if (dekEpoch < this.baseEpoch) {
+      throw new Error(
+        `Cannot derive KEK for epoch ${dekEpoch} (base: ${this.baseEpoch}). Forward secrecy prevents backward derivation.`,
+      );
+    }
+
+    // Check cache
+    const cached = this.derivedKwKeyCache.get(dekEpoch);
+    if (cached) return cached;
+
+    this.validateEpochDistance(dekEpoch);
+
+    // Derive forward via Web Crypto HKDF
+    let currentDeriveKey: CryptoKey = this.baseDeriveKey;
+    let currentKwKey: CryptoKey = this.baseKek;
+
+    for (let e = this.baseEpoch + 1; e <= dekEpoch; e++) {
+      const existingKw = this.derivedKwKeyCache.get(e);
+      const existingDerive = this.derivedDeriveKeyCache.get(e);
+      if (existingKw && existingDerive) {
+        currentKwKey = existingKw;
+        currentDeriveKey = existingDerive;
+      } else {
+        const derived = await webcryptoDeriveEpochKey(currentDeriveKey, this.spaceId, e);
+        currentKwKey = derived.kwKey;
+        currentDeriveKey = derived.deriveKey;
+        this.derivedKwKeyCache.set(e, currentKwKey);
+        this.derivedDeriveKeyCache.set(e, currentDeriveKey);
+      }
+    }
+
+    return currentKwKey;
+  }
+
+  private validateEpochDistance(dekEpoch: number): void {
+    const distance = dekEpoch - this.baseEpoch;
+    if (distance > LessSyncTransport.MAX_EPOCH_ADVANCE) {
+      throw new Error(
+        `Epoch ${dekEpoch} is too far ahead of base epoch ${this.baseEpoch} ` +
+          `(distance: ${distance}, max: ${LessSyncTransport.MAX_EPOCH_ADVANCE}). ` +
+          `This may indicate a corrupted or malicious wrapped DEK.`,
+      );
+    }
+  }
+
+  /**
    * Decrypt an envelope using the record's DEK.
    */
-  private decryptEnvelope(
+  private async decryptEnvelope(
     blob: Uint8Array,
     recordId: string,
     wrappedDEKBytes?: Uint8Array,
-  ): BlobEnvelope {
-    const raw = this.decryptBlob(blob, recordId, wrappedDEKBytes);
+  ): Promise<BlobEnvelope> {
+    const raw = await this.decryptBlob(blob, recordId, wrappedDEKBytes);
     const decrypted = this.unpad(raw);
     return this.decodeEnvelope(decrypted);
   }
 
-  private decryptBlob(
+  private async decryptBlob(
     blob: Uint8Array,
     recordId: string,
     wrappedDEKBytes?: Uint8Array,
-  ): Uint8Array {
+  ): Promise<Uint8Array> {
     if (this.baseKek && wrappedDEKBytes) {
       // spaceId is guaranteed by constructor when kek is set
       const context = { spaceId: this.spaceId!, recordId };
@@ -838,16 +861,23 @@ export class LessSyncTransport implements SyncTransport {
         wrappedDEKBytes.byteLength,
       ).getUint32(0, false);
 
-      // Unwrap DEK — may need to derive KEK forward if epoch is newer
-      const { dek, epoch: _dekEpoch } = unwrapDEK(
-        wrappedDEKBytes,
-        this.getKEKForEpoch(dekEpoch),
-      );
-
-      try {
-        return decryptV4(blob, dek, context);
-      } finally {
-        dek.fill(0); // Zero plaintext DEK after use
+      if (this.baseKek instanceof CryptoKey) {
+        // Web Crypto path — personal space
+        const kek = await this.getKEKForEpochCryptoKey(dekEpoch);
+        const { dek } = await webcryptoUnwrapDEK(wrappedDEKBytes, kek);
+        try {
+          return decryptV4(blob, dek, context);
+        } finally {
+          dek.fill(0);
+        }
+      } else {
+        // WASM path — shared spaces
+        const { dek } = unwrapDEK(wrappedDEKBytes, this.getKEKForEpoch(dekEpoch));
+        try {
+          return decryptV4(blob, dek, context);
+        } finally {
+          dek.fill(0);
+        }
       }
     }
 
@@ -864,9 +894,7 @@ export class LessSyncTransport implements SyncTransport {
     try {
       parsed = cborDecode(decrypted);
     } catch {
-      throw new Error(
-        `Failed to decode CBOR envelope (${decrypted.length} bytes)`,
-      );
+      throw new Error(`Failed to decode CBOR envelope (${decrypted.length} bytes)`);
     }
 
     const obj = parsed as Record<string, unknown>;
@@ -923,11 +951,7 @@ export class LessSyncTransport implements SyncTransport {
 
     const padded = new Uint8Array(bucketSize);
     // Write length prefix (u32 LE)
-    const view = new DataView(
-      padded.buffer,
-      padded.byteOffset,
-      padded.byteLength,
-    );
+    const view = new DataView(padded.buffer, padded.byteOffset, padded.byteLength);
     view.setUint32(0, data.length, true);
     padded.set(data, PADDING_LENGTH_PREFIX);
     // Remaining bytes are already zero
@@ -957,9 +981,6 @@ export class LessSyncTransport implements SyncTransport {
       );
     }
 
-    return data.slice(
-      PADDING_LENGTH_PREFIX,
-      PADDING_LENGTH_PREFIX + originalLength,
-    );
+    return data.slice(PADDING_LENGTH_PREFIX, PADDING_LENGTH_PREFIX + originalLength);
   }
 }

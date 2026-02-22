@@ -9,8 +9,7 @@ use sha2::{Digest, Sha256};
 /// Produces 32 random bytes encoded as base64url (43 chars).
 pub fn generate_code_verifier() -> Result<String, AuthError> {
     let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes)
-        .map_err(|e| AuthError::RngFailed(e.to_string()))?;
+    getrandom::getrandom(&mut bytes).map_err(|e| AuthError::RngFailed(e.to_string()))?;
     Ok(base64url_encode(&bytes))
 }
 
@@ -36,8 +35,7 @@ pub fn compute_code_challenge(verifier: &str, thumbprint: Option<&str>) -> Strin
 /// Produces 16 random bytes encoded as base64url (22 chars).
 pub fn generate_state() -> Result<String, AuthError> {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes)
-        .map_err(|e| AuthError::RngFailed(e.to_string()))?;
+    getrandom::getrandom(&mut bytes).map_err(|e| AuthError::RngFailed(e.to_string()))?;
     Ok(base64url_encode(&bytes))
 }
 

@@ -80,10 +80,7 @@ const RECIPIENT_KEY_TTL_MS = 5 * 60 * 1000;
  */
 export class InvitationClient {
   private config: InvitationClientConfig;
-  private recipientKeyCache = new Map<
-    string,
-    { key: RecipientKey; fetchedAt: number }
-  >();
+  private recipientKeyCache = new Map<string, { key: RecipientKey; fetchedAt: number }>();
 
   constructor(config: InvitationClientConfig) {
     this.config = config;
@@ -101,10 +98,7 @@ export class InvitationClient {
   /**
    * Fetch a recipient's public key from the accounts service.
    */
-  async fetchRecipientKey(
-    handle: string,
-    clientId: string,
-  ): Promise<RecipientKey> {
+  async fetchRecipientKey(handle: string, clientId: string): Promise<RecipientKey> {
     const cacheKey = `${handle}:${clientId}`;
     const cached = this.recipientKeyCache.get(cacheKey);
     if (cached && Date.now() - cached.fetchedAt < RECIPIENT_KEY_TTL_MS) {
@@ -122,9 +116,7 @@ export class InvitationClient {
       throw new RecipientNotFoundError(handle, clientId);
     }
     if (!response.ok) {
-      throw new Error(
-        `Failed to fetch recipient key: status ${response.status}`,
-      );
+      throw new Error(`Failed to fetch recipient key: status ${response.status}`);
     }
 
     const key: RecipientKey = await response.json();
@@ -133,9 +125,7 @@ export class InvitationClient {
     const inputDomain = parseHandle(handle).domain;
     const returnedDomain = parseHandle(key.handle).domain;
     if (returnedDomain !== inputDomain) {
-      throw new Error(
-        `Handle domain mismatch: expected ${inputDomain}, got ${returnedDomain}`,
-      );
+      throw new Error(`Handle domain mismatch: expected ${inputDomain}, got ${returnedDomain}`);
     }
 
     this.recipientKeyCache.set(cacheKey, { key, fetchedAt: Date.now() });
@@ -197,14 +187,9 @@ export class InvitationClient {
   /**
    * Decrypt an invitation payload using the recipient's private key.
    */
-  decryptInvitationPayload(
-    invitation: Invitation,
-    privateKeyJwk: JsonWebKey,
-  ): InvitationPayload {
+  decryptInvitationPayload(invitation: Invitation, privateKeyJwk: JsonWebKey): InvitationPayload {
     const plaintext = decryptJwe(invitation.payload, privateKeyJwk);
-    const wire: InvitationPayloadWire = JSON.parse(
-      new TextDecoder().decode(plaintext),
-    );
+    const wire: InvitationPayloadWire = JSON.parse(new TextDecoder().decode(plaintext));
 
     const spaceKey = base64ToBytes(wire.space_key);
 
@@ -219,10 +204,7 @@ export class InvitationClient {
   /**
    * Send a pre-encrypted JWE payload to a recipient's mailbox.
    */
-  async sendRawMessage(
-    recipientMailboxID: string,
-    jwePayload: string,
-  ): Promise<void> {
+  async sendRawMessage(recipientMailboxID: string, jwePayload: string): Promise<void> {
     if (!/^[0-9a-f]{64}$/.test(recipientMailboxID)) {
       throw new Error("Invalid mailbox ID: must be 64-char lowercase hex");
     }

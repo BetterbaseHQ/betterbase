@@ -33,20 +33,18 @@
 import type { FilesClient } from "./files.js";
 import { FileNotFoundError } from "./files.js";
 import { deriveNextEpochKey, type EncryptionContext } from "../crypto/index.js";
+import { generateDEK, wrapDEK, unwrapDEK, encryptV4, decryptV4 } from "../crypto/internals.js";
 import {
-  generateDEK,
-  wrapDEK,
-  unwrapDEK,
-  encryptV4,
-  decryptV4,
-} from "../crypto/internals.js";
+  webcryptoWrapDEK,
+  webcryptoUnwrapDEK,
+  webcryptoDeriveEpochKey,
+} from "../crypto/webcrypto.js";
 
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function validateFileId(id: string): void {
   if (!UUID_RE.test(id)) {
@@ -89,8 +87,10 @@ export interface FileStoreConfig {
 /** Sync configuration — passed to `connect()` when auth resolves. */
 export interface FileStoreSyncConfig {
   filesClient: FilesClient;
-  /** Current epoch key for wrapping DEKs on upload. */
-  epochKey: Uint8Array;
+  /** Current epoch key — raw bytes (shared) or CryptoKey (personal space). */
+  epochKey: Uint8Array | CryptoKey;
+  /** HKDF derive key for CryptoKey path (for epoch derivation). */
+  epochDeriveKey?: CryptoKey;
   /** Current epoch number for wrapping DEKs on upload. */
   epoch: number;
   spaceId: string;
@@ -211,10 +211,7 @@ function metaHas(db: IDBDatabase, key: string): Promise<boolean> {
   });
 }
 
-function metaGetAllForSpace(
-  db: IDBDatabase,
-  spaceId: string,
-): Promise<MetaEntry[]> {
+function metaGetAllForSpace(db: IDBDatabase, spaceId: string): Promise<MetaEntry[]> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(META_STORE, "readonly");
     const req = tx.objectStore(META_STORE).getAll();
@@ -239,11 +236,7 @@ function blobGet(db: IDBDatabase, key: string): Promise<BlobEntry | undefined> {
 
 // -- atomic multi-store helpers --
 
-function putFile(
-  db: IDBDatabase,
-  meta: MetaEntry,
-  blob: BlobEntry,
-): Promise<void> {
+function putFile(db: IDBDatabase, meta: MetaEntry, blob: BlobEntry): Promise<void> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction([META_STORE, BLOB_STORE], "readwrite");
     tx.objectStore(META_STORE).put(meta);
@@ -291,6 +284,10 @@ export class FileStore {
   private maxCacheBytes: number;
   private queueSnapshot: UploadQueueEntry[] = [];
   private getKEKForEpoch?: (epoch: number) => Uint8Array;
+  /** CryptoKey-based epoch resolver (personal space path). */
+  private getKEKForEpochCryptoKey?: (epoch: number) => Promise<CryptoKey>;
+  /** Whether the epoch key is a CryptoKey (determines wrap/unwrap path). */
+  private useCryptoKey = false;
 
   private dbPromise: Promise<IDBDatabase>;
   private inflight = new Map<string, Promise<Uint8Array | null>>();
@@ -320,23 +317,55 @@ export class FileStore {
     this.spaceId = config.spaceId;
 
     // Build forward-derivation chain for epoch key resolution on download.
-    let cachedKey = config.epochKey;
-    let cachedEpoch = config.epoch;
-    this.getKEKForEpoch = (dekEpoch: number): Uint8Array => {
-      if (dekEpoch === cachedEpoch) return cachedKey;
-      if (dekEpoch < cachedEpoch) {
-        throw new Error(
-          `Cannot derive KEK for past epoch ${dekEpoch} (current: ${cachedEpoch})`,
-        );
-      }
-      let key = cachedKey;
-      for (let e = cachedEpoch + 1; e <= dekEpoch; e++) {
-        key = deriveNextEpochKey(key, config.spaceId, e);
-      }
-      cachedKey = key;
-      cachedEpoch = dekEpoch;
-      return key;
-    };
+    // Unlike LessSyncTransport (which caches all intermediate epochs in a Map),
+    // FileStore uses a destructive linear advance: once epoch N+1 is derived,
+    // epoch N cannot be re-derived. This is safe because FileStore is always
+    // personal space — file DEKs arrive in monotonically non-decreasing epoch order.
+    if (config.epochKey instanceof CryptoKey) {
+      // CryptoKey path — personal space
+      this.useCryptoKey = true;
+      let cachedKwKey: CryptoKey = config.epochKey;
+      let cachedDeriveKey: CryptoKey | undefined = config.epochDeriveKey;
+      let cachedEpoch = config.epoch;
+      this.getKEKForEpochCryptoKey = async (dekEpoch: number): Promise<CryptoKey> => {
+        if (dekEpoch === cachedEpoch) return cachedKwKey;
+        if (dekEpoch < cachedEpoch) {
+          throw new Error(`Cannot derive KEK for past epoch ${dekEpoch} (current: ${cachedEpoch})`);
+        }
+        if (!cachedDeriveKey) {
+          throw new Error(`No derive key available for epoch derivation`);
+        }
+        let kwKey = cachedKwKey;
+        let deriveKey = cachedDeriveKey;
+        for (let e = cachedEpoch + 1; e <= dekEpoch; e++) {
+          const derived = await webcryptoDeriveEpochKey(deriveKey, config.spaceId, e);
+          kwKey = derived.kwKey;
+          deriveKey = derived.deriveKey;
+        }
+        cachedKwKey = kwKey;
+        cachedDeriveKey = deriveKey;
+        cachedEpoch = dekEpoch;
+        return kwKey;
+      };
+    } else {
+      // Raw bytes path — shared spaces
+      this.useCryptoKey = false;
+      let cachedKey: Uint8Array = config.epochKey;
+      let cachedEpoch = config.epoch;
+      this.getKEKForEpoch = (dekEpoch: number): Uint8Array => {
+        if (dekEpoch === cachedEpoch) return cachedKey;
+        if (dekEpoch < cachedEpoch) {
+          throw new Error(`Cannot derive KEK for past epoch ${dekEpoch} (current: ${cachedEpoch})`);
+        }
+        let key = cachedKey;
+        for (let e = cachedEpoch + 1; e <= dekEpoch; e++) {
+          key = deriveNextEpochKey(key, config.spaceId, e);
+        }
+        cachedKey = key;
+        cachedEpoch = dekEpoch;
+        return key;
+      };
+    }
 
     // Migrate IDB entries if spaceId changed
     if (oldSpaceId !== config.spaceId) {
@@ -348,10 +377,7 @@ export class FileStore {
 
     // Process any queued uploads now that we're connected
     this.processQueue().catch((err) => {
-      console.warn(
-        "FileStore: background queue processing failed after connect",
-        err,
-      );
+      console.warn("FileStore: background queue processing failed after connect", err);
     });
   }
 
@@ -362,6 +388,8 @@ export class FileStore {
   disconnect(): void {
     this.syncConfig = null;
     this.getKEKForEpoch = undefined;
+    this.getKEKForEpochCryptoKey = undefined;
+    this.useCryptoKey = false;
   }
 
   /** Whether the FileStore is connected to a sync backend. */
@@ -379,11 +407,7 @@ export class FileStore {
    * @param recordId - The owning record's ID. Required for upload queue.
    *   Omit for local-cache-only files (no server upload).
    */
-  async put(
-    id: string,
-    data: Uint8Array | ArrayBuffer,
-    recordId?: string,
-  ): Promise<void> {
+  async put(id: string, data: Uint8Array | ArrayBuffer, recordId?: string): Promise<void> {
     validateFileId(id);
     const fileData = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
 
@@ -438,10 +462,7 @@ export class FileStore {
         return blob.data;
       }
     } catch (err) {
-      console.error(
-        "[less-sync] Cache read failed, falling through to network:",
-        err,
-      );
+      console.error("[less-sync] Cache read failed, falling through to network:", err);
     }
 
     if (!this.syncConfig) return null;
@@ -578,9 +599,7 @@ export class FileStore {
     try {
       const db = await this.dbPromise;
       const allMeta = await metaGetAllForSpace(db, this.spaceId);
-      return allMeta
-        .filter((m) => m.uploadStatus !== undefined)
-        .map(toQueueEntry);
+      return allMeta.filter((m) => m.uploadStatus !== undefined).map(toQueueEntry);
     } catch (err) {
       console.error("[less-sync] Failed to get upload queue entries:", err);
       return [];
@@ -655,10 +674,7 @@ export class FileStore {
   // Private — IDB migration
   // ---------------------------------------------------------------------------
 
-  private async migrateSpaceId(
-    oldSpaceId: string,
-    newSpaceId: string,
-  ): Promise<void> {
+  private async migrateSpaceId(oldSpaceId: string, newSpaceId: string): Promise<void> {
     const db = await this.dbPromise;
     const oldEntries = await metaGetAllForSpace(db, oldSpaceId);
     if (oldEntries.length === 0) return;
@@ -695,18 +711,12 @@ export class FileStore {
   // Private — upload queue
   // ---------------------------------------------------------------------------
 
-  private async persistQueueEntry(
-    db: IDBDatabase,
-    entry: MetaEntry,
-  ): Promise<void> {
+  private async persistQueueEntry(db: IDBDatabase, entry: MetaEntry): Promise<void> {
     await metaPut(db, entry);
     await this.fireQueueChange(db);
   }
 
-  private async markUploading(
-    db: IDBDatabase,
-    entry: MetaEntry,
-  ): Promise<void> {
+  private async markUploading(db: IDBDatabase, entry: MetaEntry): Promise<void> {
     entry.uploadStatus = "uploading";
     entry.lastAttemptAt = Date.now();
     await this.persistQueueEntry(db, entry);
@@ -724,10 +734,7 @@ export class FileStore {
     await this.persistQueueEntry(db, entry);
   }
 
-  private async clearUploadState(
-    db: IDBDatabase,
-    entry: MetaEntry,
-  ): Promise<void> {
+  private async clearUploadState(db: IDBDatabase, entry: MetaEntry): Promise<void> {
     delete entry.uploadStatus;
     delete entry.uploadError;
     delete entry.recordId;
@@ -737,25 +744,17 @@ export class FileStore {
     await this.persistQueueEntry(db, entry);
   }
 
-  private async readCachedBlobOrDrop(
-    db: IDBDatabase,
-    entry: MetaEntry,
-  ): Promise<BlobEntry | null> {
+  private async readCachedBlobOrDrop(db: IDBDatabase, entry: MetaEntry): Promise<BlobEntry | null> {
     const cached = await blobGet(db, entry.key);
     if (cached) return cached;
 
-    console.warn(
-      `FileStore: cached data evicted for ${entry.fileId}, removing from queue`,
-    );
+    console.warn(`FileStore: cached data evicted for ${entry.fileId}, removing from queue`);
     await deleteFile(db, entry.key);
     await this.fireQueueChange(db);
     return null;
   }
 
-  private async ensureRecordSynced(
-    db: IDBDatabase,
-    entry: MetaEntry,
-  ): Promise<boolean> {
+  private async ensureRecordSynced(db: IDBDatabase, entry: MetaEntry): Promise<boolean> {
     if (!this.syncConfig?.ensureSynced) return true;
     try {
       await this.syncConfig.ensureSynced();
@@ -766,10 +765,7 @@ export class FileStore {
     }
   }
 
-  private async processOneUpload(
-    db: IDBDatabase,
-    entry: MetaEntry,
-  ): Promise<void> {
+  private async processOneUpload(db: IDBDatabase, entry: MetaEntry): Promise<void> {
     const sync = this.syncConfig;
     if (!sync) return;
 
@@ -780,42 +776,40 @@ export class FileStore {
 
     if (!(await this.ensureRecordSynced(db, entry))) return;
 
+    const dek = generateDEK();
     try {
       const context: EncryptionContext = {
         spaceId: this.spaceId,
         recordId: entry.fileId,
       };
-      const dek = generateDEK();
       const encrypted = encryptV4(cached.data, dek, context);
-      const wrappedDEK = wrapDEK(dek, sync.epochKey, sync.epoch);
 
-      await sync.filesClient.upload(
-        entry.fileId,
-        encrypted,
-        wrappedDEK,
-        entry.recordId!,
-      );
+      let wrappedDEK: Uint8Array;
+      if (this.useCryptoKey && sync.epochKey instanceof CryptoKey) {
+        wrappedDEK = await webcryptoWrapDEK(dek, sync.epochKey, sync.epoch);
+      } else {
+        wrappedDEK = wrapDEK(dek, sync.epochKey as Uint8Array, sync.epoch);
+      }
+
+      await sync.filesClient.upload(entry.fileId, encrypted, wrappedDEK, entry.recordId!);
 
       await this.clearUploadState(db, entry);
     } catch (err) {
       await this.markUploadError(db, entry, err, "Upload failed");
+    } finally {
+      dek.fill(0);
     }
   }
 
   private async fireQueueChange(db: IDBDatabase): Promise<void> {
     try {
       const allMeta = await metaGetAllForSpace(db, this.spaceId);
-      const entries = allMeta
-        .filter((m) => m.uploadStatus !== undefined)
-        .map(toQueueEntry);
+      const entries = allMeta.filter((m) => m.uploadStatus !== undefined).map(toQueueEntry);
       this.queueSnapshot = entries;
       this.notify();
       this.onQueueChangeFn?.(entries);
     } catch (err) {
-      console.error(
-        "[less-sync] Failed to fire queue change notification:",
-        err,
-      );
+      console.error("[less-sync] Failed to fire queue change notification:", err);
     }
   }
 
@@ -845,17 +839,32 @@ export class FileStore {
       wrappedDEK.byteLength,
     ).getUint32(0, false);
 
-    // Resolve KEK for this epoch
-    let kek: Uint8Array;
-    if (this.getKEKForEpoch) {
-      kek = this.getKEKForEpoch(dekEpoch);
-    } else {
-      kek = sync.epochKey;
-    }
-
     // Unwrap DEK and decrypt
-    const { dek } = unwrapDEK(wrappedDEK, kek);
-    const decrypted = decryptV4(encrypted, dek, context);
+    let decrypted: Uint8Array;
+    if (this.useCryptoKey && this.getKEKForEpochCryptoKey) {
+      // CryptoKey path
+      const kek = await this.getKEKForEpochCryptoKey(dekEpoch);
+      const { dek } = await webcryptoUnwrapDEK(wrappedDEK, kek);
+      try {
+        decrypted = decryptV4(encrypted, dek, context);
+      } finally {
+        dek.fill(0);
+      }
+    } else {
+      // Raw bytes path
+      let kek: Uint8Array;
+      if (this.getKEKForEpoch) {
+        kek = this.getKEKForEpoch(dekEpoch);
+      } else {
+        kek = sync.epochKey as Uint8Array;
+      }
+      const { dek } = unwrapDEK(wrappedDEK, kek);
+      try {
+        decrypted = decryptV4(encrypted, dek, context);
+      } finally {
+        dek.fill(0);
+      }
+    }
 
     // Cache locally (best-effort)
     try {
@@ -877,10 +886,7 @@ export class FileStore {
       this.notify();
       await this.maybeEvict();
     } catch (err) {
-      console.warn(
-        "FileStore: failed to cache file locally after download",
-        err,
-      );
+      console.warn("FileStore: failed to cache file locally after download", err);
     }
 
     return decrypted;

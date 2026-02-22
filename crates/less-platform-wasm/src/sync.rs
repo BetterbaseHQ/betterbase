@@ -4,9 +4,8 @@ use crate::error::{to_js_error, to_js_value};
 use less_sync_core::{
     build_membership_signing_message, decrypt_inbound, decrypt_membership_payload, derive_forward,
     encrypt_membership_payload, encrypt_outbound, pad_to_bucket, parse_membership_entry,
-    peek_epoch, rewrap_deks, serialize_membership_entry, unpad,
-    verify_membership_entry, BlobEnvelope, EpochKeyCache, MembershipEntryType,
-    DEFAULT_PADDING_BUCKETS,
+    peek_epoch, rewrap_deks, serialize_membership_entry, unpad, verify_membership_entry,
+    BlobEnvelope, EpochKeyCache, MembershipEntryType, DEFAULT_PADDING_BUCKETS,
 };
 use wasm_bindgen::prelude::*;
 
@@ -205,12 +204,7 @@ pub fn wasm_parse_membership_entry(payload: &str) -> Result<JsValue, JsValue> {
         js_sys::Reflect::set(&obj, &"mailboxId".into(), &JsValue::from_str(m)).unwrap();
     }
     if let Some(ref pk) = entry.public_key_jwk {
-        js_sys::Reflect::set(
-            &obj,
-            &"publicKeyJwk".into(),
-            &to_js_value(pk)?,
-        )
-        .unwrap();
+        js_sys::Reflect::set(&obj, &"publicKeyJwk".into(), &to_js_value(pk)?).unwrap();
     }
     if let Some(ref h) = entry.signer_handle {
         js_sys::Reflect::set(&obj, &"signerHandle".into(), &JsValue::from_str(h)).unwrap();

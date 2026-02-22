@@ -163,12 +163,7 @@ pub fn wasm_generate_p256_keypair() -> Result<JsValue, JsValue> {
         &to_js_value(&private_jwk)?,
     )
     .unwrap();
-    js_sys::Reflect::set(
-        &result,
-        &"publicKeyJwk".into(),
-        &to_js_value(&public_jwk)?,
-    )
-    .unwrap();
+    js_sys::Reflect::set(&result, &"publicKeyJwk".into(), &to_js_value(&public_jwk)?).unwrap();
     Ok(result.into())
 }
 
@@ -379,11 +374,7 @@ pub fn wasm_sha256(data: &[u8]) -> Vec<u8> {
 // --- Channel encrypt/decrypt (AES-256-GCM with arbitrary AAD, v4 wire format) ---
 
 #[wasm_bindgen(js_name = "encryptWithAad")]
-pub fn wasm_encrypt_with_aad(
-    key: &[u8],
-    data: &[u8],
-    aad: &[u8],
-) -> Result<Vec<u8>, JsValue> {
+pub fn wasm_encrypt_with_aad(key: &[u8], data: &[u8], aad: &[u8]) -> Result<Vec<u8>, JsValue> {
     // Use low-level AES-GCM with arbitrary AAD, then wrap in v4 format
     let inner = aes_gcm_encrypt(key, data, aad).map_err(to_js_error)?;
     // inner = [IV:12][ciphertext+tag], wrap as [0x04][IV:12][ciphertext+tag]
@@ -394,11 +385,7 @@ pub fn wasm_encrypt_with_aad(
 }
 
 #[wasm_bindgen(js_name = "decryptWithAad")]
-pub fn wasm_decrypt_with_aad(
-    key: &[u8],
-    encrypted: &[u8],
-    aad: &[u8],
-) -> Result<Vec<u8>, JsValue> {
+pub fn wasm_decrypt_with_aad(key: &[u8], encrypted: &[u8], aad: &[u8]) -> Result<Vec<u8>, JsValue> {
     // Strip v4 version prefix, then decrypt with arbitrary AAD
     if encrypted.is_empty() || encrypted[0] != CURRENT_VERSION {
         return Err(to_js_error(less_crypto::CryptoError::UnsupportedVersion(
