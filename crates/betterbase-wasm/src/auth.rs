@@ -1,4 +1,4 @@
-//! WASM bindings for less-auth.
+//! WASM bindings for betterbase-auth.
 
 use crate::error::{to_js_error, to_js_value};
 use betterbase_auth::{

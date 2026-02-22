@@ -1,6 +1,6 @@
 /**
  * SyncTransport implementation that bridges @betterbase/sdk/db's sync system
- * to the less-sync server.
+ * to the betterbase-sync server.
  *
  * Handles the blob envelope format for multi-collection support over our
  * single-space sync protocol, plus per-record DEK encryption at the sync boundary.
@@ -103,7 +103,7 @@ export interface LessSyncTransportConfig {
 }
 
 /**
- * Bridges @betterbase/sdk/db's SyncTransport interface to the less-sync server.
+ * Bridges @betterbase/sdk/db's SyncTransport interface to the betterbase-sync server.
  *
  * On push: OutboundRecord -> CRDT binary -> BlobEnvelope -> CBOR -> pad -> encrypt(DEK) -> Change{blob, dek}
  * On pull: Change{blob, dek} -> unwrap DEK -> decrypt(DEK) -> unpad -> CBOR -> BlobEnvelope -> RemoteRecord
@@ -265,7 +265,7 @@ export class LessSyncTransport implements SyncTransport {
       ) {
         this.warnedIdentityMissing = true;
         console.warn(
-          "[less-sync] editChainCollections configured but identity not available — edit chains will be omitted",
+          "[betterbase-sync] editChainCollections configured but identity not available — edit chains will be omitted",
         );
       }
 
@@ -309,7 +309,7 @@ export class LessSyncTransport implements SyncTransport {
       try {
         chain = parseEditChain(existingChainStr);
       } catch {
-        console.warn(`[less-sync] Edit chain parse failed for ${record.id}; starting fresh chain`);
+        console.warn(`[betterbase-sync] Edit chain parse failed for ${record.id}; starting fresh chain`);
       }
     }
 
@@ -612,10 +612,10 @@ export class LessSyncTransport implements SyncTransport {
       const chain = parseEditChain(envelope.h);
       editChainValid = verifyEditChain(chain, collection, recordId);
       if (!editChainValid) {
-        console.warn(`[less-sync] Edit chain integrity check failed for record ${recordId}`);
+        console.warn(`[betterbase-sync] Edit chain integrity check failed for record ${recordId}`);
       }
     } catch (err) {
-      console.warn(`[less-sync] Edit chain parse/verify error for record ${recordId}:`, err);
+      console.warn(`[betterbase-sync] Edit chain parse/verify error for record ${recordId}:`, err);
     }
 
     return {

@@ -9,7 +9,7 @@
  *
  * @example
  * ```ts
- * import { createOpfsDb } from "less-db-wasm";
+ * import { createOpfsDb } from "@betterbase/sdk/db";
  * import { users } from "./collections.js";
  *
  * const db = await createOpfsDb("my-app", [users], {

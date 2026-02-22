@@ -5,7 +5,7 @@
  * space based on `{ sameSpaceAs: record }` or `{ space: "..." }` options, and
  * filters queries by space.
  *
- * This is the bridge between less-db's generic middleware system and the
+ * This is the bridge between betterbase-db's generic middleware system and the
  * space-aware sync architecture.
  */
 
@@ -94,7 +94,7 @@ export function createSpacesMiddleware(
           );
           result._editChainValid = (meta._editChainValid as boolean) ?? false;
         } catch (e) {
-          console.warn("[less-sync] Edit chain parse failed in onRead:", e);
+          console.warn("[betterbase-sync] Edit chain parse failed in onRead:", e);
           result._editChain = undefined;
           result._editChainValid = false;
         }

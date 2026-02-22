@@ -1,4 +1,4 @@
-//! Tests for the index query planner — ported from less-db-js/tests/index/planner.test.ts
+//! Tests for the index query planner — ported from the JS reference implementation/tests/index/planner.test.ts
 
 use betterbase_db::index::planner::{explain_plan, extract_conditions, plan_query};
 use betterbase_db::index::types::{

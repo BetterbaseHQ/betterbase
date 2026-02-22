@@ -151,9 +151,9 @@ export class WSTransport implements SyncTransport {
     // Handle per-space errors (e.g., revoked access)
     if (result.errors?.length) {
       for (const err of result.errors) {
-        console.error(`[less-sync] Subscribe error for space ${err.space}: ${err.error}`);
+        console.error(`[betterbase-sync] Subscribe error for space ${err.space}: ${err.error}`);
         this.config.spaceManager.handleRevocation(err.space).catch((e) => {
-          console.error(`[less-sync] Failed to handle revocation for ${err.space}:`, e);
+          console.error(`[betterbase-sync] Failed to handle revocation for ${err.space}:`, e);
         });
       }
     }
@@ -280,7 +280,7 @@ export class WSTransport implements SyncTransport {
         const distance = targetEpoch - currentEpoch;
         if (distance > 1000) {
           console.error(
-            `[less-sync] Epoch gap too large for personal space: ${distance} (max: 1000). Ignoring advancement.`,
+            `[betterbase-sync] Epoch gap too large for personal space: ${distance} (max: 1000). Ignoring advancement.`,
           );
         } else if (epochKey instanceof CryptoKey && epochDeriveKey) {
           // CryptoKey path: derive forward via Web Crypto HKDF chain
@@ -538,7 +538,7 @@ export class WSTransport implements SyncTransport {
     if (cursor > current) {
       this.cursors.set(key, cursor);
       this.config.cursorStore?.set(key, cursor).catch((err) => {
-        console.error(`[less-sync] Failed to persist cursor ${key}:`, err);
+        console.error(`[betterbase-sync] Failed to persist cursor ${key}:`, err);
       });
     }
   }

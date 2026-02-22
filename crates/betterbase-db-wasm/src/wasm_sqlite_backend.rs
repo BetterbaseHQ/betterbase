@@ -1,6 +1,6 @@
 //! WasmSqliteBackend — `StorageBackend` implementation using sqlite-wasm-rs.
 //!
-//! Ports the SQL logic from `crates/less-db/src/storage/sqlite.rs` but uses
+//! Ports the SQL logic from `crates/betterbase-db/src/storage/sqlite.rs` but uses
 //! our safe `wasm_sqlite` wrapper over `sqlite-wasm-rs` FFI instead of rusqlite.
 //!
 //! # Threading

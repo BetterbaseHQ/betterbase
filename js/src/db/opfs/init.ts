@@ -6,7 +6,7 @@
  *
  * ```ts
  * // my-db-worker.ts
- * import { initOpfsWorker } from "less-db-wasm/worker";
+ * import { initOpfsWorker } from "betterbase/sdk/db/worker";
  * import { users } from "./collections.js";
  * initOpfsWorker([users]);
  * ```

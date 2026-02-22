@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Response from `GET {domain}/.well-known/less-platform`.
+/// Response from `GET {domain}/.well-known/betterbase`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServerMetadata {
     pub version: u64,

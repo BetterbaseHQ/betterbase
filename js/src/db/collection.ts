@@ -113,7 +113,7 @@ class CollectionBuilderWithVersionsImpl<TName extends string, TSchema extends Sc
   ): CollectionBuilderWithVersions<TName, S> {
     if (this.#indexes.length > 0) {
       console.warn(
-        `[less-db] collection "${this.#name}": indexes defined before .v(${version}) will be dropped. ` +
+        `[betterbase-db] collection "${this.#name}": indexes defined before .v(${version}) will be dropped. ` +
         `Define indexes after the last .v() call.`,
       );
     }

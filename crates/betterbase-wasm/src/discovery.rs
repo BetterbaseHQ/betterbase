@@ -1,4 +1,4 @@
-//! WASM bindings for less-discovery.
+//! WASM bindings for betterbase-discovery.
 
 use crate::error::{to_js_error, to_js_value};
 use betterbase_discovery::{parse_webfinger_response, validate_server_metadata};

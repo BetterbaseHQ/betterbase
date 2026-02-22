@@ -218,7 +218,7 @@ export class PresenceManager {
         this.config.ws.setPresence(spaceId, encrypted);
       },
       (err) => {
-        console.error(`[less-sync] Failed to encrypt presence for space ${spaceId}:`, err);
+        console.error(`[betterbase-sync] Failed to encrypt presence for space ${spaceId}:`, err);
       },
     );
   }

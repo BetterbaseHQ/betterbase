@@ -174,7 +174,7 @@ export class AuthSession {
     try {
       state = JSON.parse(raw) as SessionState;
     } catch (err) {
-      console.error("[less-auth] Failed to parse persisted session state:", err);
+      console.error("[betterbase-auth] Failed to parse persisted session state:", err);
       return null;
     }
 
@@ -185,7 +185,7 @@ export class AuthSession {
     try {
       await keyStore.initialize();
     } catch (err) {
-      console.error("[less-auth] KeyStore initialization failed, cannot restore session:", err);
+      console.error("[betterbase-auth] KeyStore initialization failed, cannot restore session:", err);
       return null;
     }
 
@@ -208,7 +208,7 @@ export class AuthSession {
       try {
         await session.refresh();
       } catch (err) {
-        console.error("[less-auth] Session refresh failed during restore:", err);
+        console.error("[betterbase-auth] Session refresh failed during restore:", err);
         session.dispose();
         return null;
       }
@@ -230,7 +230,7 @@ export class AuthSession {
       try {
         await this.refresh();
       } catch (err) {
-        console.error("[less-auth] Token refresh failed in getToken():", err);
+        console.error("[betterbase-auth] Token refresh failed in getToken():", err);
         return null;
       }
     }
@@ -380,7 +380,7 @@ export class AuthSession {
     try {
       await this.keyStore.clearAll();
     } catch (err) {
-      console.error("[less-auth] Failed to clear KeyStore during cleanup:", err);
+      console.error("[betterbase-auth] Failed to clear KeyStore during cleanup:", err);
     }
   }
 
@@ -472,7 +472,7 @@ export class AuthSession {
       const publicKeyJwk = JSON.parse(this.appPublicKeyJwkStr) as JsonWebKey;
       return { privateKeyJwk, publicKeyJwk };
     } catch (err) {
-      console.error("[less-auth] Failed to parse app public key JWK:", err);
+      console.error("[betterbase-auth] Failed to parse app public key JWK:", err);
       return null;
     }
   }
@@ -486,7 +486,7 @@ export class AuthSession {
     try {
       return JSON.parse(this.appPublicKeyJwkStr);
     } catch (err) {
-      console.error("[less-auth] Failed to parse app public key JWK:", err);
+      console.error("[betterbase-auth] Failed to parse app public key JWK:", err);
       return null;
     }
   }
@@ -554,7 +554,7 @@ export class AuthSession {
         this.epochAdvancedAtValue = state.epochAdvancedAt;
         this.scheduleRefresh();
       } catch (err) {
-        console.error("[less-auth] Failed to process storage event:", err);
+        console.error("[betterbase-auth] Failed to process storage event:", err);
       }
     };
     window.addEventListener("storage", this.storageListener);

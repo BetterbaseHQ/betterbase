@@ -207,7 +207,7 @@ export class SpaceManager {
       await this.invitationClient.fetchRecipientKey(resolved, this.config.clientId);
       return true;
     } catch (err) {
-      console.error("[less-sync] Failed to check if user exists:", err);
+      console.error("[betterbase-sync] Failed to check if user exists:", err);
       return false;
     }
   }
@@ -463,7 +463,7 @@ export class SpaceManager {
     try {
       await this.dedupFetchMembers(spaceId);
     } catch (err) {
-      console.error(`[less-sync] Failed to refresh members for space ${spaceId}:`, err);
+      console.error(`[betterbase-sync] Failed to refresh members for space ${spaceId}:`, err);
     }
   }
 
@@ -551,7 +551,7 @@ export class SpaceManager {
         payloadStr = decryptMembershipPayload(raw.payload, syncCrypto, spaceId, raw.chain_seq);
       } catch (err) {
         console.error(
-          `[less-sync] Failed to decrypt membership entry (seq ${raw.chain_seq}):`,
+          `[betterbase-sync] Failed to decrypt membership entry (seq ${raw.chain_seq}):`,
           err,
         );
         continue;
@@ -560,7 +560,7 @@ export class SpaceManager {
       try {
         entry = parseMembershipEntry(payloadStr);
       } catch (err) {
-        console.error(`[less-sync] Malformed membership entry (seq ${raw.chain_seq}):`, err);
+        console.error(`[betterbase-sync] Malformed membership entry (seq ${raw.chain_seq}):`, err);
         continue;
       }
       results.push({ seq: raw.chain_seq, payloadStr, entry });
@@ -1169,7 +1169,7 @@ export class SpaceManager {
       } catch {
         // Not valid JSON — skip this message
         await this.invitationClient.deleteInvitation(invitation.id).catch((err) => {
-          console.error("[less-sync] Failed to delete invalid invitation:", err);
+          console.error("[betterbase-sync] Failed to delete invalid invitation:", err);
         });
         continue;
       }
@@ -1182,7 +1182,7 @@ export class SpaceManager {
         }
         // Delete notice regardless (verified or stale)
         await this.invitationClient.deleteInvitation(invitation.id).catch((err) => {
-          console.error("[less-sync] Failed to delete revocation notice:", err);
+          console.error("[betterbase-sync] Failed to delete revocation notice:", err);
         });
         continue;
       }
@@ -1260,7 +1260,7 @@ export class SpaceManager {
         this.config.db
           .patch(spaces, { id: record.id, epochAdvancedAt: now } as never)
           .catch((err) => {
-            console.error("[less-sync] Failed to backfill epochAdvancedAt:", err);
+            console.error("[betterbase-sync] Failed to backfill epochAdvancedAt:", err);
           });
       }
 

@@ -381,7 +381,7 @@ export class SyncManager {
     this.options.onProgress?.({ phase, collection, processed, total });
   }
 
-  /** Map less-db-js delete strategy names to Rust enum variants. */
+  /** Map betterbase-db delete strategy names to Rust enum variants. */
   private mapDeleteStrategy(
     strategy?: string,
   ): "RemoteWins" | "LocalWins" | "DeleteWins" | "UpdateWins" | undefined {

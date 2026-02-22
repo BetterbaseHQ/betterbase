@@ -1,4 +1,4 @@
-// Comparison benchmark: WASM/OPFS vs less-db-js vs Dexie.
+// Comparison benchmark: WASM/OPFS vs betterbase-db vs Dexie.
 //
 // WASM operations go through a Web Worker (postMessage round-trip).
 // JS and Dexie operations are async (awaiting IDB transactions).

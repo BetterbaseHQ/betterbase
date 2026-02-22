@@ -1,4 +1,4 @@
-//! Tests for query execute — ported from less-db-js/tests/query/execute.test.ts
+//! Tests for query execute — ported from the JS reference implementation/tests/query/execute.test.ts
 
 use betterbase_db::query::execute::{
     count_matching, execute_query, find_first, paginate_records, sort_records,

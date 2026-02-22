@@ -211,7 +211,7 @@ export class RpcConnection {
     if (!(data instanceof ArrayBuffer)) return;
 
     if (data.byteLength > MAX_FRAME_BYTES) {
-      console.warn(`[less-sync] Frame too large: ${data.byteLength} bytes, dropping`);
+      console.warn(`[betterbase-sync] Frame too large: ${data.byteLength} bytes, dropping`);
       return;
     }
 
@@ -230,7 +230,7 @@ export class RpcConnection {
         " ",
       );
       console.warn(
-        `[less-sync] Received malformed CBOR frame (${bytes.length} bytes, preview: ${preview}), dropping`,
+        `[betterbase-sync] Received malformed CBOR frame (${bytes.length} bytes, preview: ${preview}), dropping`,
         err,
       );
       return;
@@ -256,7 +256,7 @@ export class RpcConnection {
         break;
       default: {
         const _exhaustive: never = frame;
-        console.warn(`[less-sync] Unknown frame type: ${(_exhaustive as any).type}`);
+        console.warn(`[betterbase-sync] Unknown frame type: ${(_exhaustive as any).type}`);
       }
     }
   }
@@ -294,7 +294,7 @@ export class RpcConnection {
       try {
         handler(frame.params);
       } catch (err) {
-        console.error(`[less-sync] Notification handler "${frame.method}" threw:`, err);
+        console.error(`[betterbase-sync] Notification handler "${frame.method}" threw:`, err);
       }
     }
   }
@@ -374,7 +374,7 @@ export class RpcConnection {
 
   private registerPending(id: string, call: PendingCall): void {
     if (this.pending.has(id)) {
-      throw new Error(`[less-sync] duplicate pending request ID: ${id}`);
+      throw new Error(`[betterbase-sync] duplicate pending request ID: ${id}`);
     }
     this.pending.set(id, call);
   }

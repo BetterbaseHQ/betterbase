@@ -1,4 +1,4 @@
-/// Storage backend traits for less-db-rs.
+/// Storage backend traits for betterbase-db.
 ///
 /// `StorageBackend` is the narrow raw I/O trait implemented by concrete backends
 /// (e.g. SQLite, IndexedDB). Higher-level traits that use `CollectionDef` are

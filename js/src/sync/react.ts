@@ -390,14 +390,14 @@ export function LessProvider(props: LessProviderProps): ReactElement {
 
   // Surface session resolution errors via React Error Boundary.
   if (sessionResolveError) {
-    console.error("[less-sync] Session resolution failed:", sessionResolveError);
+    console.error("[betterbase-sync] Session resolution failed:", sessionResolveError);
     throw new Error(`LessProvider: session resolution failed: ${sessionResolveError}`);
   }
 
   // Warn if mixing session + explicit auth props (easy mistake, hard to debug)
   if (session && (props.keypair || props.getToken || props.personalSpaceId || props.handle)) {
     console.warn(
-      "[less-sync] LessProvider: explicit auth props (keypair, getToken, personalSpaceId, handle) " +
+      "[betterbase-sync] LessProvider: explicit auth props (keypair, getToken, personalSpaceId, handle) " +
         "override session-derived values. Remove them to use session defaults.",
     );
   }
@@ -577,7 +577,7 @@ function LessProviderInner(props: LessProviderInnerProps) {
       },
       (err) => {
         if (!cancelled) {
-          console.error("[less-sync] SyncEngine.create failed:", err);
+          console.error("[betterbase-sync] SyncEngine.create failed:", err);
         }
       },
     );
@@ -646,7 +646,7 @@ function LessProviderInner(props: LessProviderInnerProps) {
 
   const resubscribe = useCallback(() => {
     engineRef.current?.resubscribe().catch((err) => {
-      console.error("[less-sync] Failed to resubscribe:", err);
+      console.error("[betterbase-sync] Failed to resubscribe:", err);
     });
   }, []);
 

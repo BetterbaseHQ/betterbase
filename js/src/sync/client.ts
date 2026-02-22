@@ -1,5 +1,5 @@
 /**
- * SyncClient for auxiliary less-sync HTTP endpoints.
+ * SyncClient for auxiliary betterbase-sync HTTP endpoints.
  *
  * Provides auth headers and URL path construction for file HTTP endpoints.
  * All sync/DEK/membership operations use WebSocket RPC via WSClient.

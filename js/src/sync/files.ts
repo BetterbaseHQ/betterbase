@@ -1,5 +1,5 @@
 /**
- * Files client for the less-sync Files API.
+ * Files client for the betterbase-sync Files API.
  *
  * Provides encrypted file storage scoped to spaces, with envelope encryption
  * (per-file wrapped DEKs). Delegates auth to an existing SyncClient instance.
@@ -57,7 +57,7 @@ function parseWrappedDEKHeader(response: Response): Uint8Array {
 }
 
 /**
- * Client for the less-sync Files API.
+ * Client for the betterbase-sync Files API.
  *
  * Shares auth (including UCAN for shared spaces)
  * with the provided SyncClient instance.

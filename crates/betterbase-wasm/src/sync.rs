@@ -1,4 +1,4 @@
-//! WASM bindings for less-sync-core.
+//! WASM bindings for betterbase-sync-core.
 
 use crate::error::{to_js_error, to_js_value};
 use betterbase_sync_core::{

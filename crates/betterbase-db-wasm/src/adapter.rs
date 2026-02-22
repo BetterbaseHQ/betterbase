@@ -61,7 +61,7 @@ impl WasmDb {
 
         // Install the OPFS SAH Pool VFS (async — needs OPFS access handles)
         let cfg = OpfsSAHPoolCfg {
-            directory: format!(".less-db-{db_name}"),
+            directory: format!(".betterbase-db-{db_name}"),
             initial_capacity: 6,
             clear_on_init: false,
             ..Default::default()
@@ -129,7 +129,7 @@ impl WasmDb {
         use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfg};
 
         let cfg = OpfsSAHPoolCfg {
-            directory: format!(".less-db-{}", self.db_name),
+            directory: format!(".betterbase-db-{}", self.db_name),
             initial_capacity: 6,
             clear_on_init: false,
             ..Default::default()

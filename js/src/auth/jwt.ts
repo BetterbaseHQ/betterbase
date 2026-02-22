@@ -8,7 +8,7 @@ export function decodeJwtClaim(token: string, claim: string): string | undefined
     const value = claims[claim];
     return typeof value === "string" ? value : undefined;
   } catch (err) {
-    console.error("[less-auth] Failed to decode JWT claim:", err);
+    console.error("[betterbase-auth] Failed to decode JWT claim:", err);
     return undefined;
   }
 }

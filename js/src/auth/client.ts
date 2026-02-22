@@ -182,7 +182,7 @@ export class OAuthClient {
                 try {
                   result.mailboxId = deriveMailboxId(extracted.key, issuer, userId);
                 } catch (err) {
-                  console.error("[less-auth] Failed to derive mailbox ID:", err);
+                  console.error("[betterbase-auth] Failed to derive mailbox ID:", err);
                 }
               }
               await keyStore.importEncryptionKey(encKey);
@@ -213,7 +213,7 @@ export class OAuthClient {
       } else {
         const error = new Error("Missing ephemeral private key for JWE decryption");
         result.encryptionKeyError = error;
-        console.error("[less-auth] Failed to decrypt encryption key:", error.message);
+        console.error("[betterbase-auth] Failed to decrypt encryption key:", error.message);
       }
     }
 
@@ -242,11 +242,11 @@ export class OAuthClient {
             }
             result.expiresIn = refreshed.expires_in;
           } catch (err) {
-            console.error("[less-auth] Token refresh after mailbox registration failed:", err);
+            console.error("[betterbase-auth] Token refresh after mailbox registration failed:", err);
           }
         }
       } catch (err) {
-        console.error("[less-auth] Failed to register mailbox ID:", err);
+        console.error("[betterbase-auth] Failed to register mailbox ID:", err);
       }
     }
 

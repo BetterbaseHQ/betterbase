@@ -84,13 +84,13 @@ export class EventManager {
     this.config.encrypt(spaceId, encoded).then(
       (encrypted) => {
         if (!encrypted) {
-          console.warn(`[less-sync] Event "${name}" dropped for space ${spaceId}: key unavailable`);
+          console.warn(`[betterbase-sync] Event "${name}" dropped for space ${spaceId}: key unavailable`);
           return;
         }
         this.config.ws.sendEvent(spaceId, encrypted);
       },
       (err) => {
-        console.error(`[less-sync] Failed to encrypt event for space ${spaceId}:`, err);
+        console.error(`[betterbase-sync] Failed to encrypt event for space ${spaceId}:`, err);
       },
     );
   }

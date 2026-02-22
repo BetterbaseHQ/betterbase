@@ -1,4 +1,4 @@
-//! SQLite storage backend for less-db-rs.
+//! SQLite storage backend for betterbase-db.
 //!
 //! Implements `StorageBackend` using rusqlite (bundled). The connection is
 //! protected by a `parking_lot::ReentrantMutex<RefCell<Connection>>` so that

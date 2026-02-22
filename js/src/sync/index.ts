@@ -1,7 +1,7 @@
 /**
  * @betterbase/sdk/sync - WebSocket sync client + transport for @betterbase/sdk/db
  *
- * A sync client library for the less-sync server that implements
+ * A sync client library for the betterbase-sync server that implements
  * @betterbase/sdk/db's SyncTransport interface. Uses CBOR wire format
  * over WebSocket for real-time bidirectional sync.
  *

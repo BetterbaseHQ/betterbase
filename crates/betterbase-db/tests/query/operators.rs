@@ -1,4 +1,4 @@
-//! Tests for query operators — ported from less-db-js/tests/query/operators.test.ts
+//! Tests for query operators — ported from the JS reference implementation/tests/query/operators.test.ts
 
 use betterbase_db::error::{LessDbError, QueryError};
 use betterbase_db::query::operators::{

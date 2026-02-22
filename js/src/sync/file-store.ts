@@ -462,7 +462,7 @@ export class FileStore {
         return blob.data;
       }
     } catch (err) {
-      console.error("[less-sync] Cache read failed, falling through to network:", err);
+      console.error("[betterbase-sync] Cache read failed, falling through to network:", err);
     }
 
     if (!this.syncConfig) return null;
@@ -530,7 +530,7 @@ export class FileStore {
       this.notify();
       await this.fireQueueChange(db);
     } catch (err) {
-      console.error("[less-sync] Cache deletion failed:", err);
+      console.error("[betterbase-sync] Cache deletion failed:", err);
     }
   }
 
@@ -550,7 +550,7 @@ export class FileStore {
       const db = await this.dbPromise;
       return await metaHas(db, cacheKey(this.spaceId, id));
     } catch (err) {
-      console.error("[less-sync] Cache has() check failed:", err);
+      console.error("[betterbase-sync] Cache has() check failed:", err);
       return false;
     }
   }
@@ -601,7 +601,7 @@ export class FileStore {
       const allMeta = await metaGetAllForSpace(db, this.spaceId);
       return allMeta.filter((m) => m.uploadStatus !== undefined).map(toQueueEntry);
     } catch (err) {
-      console.error("[less-sync] Failed to get upload queue entries:", err);
+      console.error("[betterbase-sync] Failed to get upload queue entries:", err);
       return [];
     }
   }
@@ -651,7 +651,7 @@ export class FileStore {
       try {
         cb();
       } catch (err) {
-        console.error("[less-sync] FileStore subscriber threw:", err);
+        console.error("[betterbase-sync] FileStore subscriber threw:", err);
       }
     }
   }
@@ -809,7 +809,7 @@ export class FileStore {
       this.notify();
       this.onQueueChangeFn?.(entries);
     } catch (err) {
-      console.error("[less-sync] Failed to fire queue change notification:", err);
+      console.error("[betterbase-sync] Failed to fire queue change notification:", err);
     }
   }
 
@@ -904,7 +904,7 @@ export class FileStore {
         return metaPut(db, meta);
       })
       .catch((err) => {
-        console.error("[less-sync] Failed to update file access time:", err);
+        console.error("[betterbase-sync] Failed to update file access time:", err);
       });
   }
 
@@ -980,7 +980,7 @@ export class FileStore {
         maxBytes: this.maxCacheBytes,
       };
     } catch (err) {
-      console.error("[less-sync] Failed to get cache stats:", err);
+      console.error("[betterbase-sync] Failed to get cache stats:", err);
       return { totalBytes: 0, fileCount: 0, maxBytes: this.maxCacheBytes };
     }
   }

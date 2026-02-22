@@ -1,4 +1,4 @@
-//! WASM bindings for less-crypto.
+//! WASM bindings for betterbase-crypto.
 
 use crate::error::{to_js_error, to_js_value};
 use betterbase_crypto::{

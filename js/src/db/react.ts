@@ -1,10 +1,10 @@
 /**
- * React hooks for @less-platform/db.
+ * React hooks for @betterbase/sdk/db.
  *
  * Provides `useRecord` and `useQuery` hooks backed by `useSyncExternalStore`,
  * plus a context provider for threading OpfsDb through the tree.
  *
- * Import from "@less-platform/db/react".
+ * Import from "@betterbase/sdk/db/react".
  *
  * Both hooks return `undefined` on the initial render, then update
  * asynchronously once the subscription delivers the first value.

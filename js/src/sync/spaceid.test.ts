@@ -3,7 +3,7 @@ import { personalSpaceId } from "./spaceid.js";
 
 describe("personalSpaceId", () => {
   it("matches Go server known vector", async () => {
-    // Pinned in less-sync/spaceid/spaceid_test.go
+    // Pinned in betterbase-sync/spaceid/spaceid_test.go
     const id = await personalSpaceId(
       "https://accounts.betterbase.dev",
       "user-1",

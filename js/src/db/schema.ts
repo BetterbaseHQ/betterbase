@@ -1,8 +1,8 @@
 /**
- * Schema builder helpers — matches the original less-db-js `t` API.
+ * Schema builder helpers — matches the original betterbase-db `t` API.
  *
  * Usage:
- *   import { t } from "less-db-wasm";
+ *   import { t } from "@betterbase/sdk/db";
  *   const schema = { name: t.string(), age: t.optional(t.number()) };
  */
 

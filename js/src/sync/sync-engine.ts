@@ -294,7 +294,7 @@ export class SyncEngine {
         }
         // CryptoKey without deriveKey — should not happen in normal operation
         console.warn(
-          "[less-sync] CryptoKey epochKey set but no epochDeriveKey for channel key derivation",
+          "[betterbase-sync] CryptoKey epochKey set but no epochDeriveKey for channel key derivation",
         );
         return null;
       }
@@ -317,19 +317,19 @@ export class SyncEngine {
       onInvitation: () => {
         if (engine._disposed) return;
         spaceManager.checkInvitations(keypair.privateKeyJwk).catch((err) => {
-          console.error("[less-sync] Failed to check invitations on WS event:", err);
+          console.error("[betterbase-sync] Failed to check invitations on WS event:", err);
         });
       },
       onRevoked: (data) => {
         if (engine._disposed) return;
         spaceManager.handleRevocation(data.space).catch((err) => {
-          console.error(`[less-sync] Failed to handle revocation for space ${data.space}:`, err);
+          console.error(`[betterbase-sync] Failed to handle revocation for space ${data.space}:`, err);
         });
       },
       onPresence: (data: WSPresenceData) => {
         if (engine._disposed) return;
         pm.handlePresence(data.space, data.peer, data.data).catch((err) => {
-          console.error("[less-sync] Failed to handle presence:", err);
+          console.error("[betterbase-sync] Failed to handle presence:", err);
         });
       },
       onPresenceLeave: (data: WSPresenceLeaveData) => {
@@ -339,7 +339,7 @@ export class SyncEngine {
       onEvent: (data: WSEventData) => {
         if (engine._disposed) return;
         em.handleEvent(data.space, data.peer, data.data).catch((err) => {
-          console.error("[less-sync] Failed to handle event:", err);
+          console.error("[betterbase-sync] Failed to handle event:", err);
         });
       },
       onClose: (code) => {
@@ -364,19 +364,19 @@ export class SyncEngine {
           t.subscribe()
             .then(() => engine.scheduler?.flushAll())
             .catch((err) => {
-              console.error("[less-sync] Failed to sync after WS reconnect:", err);
+              console.error("[betterbase-sync] Failed to sync after WS reconnect:", err);
             });
         } else {
           engine.scheduler?.flushAll().catch((err) => {
-            console.error("[less-sync] Failed to sync after WS reconnect:", err);
+            console.error("[betterbase-sync] Failed to sync after WS reconnect:", err);
           });
         }
         fileStore.invalidate();
         fileStore.processQueue().catch((err) => {
-          console.error("[less-sync] Failed to process file queue on WS reconnect:", err);
+          console.error("[betterbase-sync] Failed to process file queue on WS reconnect:", err);
         });
         spaceManager.checkInvitations(keypair.privateKeyJwk).catch((err) => {
-          console.error("[less-sync] Failed to check invitations on WS reconnect:", err);
+          console.error("[betterbase-sync] Failed to check invitations on WS reconnect:", err);
         });
       },
     });
@@ -439,7 +439,7 @@ export class SyncEngine {
       presence: true,
       onInitialPeers: (spaceId, peers) => {
         pm.handleInitialPeers(spaceId, peers).catch((err) => {
-          console.error("[less-sync] Failed to handle initial peers:", err);
+          console.error("[betterbase-sync] Failed to handle initial peers:", err);
         });
       },
       onRotationError: (spaceId, error) => {
@@ -468,7 +468,7 @@ export class SyncEngine {
             .filter((v): v is string => typeof v === "string");
           if (fileIds.length > 0) {
             fileStore.evictAll(fileIds).catch((err) => {
-              console.warn("[less-sync] Auto file cleanup on remote delete failed:", err);
+              console.warn("[betterbase-sync] Auto file cleanup on remote delete failed:", err);
             });
           }
         }
@@ -531,7 +531,7 @@ export class SyncEngine {
           },
         })
         .catch((err) => {
-          console.error("[less-sync] FileStore connect failed:", err);
+          console.error("[betterbase-sync] FileStore connect failed:", err);
         });
     }
 
@@ -542,7 +542,7 @@ export class SyncEngine {
       await transport.connect();
       await scheduler.flushAll();
       spaceManager.checkInvitations(keypair.privateKeyJwk).catch((err) => {
-        console.error("[less-sync] Failed to check invitations during bootstrap:", err);
+        console.error("[betterbase-sync] Failed to check invitations during bootstrap:", err);
       });
       const activated = await spaceManager.initializeFromSpaces();
       if (activated > 0) {
@@ -553,7 +553,7 @@ export class SyncEngine {
       engine._bootstrapping = false;
       engine.dispatch({ type: "BOOTSTRAP_COMPLETE" });
       fileStore.processQueue().catch((err) => {
-        console.error("[less-sync] Failed to process file queue after bootstrap:", err);
+        console.error("[betterbase-sync] Failed to process file queue after bootstrap:", err);
       });
     } catch (err) {
       engine._bootstrapping = false;
@@ -576,7 +576,7 @@ export class SyncEngine {
       await this.scheduler.flushAll();
       this.dispatch({ type: "SYNC_COMPLETE" });
       this.fileStore.processQueue().catch((err) => {
-        console.error("[less-sync] Failed to process file queue after manual sync:", err);
+        console.error("[betterbase-sync] Failed to process file queue after manual sync:", err);
       });
     } catch (err) {
       if (err instanceof AuthenticationError) {
