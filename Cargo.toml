@@ -10,5 +10,12 @@ members = [
     "crates/betterbase-db-wasm",
 ]
 
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Betterbase <hello@betterbase.dev>"]
+repository = "https://github.com/BetterbaseHQ/betterbase"
+
 [patch.crates-io]
 sqlite-wasm-vfs = { path = "crates/sqlite-wasm-vfs" }

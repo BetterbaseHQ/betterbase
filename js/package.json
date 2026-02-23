@@ -1,7 +1,12 @@
 {
   "name": "@betterbase/sdk",
   "version": "0.1.0",
-  "description": "Betterbase SDK — crypto, auth, discovery, sync, and local-first DB",
+  "description": "Betterbase SDK — crypto, auth, discovery, sync, and local-first database for end-to-end encrypted apps",
+  "author": "Betterbase <hello@betterbase.dev>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BetterbaseHQ/betterbase"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
