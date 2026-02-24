@@ -98,7 +98,7 @@ fn canonical_json_value(value: &Value) -> String {
 
 /// Build the signing message for an edit entry.
 ///
-/// Format: `less:editlog:v1\0{collection}\0{recordId}\0{author}\0{timestamp}\0{prevHash}\0{diffsJson}`
+/// Format: `betterbase:editlog:v1\0{collection}\0{recordId}\0{author}\0{timestamp}\0{prevHash}\0{diffsJson}`
 pub fn build_edit_signing_message(
     collection: &str,
     record_id: &str,
@@ -131,7 +131,7 @@ pub fn build_edit_signing_message(
     let diffs_json = canonical_json(&Value::Array(normalized)).unwrap_or_else(|_| "[]".to_string());
 
     let message = format!(
-        "less:editlog:v1\0{}\0{}\0{}\0{}\0{}\0{}",
+        "betterbase:editlog:v1\0{}\0{}\0{}\0{}\0{}\0{}",
         collection,
         record_id,
         author,

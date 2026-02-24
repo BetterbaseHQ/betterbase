@@ -13,10 +13,10 @@
  *
  * @example
  * ```ts
- * import { createOpfsDb } from "betterbase-db-wasm";
+ * import { createDatabase } from "betterbase-db-wasm";
  * import { users } from "./collections.js";
  *
- * const db = await createOpfsDb("my-app", [users], {
+ * const db = await createDatabase("my-app", [users], {
  *   worker: new Worker(new URL("./my-db-worker.ts", import.meta.url), { type: "module" }),
  * });
  *
@@ -26,13 +26,13 @@
 
 import type { CollectionDefHandle } from "./types.js";
 import { WorkerRpc } from "./opfs/worker-rpc.js";
-import { OpfsDb } from "./opfs/OpfsDb.js";
+import { Database } from "./opfs/OpfsDb.js";
 import { TabCoordinator } from "./opfs/tab-coordinator.js";
 
-export interface CreateOpfsDbOptions {
+export interface CreateDatabaseOptions {
   /**
    * A pre-created Worker instance running the user's entry point
-   * (which calls `initOpfsWorker()`).
+   * (which calls `initWorker()`).
    *
    * Must use `{ type: "module" }` so ESM imports work.
    * Create it inline so bundlers can detect and process it:
@@ -46,7 +46,7 @@ export interface CreateOpfsDbOptions {
 /**
  * Create an OPFS-backed database running in a dedicated Web Worker.
  *
- * The worker must call `initOpfsWorker(collections)` — functions (migrations,
+ * The worker must call `initWorker(collections)` — functions (migrations,
  * computed indexes) live in the worker where they can execute directly.
  * The main thread passes collections for schema/type info only.
  *
@@ -54,20 +54,20 @@ export interface CreateOpfsDbOptions {
  * becomes the leader (owns SQLite), others proxy through BroadcastChannel.
  * If the leader tab closes, another is promoted automatically.
  */
-export async function createOpfsDb(
+export async function createDatabase(
   dbName: string,
   collections: CollectionDefHandle[],
-  options: CreateOpfsDbOptions,
-): Promise<OpfsDb> {
+  options: CreateDatabaseOptions,
+): Promise<Database> {
   // Check for Web Locks API (unavailable in SSR, old browsers, or some test envs)
   if (typeof navigator === "undefined" || !navigator.locks) {
     // Direct mode — single-tab, no coordination
     const rpc = new WorkerRpc(options.worker);
     await rpc.call("open", [dbName], 60_000);
-    return new OpfsDb(rpc, collections);
+    return new Database(rpc, collections);
   }
 
   // Multi-tab mode — leader election + query proxying
   const { rpc, close } = await TabCoordinator.create(dbName, options.worker);
-  return new OpfsDb(rpc, collections, close);
+  return new Database(rpc, collections, close);
 }

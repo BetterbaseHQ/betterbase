@@ -8,7 +8,7 @@ use sha2::Sha256;
 const MAILBOX_SALT: &[u8] = b"betterbase-mailbox-salt-v1";
 
 /// Info prefix for mailbox ID derivation; issuer and userId are appended.
-const MAILBOX_INFO_PREFIX: &str = "less:mailbox:v1\0";
+const MAILBOX_INFO_PREFIX: &str = "betterbase:mailbox:v1\0";
 
 /// Derive a deterministic mailbox ID from the encryption key.
 ///
@@ -111,7 +111,7 @@ mod tests {
         // Pin the actual value so regressions are caught
         assert_eq!(
             id,
-            "d8974543478862b9ca53868d1756c4a29a21213714b0127d89dbbf71efecbc7f"
+            "00919aec43bb3467a3fce316ff56e81abadf8705070badbf30a44bab5eb4929c"
         );
     }
 }

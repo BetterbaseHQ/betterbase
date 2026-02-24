@@ -1,9 +1,9 @@
 /**
- * @betterbase/sdk/crypto/internals — infrastructure for sync layer
+ * betterbase/crypto/internals — infrastructure for sync layer
  *
  * Low-level primitives used by the sync layer for DEK wrapping, channel keys,
  * UCAN authorization, signing, and raw encryption. App code should import from
- * "@betterbase/sdk/crypto" instead.
+ * "betterbase/crypto" instead.
  */
 
 // Base64url encoding

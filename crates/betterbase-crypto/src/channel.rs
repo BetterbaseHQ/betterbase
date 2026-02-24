@@ -1,15 +1,15 @@
 //! Channel key derivation for encrypted presence and events.
 //!
-//! channelKey = HKDF-SHA256(epochKey, salt="less:channel-salt:v1", info="less:channel:v1:{spaceId}")
+//! channelKey = HKDF-SHA256(epochKey, salt="betterbase:channel-salt:v1", info="betterbase:channel:v1:{spaceId}")
 
 use crate::error::CryptoError;
 use crate::hkdf::hkdf_derive;
 use crate::types::AES_KEY_LENGTH;
 
-const CHANNEL_SALT: &[u8] = b"less:channel-salt:v1";
-const CHANNEL_INFO_PREFIX: &str = "less:channel:v1:";
-const PRESENCE_AAD_PREFIX: &str = "less:presence:v1\0";
-const EVENT_AAD_PREFIX: &str = "less:event:v1\0";
+const CHANNEL_SALT: &[u8] = b"betterbase:channel-salt:v1";
+const CHANNEL_INFO_PREFIX: &str = "betterbase:channel:v1:";
+const PRESENCE_AAD_PREFIX: &str = "betterbase:presence:v1\0";
+const EVENT_AAD_PREFIX: &str = "betterbase:event:v1\0";
 
 /// Derive a channel key from an epoch key for a given space.
 pub fn derive_channel_key(
@@ -28,13 +28,13 @@ pub fn derive_channel_key(
 }
 
 /// Build AAD for presence encryption.
-/// Format: "less:presence:v1\0{spaceId}"
+/// Format: "betterbase:presence:v1\0{spaceId}"
 pub fn build_presence_aad(space_id: &str) -> Vec<u8> {
     format!("{}{}", PRESENCE_AAD_PREFIX, space_id).into_bytes()
 }
 
 /// Build AAD for event encryption.
-/// Format: "less:event:v1\0{spaceId}"
+/// Format: "betterbase:event:v1\0{spaceId}"
 pub fn build_event_aad(space_id: &str) -> Vec<u8> {
     format!("{}{}", EVENT_AAD_PREFIX, space_id).into_bytes()
 }
@@ -97,7 +97,7 @@ mod tests {
     fn presence_aad_format() {
         let aad = build_presence_aad("my-space");
         let text = String::from_utf8(aad).unwrap();
-        assert_eq!(text, "less:presence:v1\0my-space");
+        assert_eq!(text, "betterbase:presence:v1\0my-space");
     }
 
     #[test]
@@ -111,7 +111,7 @@ mod tests {
     fn event_aad_format() {
         let aad = build_event_aad("my-space");
         let text = String::from_utf8(aad).unwrap();
-        assert_eq!(text, "less:event:v1\0my-space");
+        assert_eq!(text, "betterbase:event:v1\0my-space");
     }
 
     #[test]

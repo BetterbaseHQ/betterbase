@@ -193,7 +193,7 @@ export async function webcryptoDeriveEpochKey(
  * Derive a channel key from a non-extractable HKDF CryptoKey.
  *
  * Matches the WASM `deriveChannelKey` implementation:
- * channelKey = HKDF-SHA256(epochKey, salt="less:channel-salt:v1", info="less:channel:v1:{spaceId}")
+ * channelKey = HKDF-SHA256(epochKey, salt="betterbase:channel-salt:v1", info="betterbase:channel:v1:{spaceId}")
  *
  * Returns raw bytes (channel keys are transient, used for AES-GCM encrypt/decrypt
  * in WASM and then discarded).
@@ -202,8 +202,8 @@ export async function webcryptoDeriveChannelKey(
   deriveKey: CryptoKey,
   spaceId: string,
 ): Promise<Uint8Array> {
-  const salt = new TextEncoder().encode("less:channel-salt:v1");
-  const info = new TextEncoder().encode(`less:channel:v1:${spaceId}`);
+  const salt = new TextEncoder().encode("betterbase:channel-salt:v1");
+  const info = new TextEncoder().encode(`betterbase:channel:v1:${spaceId}`);
 
   const bits = await crypto.subtle.deriveBits(
     { name: "HKDF", hash: "SHA-256", salt, info },

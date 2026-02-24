@@ -461,7 +461,7 @@ export interface ConflictEvent {
 // ============================================================================
 
 /**
- * Narrow interface for sync operations. OpfsDb satisfies this interface.
+ * Narrow interface for sync operations. Database satisfies this interface.
  */
 export interface SyncAdapter {
   getDirty(def: CollectionDefHandle): Promise<DirtyRecord[]>;

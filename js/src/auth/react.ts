@@ -1,7 +1,7 @@
 /**
  * React hooks for auth.
  *
- * Import from "@betterbase/sdk/auth/react".
+ * Import from "betterbase/auth/react".
  *
  * - `useAuthSession(client)` — manages the full OAuth lifecycle (callback, restore, refresh, logout)
  * - `useSessionToken(session)` — provides a **stable** `getToken` reference that never changes identity

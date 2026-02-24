@@ -1,13 +1,13 @@
 /**
- * @betterbase/sdk/db — WASM-powered local-first document store.
+ * betterbase/db — WASM-powered local-first document store.
  *
  * Uses SQLite WASM with OPFS persistence, running in a dedicated Web Worker.
  *
  * Usage:
- *   import { collection, t, createOpfsDb } from "@betterbase/sdk/db";
+ *   import { collection, t, createDatabase } from "betterbase/db";
  *   import { users } from "./collections.js";
  *
- *   const db = await createOpfsDb("my-app", [users], {
+ *   const db = await createDatabase("my-app", [users], {
  *     worker: new Worker(new URL("./my-db-worker.ts", import.meta.url), { type: "module" }),
  *   });
  *   const alice = await db.put(users, { name: "Alice", email: "alice@example.com" });
@@ -97,9 +97,9 @@ export { initWasm, setWasmForTesting } from "./wasm-init.js";
 export type { IndexOptions, ComputedOptions } from "./collection.js";
 
 // OPFS database
-export { OpfsDb } from "./opfs/OpfsDb.js";
-export { createOpfsDb } from "./createOpfsDb.js";
-export type { CreateOpfsDbOptions } from "./createOpfsDb.js";
+export { Database } from "./opfs/OpfsDb.js";
+export { createDatabase } from "./createOpfsDb.js";
+export type { CreateDatabaseOptions } from "./createOpfsDb.js";
 
 // Sync manager + scheduler
 export { SyncManager } from "./sync/sync-manager.js";
@@ -123,5 +123,5 @@ export type {
   QueryOptions as MiddlewareQueryOptions,
 } from "./middleware/types.js";
 
-// ReactiveAdapter alias (OpfsDb is the reactive adapter in this implementation)
-export type { OpfsDb as ReactiveAdapter } from "./opfs/OpfsDb.js";
+// ReactiveAdapter alias (Database is the reactive adapter in this implementation)
+export type { Database as ReactiveAdapter } from "./opfs/OpfsDb.js";

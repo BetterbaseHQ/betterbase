@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { OpfsDb } from "../../src/db/index.js";
+import type { Database } from "../../src/db/index.js";
 import {
   buildUsersCollection,
   openFreshOpfsDb,
@@ -9,7 +9,7 @@ import {
 
 describe("OPFS CRUD", () => {
   const users: UsersCollection = buildUsersCollection();
-  let db: OpfsDb;
+  let db: Database;
 
   beforeEach(async () => {
     ({ db } = await openFreshOpfsDb([users]));

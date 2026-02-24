@@ -9,6 +9,7 @@
  * Crypto operations use WASM for algorithms and Web Crypto for key protection.
  */
 
+import { initWasm } from "../wasm-init.js";
 import type { AuthResult, AuthSessionConfig, TokenResponse } from "./types.js";
 import { KeyStore } from "./key-store.js";
 import { hkdfDerive } from "./crypto.js";
@@ -48,7 +49,7 @@ interface SessionState {
 }
 
 const DEFAULT_BUFFER_SECONDS = 300; // 5 minutes
-const DEFAULT_STORAGE_PREFIX = "less_session_";
+const DEFAULT_STORAGE_PREFIX = "betterbase_session_";
 const MAX_RETRIES = 3;
 const BASE_RETRY_MS = 1000;
 
@@ -103,6 +104,7 @@ export class AuthSession {
     config: AuthSessionConfig,
     authResult: AuthResult,
   ): Promise<AuthSession> {
+    await initWasm();
     if (!authResult.accessToken || !authResult.refreshToken) {
       throw new TokenRefreshError(
         "AuthSession requires accessToken and refreshToken",

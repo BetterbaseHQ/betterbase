@@ -155,7 +155,7 @@ export function deriveMailboxId(
  * @returns Derived 32-byte key
  */
 export function hkdfDerive(ikm: Uint8Array, info: string): Uint8Array {
-  return ensureWasm().hkdfDerive(ikm, "less:key-separation:v1", info);
+  return ensureWasm().hkdfDerive(ikm, "betterbase:key-separation:v1", info);
 }
 
 /**

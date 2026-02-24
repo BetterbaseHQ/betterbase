@@ -6,9 +6,9 @@
  *
  * ```ts
  * // my-db-worker.ts
- * import { initOpfsWorker } from "betterbase-db-wasm/worker";
+ * import { initWorker } from "betterbase-db-wasm/worker";
  * import { users } from "./collections.js";
- * initOpfsWorker([users]);
+ * initWorker([users]);
  * ```
  *
  * The worker waits for an "open" request from the main thread with the
@@ -21,7 +21,7 @@ import { BLUEPRINT } from "../types.js";
 import type { MainToWorkerMessage, WorkerResponse } from "./types.js";
 import { OpfsWorkerHost } from "./OpfsWorkerHost.js";
 
-export function initOpfsWorker(collections: CollectionDefHandle[]): void {
+export function initWorker(collections: CollectionDefHandle[]): void {
   // We need to listen for an "open" message with the database name.
   // Once received, we initialize everything and switch to the OpfsWorkerHost handler.
   self.onmessage = async (ev: MessageEvent<MainToWorkerMessage>) => {
@@ -91,7 +91,7 @@ export function initOpfsWorker(collections: CollectionDefHandle[]): void {
 
       // Respond to the open request — this also signals ready.
       // (No separate "ready" message needed; the open response resolves the
-      // main thread's createOpfsDb promise.)
+      // main thread's createDatabase promise.)
       const response: WorkerResponse = {
         type: "response",
         id: requestId,

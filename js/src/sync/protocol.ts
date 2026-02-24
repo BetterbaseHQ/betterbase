@@ -1,9 +1,9 @@
 /**
- * @betterbase/sdk/sync/protocol — wire protocol internals
+ * betterbase/sync/protocol — wire protocol internals
  *
  * Low-level WebSocket RPC types, frame constants, and transport classes.
  * Only needed by custom transport builders or protocol debuggers.
- * App code should import from "@betterbase/sdk/sync" instead.
+ * App code should import from "betterbase/sync" instead.
  */
 
 // WebSocket RPC connection

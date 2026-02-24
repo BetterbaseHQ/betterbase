@@ -1,5 +1,5 @@
 /**
- * SyncTransport implementation that bridges @betterbase/sdk/db's sync system
+ * SyncTransport implementation that bridges betterbase/db's sync system
  * to the betterbase-sync server.
  *
  * Handles the blob envelope format for multi-collection support over our
@@ -10,7 +10,7 @@
  */
 
 import type {
-  SyncTransport,
+  SyncTransport as SyncTransportInterface,
   OutboundRecord,
   PushAck,
   PullResult,
@@ -96,7 +96,7 @@ export interface EditChainIdentity {
   publicKeyJwk: JsonWebKey;
 }
 
-export interface LessSyncTransportConfig {
+export interface SyncTransportConfig {
   /** Push function — sends encrypted changes to the server. */
   push: (changes: Change[]) => Promise<PushResult>;
   /** Space ID for AAD binding in encryption */
@@ -116,14 +116,14 @@ export interface LessSyncTransportConfig {
 }
 
 /**
- * Bridges @betterbase/sdk/db's SyncTransport interface to the betterbase-sync server.
+ * Bridges betterbase/db's SyncTransport interface to the betterbase-sync server.
  *
  * On push: OutboundRecord -> CRDT binary -> BlobEnvelope -> CBOR -> pad -> encrypt(DEK) -> Change{blob, dek}
  * On pull: Change{blob, dek} -> unwrap DEK -> decrypt(DEK) -> unpad -> CBOR -> BlobEnvelope -> RemoteRecord
  *
  * Pull accepts pre-pulled changes from the outer transport for decryption.
  */
-export class LessSyncTransport implements SyncTransport {
+export class SyncTransport implements SyncTransportInterface {
   private pushFn: (changes: Change[]) => Promise<PushResult>;
   private spaceId?: string;
   private paddingBuckets: number[];
@@ -151,7 +151,7 @@ export class LessSyncTransport implements SyncTransport {
   private prepulledChanges: Change[] | null = null;
   private prepulledSequence: number = 0;
 
-  constructor(config: LessSyncTransportConfig) {
+  constructor(config: SyncTransportConfig) {
     this.pushFn = config.push;
     this.spaceId = config.spaceId;
     this.paddingBuckets = config.paddingBuckets ?? [...DEFAULT_PADDING_BUCKETS];
@@ -171,7 +171,7 @@ export class LessSyncTransport implements SyncTransport {
 
     if (this.baseKek && !this.spaceId) {
       throw new Error(
-        "LessSyncTransport: spaceId is required when epochConfig is provided. " +
+        "SyncTransport: spaceId is required when epochConfig is provided. " +
           "AAD binding requires spaceId to prevent ciphertext relocation attacks.",
       );
     }
@@ -908,10 +908,10 @@ export class LessSyncTransport implements SyncTransport {
 
   private validateEpochDistance(dekEpoch: number): void {
     const distance = dekEpoch - this.baseEpoch;
-    if (distance > LessSyncTransport.MAX_EPOCH_ADVANCE) {
+    if (distance > SyncTransport.MAX_EPOCH_ADVANCE) {
       throw new Error(
         `Epoch ${dekEpoch} is too far ahead of base epoch ${this.baseEpoch} ` +
-          `(distance: ${distance}, max: ${LessSyncTransport.MAX_EPOCH_ADVANCE}). ` +
+          `(distance: ${distance}, max: ${SyncTransport.MAX_EPOCH_ADVANCE}). ` +
           `This may indicate a corrupted or malicious wrapped DEK.`,
       );
     }

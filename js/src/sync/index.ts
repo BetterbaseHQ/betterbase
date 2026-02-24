@@ -1,8 +1,8 @@
 /**
- * @betterbase/sdk/sync - WebSocket sync client + transport for @betterbase/sdk/db
+ * betterbase/sync - WebSocket sync client + transport for betterbase/db
  *
  * A sync client library for the betterbase-sync server that implements
- * @betterbase/sdk/db's SyncTransport interface. Uses CBOR wire format
+ * betterbase/db's SyncTransport interface. Uses CBOR wire format
  * over WebSocket for real-time bidirectional sync.
  *
  * Architecture:
@@ -34,11 +34,8 @@ export type {
 } from "./file-store.js";
 
 // Transport (per-space encryption layer)
-export { LessSyncTransport } from "./transport.js";
-export type {
-  LessSyncTransportConfig,
-  EditChainIdentity,
-} from "./transport.js";
+export { SyncTransport } from "./transport.js";
+export type { SyncTransportConfig, EditChainIdentity } from "./transport.js";
 
 // Types
 export type {

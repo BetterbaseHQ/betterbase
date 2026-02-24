@@ -1,8 +1,8 @@
 import {
   collection,
   t,
-  createOpfsDb,
-  type OpfsDb,
+  createDatabase,
+  type Database,
   type CollectionDefHandle,
 } from "../../src/db/index.js";
 
@@ -29,15 +29,15 @@ function createTestWorker(): Worker {
 export async function openFreshOpfsDb(
   collections: CollectionDefHandle[],
   prefix?: string,
-): Promise<{ db: OpfsDb; dbName: string }> {
+): Promise<{ db: Database; dbName: string }> {
   const dbName = uniqueOpfsDbName(prefix);
-  const db = await createOpfsDb(dbName, collections, {
+  const db = await createDatabase(dbName, collections, {
     worker: createTestWorker(),
   });
   return { db, dbName };
 }
 
-export async function cleanupOpfsDb(db: OpfsDb): Promise<void> {
+export async function cleanupOpfsDb(db: Database): Promise<void> {
   await db.close();
 }
 
@@ -48,8 +48,8 @@ export async function cleanupOpfsDb(db: OpfsDb): Promise<void> {
 export async function reopenOpfsDb(
   dbName: string,
   collections: CollectionDefHandle[],
-): Promise<OpfsDb> {
-  return createOpfsDb(dbName, collections, {
+): Promise<Database> {
+  return createDatabase(dbName, collections, {
     worker: createTestWorker(),
   });
 }

@@ -1,11 +1,11 @@
 /**
- * @betterbase/sdk/crypto - AES-256-GCM encryption using scoped keys
+ * betterbase/crypto - AES-256-GCM encryption using scoped keys
  *
  * A zero-dependency encryption library powered by WASM (Rust).
  *
  * @example
  * ```typescript
- * import { SyncCrypto, JsonCrypto } from '@betterbase/sdk/crypto'
+ * import { SyncCrypto, JsonCrypto } from 'betterbase/crypto'
  *
  * // Low-level byte encryption
  * const syncCrypto = new SyncCrypto(encryptionKey)

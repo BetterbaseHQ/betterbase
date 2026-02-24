@@ -111,7 +111,7 @@ export interface AuthSessionConfig {
   onExpired?: () => void;
   /** Seconds before token expiry to proactively refresh (default: 300 = 5 min) */
   refreshBufferSeconds?: number;
-  /** localStorage key prefix (default: "less_session_") */
+  /** localStorage key prefix (default: "betterbase_session_") */
   storagePrefix?: string;
 }
 

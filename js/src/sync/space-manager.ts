@@ -144,7 +144,7 @@ export class SpaceManager {
   /**
    * Inject or replace the WSClient instance.
    *
-   * Used by LessProvider to break the init cycle: SpaceManager is created
+   * Used by BetterbaseProvider to break the init cycle: SpaceManager is created
    * during render (before WebSocket connects), then the WSClient is set
    * once the sync effect fires.
    */

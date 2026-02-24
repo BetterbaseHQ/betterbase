@@ -25,7 +25,7 @@ export class JsonCrypto implements Disposable {
   /**
    * Create a new JsonCrypto instance.
    *
-   * @param key - 32-byte (256-bit) encryption key from @betterbase/sdk/auth
+   * @param key - 32-byte (256-bit) encryption key from betterbase/auth
    */
   constructor(key: Uint8Array) {
     this.crypto = new SyncCrypto(key);

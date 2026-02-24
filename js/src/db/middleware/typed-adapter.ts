@@ -1,5 +1,5 @@
 /**
- * TypedAdapter — a typed wrapper around OpfsDb that applies middleware.
+ * TypedAdapter — a typed wrapper around Database that applies middleware.
  *
  * Enriches reads via middleware.onRead(), processes write options via
  * middleware.onWrite(), and filters queries via middleware.onQuery().
@@ -10,7 +10,7 @@
  * observe/observeQuery enrichment.
  */
 
-import type { OpfsDb } from "../opfs/OpfsDb.js";
+import type { Database } from "../opfs/OpfsDb.js";
 import type {
   CollectionDefHandle,
   SchemaShape,
@@ -40,7 +40,7 @@ import type {
 import { META_KEY } from "../conversions.js";
 
 /**
- * A typed wrapper around OpfsDb that applies middleware to
+ * A typed wrapper around Database that applies middleware to
  * enrich records on read and process options on write/query.
  */
 export class TypedAdapter<
@@ -48,11 +48,11 @@ export class TypedAdapter<
   TWriteOpts extends WriteOptions = WriteOptions,
   TQueryOpts extends MiddlewareQueryOptions = MiddlewareQueryOptions,
 > {
-  readonly inner: OpfsDb;
+  readonly inner: Database;
   private readonly middleware: Middleware<TExtra, TWriteOpts, TQueryOpts>;
 
   constructor(
-    inner: OpfsDb,
+    inner: Database,
     middleware: Middleware<TExtra, TWriteOpts, TQueryOpts>,
   ) {
     this.inner = inner;

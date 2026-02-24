@@ -16,7 +16,7 @@
  * Encryption happens at upload time (not at queue time) because the
  * epoch key may rotate between queueing and actual upload.
  *
- * All spaces share a single IndexedDB database (`less-file-cache`) with
+ * All spaces share a single IndexedDB database (`betterbase-file-cache`) with
  * compound keys `[spaceId, fileId]` for isolation without per-space overhead.
  *
  * IDB schema: two stores for efficient metadata-only operations.
@@ -80,7 +80,7 @@ export interface UploadQueueEntry {
 
 /** Local-only configuration — no auth required. */
 export interface FileStoreConfig {
-  /** Override the shared IndexedDB name (default: "less-file-cache"). */
+  /** Override the shared IndexedDB name (default: "betterbase-file-cache"). */
   dbName?: string;
   /**
    * Max local cache size in bytes. Files awaiting upload are never evicted.
@@ -141,7 +141,7 @@ interface BlobEntry {
 // IndexedDB helpers — single shared database for all spaces
 // ---------------------------------------------------------------------------
 
-const IDB_NAME = "less-file-cache";
+const IDB_NAME = "betterbase-file-cache";
 const META_STORE = "meta";
 const BLOB_STORE = "blobs";
 const DEFAULT_SPACE_ID = "_";
@@ -331,7 +331,7 @@ export class FileStore {
     this.spaceId = config.spaceId;
 
     // Build forward-derivation chain for epoch key resolution on download.
-    // Unlike LessSyncTransport (which caches all intermediate epochs in a Map),
+    // Unlike SyncTransport (which caches all intermediate epochs in a Map),
     // FileStore uses a destructive linear advance: once epoch N+1 is derived,
     // epoch N cannot be re-derived. This is safe because FileStore is always
     // personal space — file DEKs arrive in monotonically non-decreasing epoch order.

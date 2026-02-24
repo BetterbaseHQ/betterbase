@@ -870,7 +870,7 @@ dependencies = [
 
 [[package]]
 name = "json-expression"
-version = "0.1.0"
+version = "0.18.0"
 dependencies = [
  "json-joy-json-pointer",
  "json-joy-util",
@@ -881,10 +881,10 @@ dependencies = [
 
 [[package]]
 name = "json-joy"
-version = "0.1.0"
+version = "0.18.0"
 dependencies = [
- "base64",
  "indexmap",
+ "json-joy-base64",
  "json-joy-buffers",
  "json-joy-json-pack",
  "json-joy-json-pointer",
@@ -898,15 +898,22 @@ dependencies = [
 
 [[package]]
 name = "json-joy-base64"
-version = "0.1.0"
+version = "0.18.0"
 
 [[package]]
 name = "json-joy-buffers"
-version = "0.1.0"
+version = "0.18.0"
+
+[[package]]
+name = "json-joy-json-equal"
+version = "0.18.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "json-joy-json-pack"
-version = "0.1.0"
+version = "0.18.0"
 dependencies = [
  "json-joy-base64",
  "json-joy-buffers",
@@ -916,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "json-joy-json-pointer"
-version = "0.1.0"
+version = "0.18.0"
 dependencies = [
  "serde_json",
  "thiserror",
@@ -924,7 +931,7 @@ dependencies = [
 
 [[package]]
 name = "json-joy-json-random"
-version = "0.1.0"
+version = "0.18.0"
 dependencies = [
  "json-joy-util",
  "rand",
@@ -933,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "json-joy-json-type"
-version = "0.1.0"
+version = "0.18.0"
 dependencies = [
  "json-expression",
  "json-joy-buffers",
@@ -947,9 +954,10 @@ dependencies = [
 
 [[package]]
 name = "json-joy-util"
-version = "0.1.0"
+version = "0.18.0"
 dependencies = [
  "json-joy-buffers",
+ "json-joy-json-equal",
  "rand",
  "rand_xoshiro",
  "serde",
@@ -1539,7 +1547,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "sonic-forest"
-version = "0.1.0"
+version = "0.18.0"
 
 [[package]]
 name = "spki"

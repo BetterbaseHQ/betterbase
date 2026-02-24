@@ -1,5 +1,5 @@
 /**
- * Spaces middleware for @betterbase/sdk/db.
+ * Spaces middleware for betterbase/db.
  *
  * Attaches `_spaceId` to every record on read, routes writes to the correct
  * space based on `{ sameSpaceAs: record }` or `{ space: "..." }` options, and

@@ -278,7 +278,7 @@ export async function initWasm(): Promise<WasmModule> {
 export function ensureWasm(): WasmModule {
   if (!wasmModule) {
     throw new Error(
-      "WASM module not initialized. Call `await initWasm()` first.",
+      "WASM module not initialized. This should not happen — please report this bug.",
     );
   }
   return wasmModule;

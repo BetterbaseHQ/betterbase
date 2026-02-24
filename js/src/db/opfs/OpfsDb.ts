@@ -1,5 +1,5 @@
 /**
- * OpfsDb — main-thread async proxy for the OPFS SQLite worker.
+ * Database — main-thread async proxy for the OPFS SQLite worker.
  *
  * Main-thread async proxy for the OPFS SQLite worker. All methods return Promises since
  * they cross a worker boundary via postMessage. Data serialization and
@@ -34,7 +34,7 @@ import type {
 import { serializeForRust, deserializeFromRust } from "../conversions.js";
 import type { RpcClient } from "./worker-rpc.js";
 
-export class OpfsDb {
+export class Database {
   private rpc: RpcClient;
   private closeFn: (() => Promise<void>) | null;
   private unloadHandler: (() => void) | null = null;

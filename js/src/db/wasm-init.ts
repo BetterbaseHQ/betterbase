@@ -1,7 +1,7 @@
 /**
  * WASM module singleton — lazy-loaded, idempotent initialization.
  *
- * Application code calls `initWasm()` once (or lets `createOpfsDb()` handle it).
+ * Application code calls `initWasm()` once (or lets `createDatabase()` handle it).
  * Internal code calls `ensureWasm()` to get the module synchronously.
  * Tests call `setWasmForTesting()` to inject mocks.
  */
@@ -119,7 +119,7 @@ export async function initWasm(): Promise<WasmModule> {
 export function ensureWasm(): WasmModule {
   if (!wasmModule) {
     throw new Error(
-      "WASM module not initialized. Call `await initWasm()` or use `await createOpfsDb(...)` before accessing the database.",
+      "WASM module not initialized. Call `await initWasm()` or use `await createDatabase(...)` before accessing the database.",
     );
   }
   return wasmModule;

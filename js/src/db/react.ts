@@ -1,10 +1,10 @@
 /**
- * React hooks for @betterbase/sdk/db.
+ * React hooks for betterbase/db.
  *
  * Provides `useRecord` and `useQuery` hooks backed by `useSyncExternalStore`,
- * plus a context provider for threading OpfsDb through the tree.
+ * plus a context provider for threading Database through the tree.
  *
- * Import from "@betterbase/sdk/db/react".
+ * Import from "betterbase/db/react".
  *
  * Both hooks return `undefined` on the initial render, then update
  * asynchronously once the subscription delivers the first value.
@@ -18,7 +18,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import type { OpfsDb } from "./opfs/OpfsDb.js";
+import type { Database } from "./opfs/OpfsDb.js";
 import type {
   CollectionDefHandle,
   SchemaShape,
@@ -47,30 +47,30 @@ function stableStringify(value: unknown): string {
 // Context
 // ---------------------------------------------------------------------------
 
-const LessDBContext = createContext<OpfsDb | null>(null);
+const DatabaseContext = createContext<Database | null>(null);
 
 /**
- * React context provider for OpfsDb.
- * Wrap your app (or subtree) to make `useLessDB()`, `useRecord()`, and `useQuery()` available.
+ * React context provider for Database.
+ * Wrap your app (or subtree) to make `useDatabase()`, `useRecord()`, and `useQuery()` available.
  */
-export function LessDBProvider({
+export function DatabaseProvider({
   value,
   children,
 }: {
-  value: OpfsDb;
+  value: Database;
   children: ReactNode;
 }) {
-  return createElement(LessDBContext.Provider, { value }, children);
+  return createElement(DatabaseContext.Provider, { value }, children);
 }
 
 /**
- * Access the OpfsDb from context.
- * @throws Error if no `LessDBProvider` is found in the component tree.
+ * Access the Database from context.
+ * @throws Error if no `DatabaseProvider` is found in the component tree.
  */
-export function useLessDB(): OpfsDb {
-  const db = useContext(LessDBContext);
+export function useDatabase(): Database {
+  const db = useContext(DatabaseContext);
   if (!db) {
-    throw new Error("useLessDB: no LessDBProvider found in component tree");
+    throw new Error("useDatabase: no DatabaseProvider found in component tree");
   }
   return db;
 }
@@ -125,7 +125,7 @@ export function useRecord<S extends SchemaShape>(
   id: string | undefined,
   options?: ObserveOptions,
 ): CollectionRead<S> | undefined {
-  const db = useLessDB();
+  const db = useDatabase();
   const snapshotRef = useRef<CollectionRead<S> | undefined>(undefined);
 
   const onErrorRef = useRef(options?.onError);
@@ -176,7 +176,7 @@ export function useQuery<S extends SchemaShape>(
 ): QueryResult<CollectionRead<S>> | undefined {
   type QR = QueryResult<CollectionRead<S>>;
 
-  const db = useLessDB();
+  const db = useDatabase();
   const snapshotRef = useRef<QR | undefined>(undefined);
 
   const onErrorRef = useRef(options?.onError);

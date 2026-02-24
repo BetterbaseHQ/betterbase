@@ -12,6 +12,7 @@
  * React's `useSyncExternalStore` and similar reactive primitives.
  */
 
+import { initWasm } from "../wasm-init.js";
 import { SyncClient, AuthenticationError } from "./client.js";
 import { FilesClient } from "./files.js";
 import { FileStore } from "./file-store.js";
@@ -55,7 +56,7 @@ import {
   SyncManager,
   SyncScheduler,
   TypedAdapter,
-  type OpfsDb,
+  type Database,
   type CollectionDef,
   type SyncManagerOptions,
   type RemoteDeleteEvent,
@@ -66,8 +67,8 @@ import {
 // ---------------------------------------------------------------------------
 
 export interface SyncEngineConfig {
-  /** OpfsDb instance (created via createOpfsDb). */
-  adapter: OpfsDb;
+  /** Database instance (created via createDatabase). */
+  adapter: Database;
   /** App collections to sync. */
   collections: CollectionDef[];
   /** The user's personal space ID. */
@@ -213,6 +214,7 @@ export class SyncEngine {
    * 8. Connect → flush → initializeFromSpaces → subscribe → flush
    */
   static async create(config: SyncEngineConfig): Promise<SyncEngine> {
+    await initWasm();
     const engine = new SyncEngine();
 
     // Store mutable callbacks

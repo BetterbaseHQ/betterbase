@@ -1,7 +1,7 @@
 /**
  * Multi-tab browser tests.
  *
- * Uses multiple createOpfsDb() calls with separate Workers to simulate
+ * Uses multiple createDatabase() calls with separate Workers to simulate
  * multiple tabs. Since all calls share the same origin, they share
  * Web Locks, BroadcastChannel, and OPFS — exactly like real tabs.
  *
@@ -10,12 +10,12 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 import type {
-  OpfsDb,
+  Database,
   ChangeEvent,
   QueryResult,
   CollectionRead,
 } from "../../src/db/index.js";
-import { createOpfsDb } from "../../src/db/index.js";
+import { createDatabase } from "../../src/db/index.js";
 import {
   buildUsersCollection,
   uniqueOpfsDbName,
@@ -80,7 +80,7 @@ function waitFor(
 }
 
 // Track all opened dbs for cleanup
-const openDbs: OpfsDb[] = [];
+const openDbs: Database[] = [];
 
 afterEach(async () => {
   // Close in reverse order (follower first, then leader)
@@ -95,15 +95,15 @@ afterEach(async () => {
   await new Promise((r) => setTimeout(r, LOCK_RELEASE_MS));
 });
 
-async function openTab(dbName: string): Promise<OpfsDb> {
-  const db = await createOpfsDb(dbName, [users], {
+async function openTab(dbName: string): Promise<Database> {
+  const db = await createDatabase(dbName, [users], {
     worker: createTestWorker(),
   });
   openDbs.push(db);
   return db;
 }
 
-function removeFromCleanup(db: OpfsDb): void {
+function removeFromCleanup(db: Database): void {
   const idx = openDbs.indexOf(db);
   if (idx >= 0) openDbs.splice(idx, 1);
 }

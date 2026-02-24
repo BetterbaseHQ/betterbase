@@ -19,7 +19,7 @@ import {
   importEpochDeriveKey,
 } from "../crypto/webcrypto.js";
 
-const DB_NAME = "less-key-store";
+const DB_NAME = "betterbase-key-store";
 const DB_VERSION = 2;
 const STORE_NAME = "keys";
 

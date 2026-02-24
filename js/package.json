@@ -1,5 +1,5 @@
 {
-  "name": "@betterbase/sdk",
+  "name": "betterbase",
   "version": "0.1.0",
   "description": "Betterbase SDK — crypto, auth, discovery, sync, and local-first database for end-to-end encrypted apps",
   "author": "Betterbase <hello@betterbase.dev>",

@@ -1,7 +1,7 @@
 /**
  * Epoch rotation integration tests.
  *
- * Tests both the low-level crypto primitives and the LessSyncTransport class
+ * Tests both the low-level crypto primitives and the SyncTransport class
  * to verify correct behavior when SpaceManager.updateLocalEpochState() zeros
  * old key material in-place.
  *
@@ -25,7 +25,7 @@ import { initWasm } from "../../src/wasm-init.js";
 import { generateDEK, wrapDEK, unwrapDEK } from "../../src/crypto/dek.js";
 import { deriveNextEpochKey } from "../../src/crypto/epoch.js";
 import { encryptV4, decryptV4 } from "../../src/crypto/sync-crypto.js";
-import { LessSyncTransport } from "../../src/sync/transport.js";
+import { SyncTransport } from "../../src/sync/transport.js";
 import type { Change } from "../../src/sync/types.js";
 import { cborEncode } from "../../src/sync/cbor.js";
 
@@ -121,7 +121,7 @@ describe("Epoch rotation — low-level crypto (browser)", () => {
   });
 });
 
-describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
+describe("Epoch rotation — SyncTransport integration (browser)", () => {
   beforeAll(async () => {
     await initWasm();
   });
@@ -175,7 +175,7 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     const key = randomKey();
     const originalBytes = new Uint8Array(key); // save for comparison
 
-    const transport = new LessSyncTransport({
+    const transport = new SyncTransport({
       push: async () => ({ ok: true, sequence: 0 }),
       spaceId,
       epochConfig: { epoch: 1, epochKey: key },
@@ -193,7 +193,7 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     const key = randomKey();
     const { pushFn, pushed } = capturePush();
 
-    const transport = new LessSyncTransport({
+    const transport = new SyncTransport({
       push: pushFn,
       spaceId,
       epochConfig: { epoch: 1, epochKey: key },
@@ -235,7 +235,7 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     const epoch1Key = randomKey();
     const epoch2Key = deriveNextEpochKey(epoch1Key, spaceId, 2);
 
-    const transport = new LessSyncTransport({
+    const transport = new SyncTransport({
       push: async () => ({ ok: true, sequence: 0 }),
       spaceId,
       epochConfig: { epoch: 1, epochKey: epoch1Key },
@@ -261,7 +261,7 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
   it("transport decrypts after SpaceManager zeros the original key", async () => {
     const smKey = randomKey(); // SpaceManager's key reference
 
-    const transport = new LessSyncTransport({
+    const transport = new SyncTransport({
       push: async () => ({ ok: true, sequence: 0 }),
       spaceId,
       epochConfig: { epoch: 1, epochKey: smKey },
@@ -292,7 +292,7 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     const smKey = randomKey();
     const epoch2Key = deriveNextEpochKey(smKey, spaceId, 2);
 
-    const transport = new LessSyncTransport({
+    const transport = new SyncTransport({
       push: async () => ({ ok: true, sequence: 0 }),
       spaceId,
       epochConfig: { epoch: 1, epochKey: smKey },
@@ -322,7 +322,7 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     const epoch1Key = randomKey();
     const { pushFn, pushed } = capturePush();
 
-    const transport = new LessSyncTransport({
+    const transport = new SyncTransport({
       push: pushFn,
       spaceId,
       epochConfig: { epoch: 1, epochKey: epoch1Key },
@@ -355,7 +355,7 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     const smKey = randomKey();
     const epoch2Key = deriveNextEpochKey(smKey, spaceId, 2);
 
-    const transport = new LessSyncTransport({
+    const transport = new SyncTransport({
       push: async () => ({ ok: true, sequence: 0 }),
       spaceId,
       epochConfig: { epoch: 1, epochKey: smKey },
@@ -394,7 +394,7 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     // recreated with a new base of epoch 2 — it keeps base epoch 1 and derives.
     const epoch1Key = randomKey();
 
-    const transport = new LessSyncTransport({
+    const transport = new SyncTransport({
       push: async () => ({ ok: true, sequence: 0 }),
       spaceId,
       epochConfig: { epoch: 1, epochKey: epoch1Key },
@@ -430,7 +430,7 @@ describe("Epoch rotation — LessSyncTransport integration (browser)", () => {
     const epoch2Key = deriveNextEpochKey(epoch1Key, spaceId, 2);
     const epoch3Key = deriveNextEpochKey(epoch2Key, spaceId, 3);
 
-    const transport = new LessSyncTransport({
+    const transport = new SyncTransport({
       push: async () => ({ ok: true, sequence: 0 }),
       spaceId,
       epochConfig: { epoch: 1, epochKey: epoch1Key },

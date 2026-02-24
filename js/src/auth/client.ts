@@ -2,6 +2,7 @@
  * OAuth 2.0 client with PKCE and scoped key delivery.
  */
 
+import { initWasm } from "../wasm-init.js";
 import type { OAuthConfig, AuthResult, TokenResponse } from "./types.js";
 import { STORAGE_KEYS } from "./types.js";
 import {
@@ -58,6 +59,7 @@ export class OAuthClient {
    * State is stored in sessionStorage for the callback.
    */
   async startAuth(): Promise<void> {
+    await initWasm();
     const codeVerifier = generateCodeVerifier();
     const state = generateState();
 
@@ -119,6 +121,7 @@ export class OAuthClient {
    * On success, returns the auth result with tokens and optional encryption key.
    */
   async handleCallback(): Promise<AuthResult | null> {
+    await initWasm();
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
     const state = params.get("state");

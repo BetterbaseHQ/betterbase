@@ -5,7 +5,7 @@
  * channel messages (presence data, ephemeral events). This key is
  * distinct from the KEK used for sync DEKs.
  *
- * channelKey = HKDF-SHA256(epochKey, salt="less:channel-salt:v1", info="less:channel:v1:{spaceId}")
+ * channelKey = HKDF-SHA256(epochKey, salt="betterbase:channel-salt:v1", info="betterbase:channel:v1:{spaceId}")
  */
 
 import { ensureWasm } from "../wasm-init.js";
@@ -26,7 +26,7 @@ export function deriveChannelKey(
 
 /**
  * Build AAD (Additional Authenticated Data) for presence encryption.
- * Format: "less:presence:v1\0{spaceId}"
+ * Format: "betterbase:presence:v1\0{spaceId}"
  */
 export function buildPresenceAAD(spaceId: string): Uint8Array {
   return ensureWasm().buildPresenceAad(spaceId);
@@ -34,7 +34,7 @@ export function buildPresenceAAD(spaceId: string): Uint8Array {
 
 /**
  * Build AAD for event encryption.
- * Format: "less:event:v1\0{spaceId}"
+ * Format: "betterbase:event:v1\0{spaceId}"
  */
 export function buildEventAAD(spaceId: string): Uint8Array {
   return ensureWasm().buildEventAad(spaceId);

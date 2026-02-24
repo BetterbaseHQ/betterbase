@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { OpfsDb, ChangeEvent } from "../../src/db/index.js";
+import type { Database, ChangeEvent } from "../../src/db/index.js";
 import {
   buildUsersCollection,
   openFreshOpfsDb,
@@ -30,7 +30,7 @@ function waitFor(
 
 describe("OPFS reactive", () => {
   const users: UsersCollection = buildUsersCollection();
-  let db: OpfsDb;
+  let db: Database;
 
   beforeEach(async () => {
     ({ db } = await openFreshOpfsDb([users]));

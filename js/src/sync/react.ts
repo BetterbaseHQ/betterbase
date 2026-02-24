@@ -1,9 +1,9 @@
 /**
- * React hooks for @betterbase/sdk/sync.
+ * React hooks for betterbase/sync.
  *
- * Import from "@betterbase/sdk/sync/react".
+ * Import from "betterbase/sync/react".
  *
- * `LessProvider` + `useSpaces()` + `useQuery()` / `useRecord()` provide
+ * `BetterbaseProvider` + `useSpaces()` + `useQuery()` / `useRecord()` provide
  * multi-space sync with space-aware queries and SpaceManager actions.
  * Personal-space is just multi-space with zero shared spaces.
  */
@@ -52,7 +52,7 @@ import { stableStringify } from "./stable-stringify.js";
 import { SyncEngine } from "./sync-engine.js";
 import {
   TypedAdapter,
-  type OpfsDb,
+  type Database,
   type CollectionDefHandle,
   type CollectionDef,
   type CollectionRead,
@@ -63,7 +63,7 @@ import {
   type QueryResult,
 } from "../db";
 import {
-  LessDBProvider,
+  DatabaseProvider,
   SyncStatusContext,
   type SyncStatusState,
   type SyncPhase,
@@ -78,23 +78,23 @@ export type { SyncPhase };
 export type FileStatus = "idle" | "loading" | "ready" | "error" | "unavailable";
 
 // ---------------------------------------------------------------------------
-// LessSession — structural interface satisfied by AuthSession
+// Session — structural interface satisfied by AuthSession
 // ---------------------------------------------------------------------------
 
 /**
- * Session interface that auto-derives LessProvider props.
+ * Session interface that auto-derives BetterbaseProvider props.
  *
- * Structurally compatible with `AuthSession` from `@betterbase/sdk/auth` —
+ * Structurally compatible with `AuthSession` from `betterbase/auth` —
  * no import needed, TypeScript's structural typing handles the match.
  */
-export interface LessSession {
+export interface Session {
   getToken(): Promise<string | null>;
   getPersonalSpaceId(): string | null;
   getHandle(): string | null;
   /**
    * Current epoch number for forward secrecy.
    * Returns `undefined` for new sessions before `updateEpoch` is called.
-   * LessProvider defaults to epoch 0 when undefined — the initial epoch key
+   * BetterbaseProvider defaults to epoch 0 when undefined — the initial epoch key
    * delivered at login IS the epoch-0 key (HKDF-derived from the root export key).
    */
   getEpoch(): number | undefined;
@@ -116,23 +116,23 @@ export interface LessSession {
 }
 
 // ===========================================================================
-// Multi-space: LessProvider + useSpaces + space-aware hooks
+// Multi-space: BetterbaseProvider + useSpaces + space-aware hooks
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
-// LessProvider types
+// BetterbaseProvider types
 // ---------------------------------------------------------------------------
 
-export interface LessProviderProps {
-  /** OpfsDb instance (stable reference, e.g. module-level singleton). */
-  adapter: OpfsDb;
+export interface BetterbaseProviderProps {
+  /** Database instance (stable reference, e.g. module-level singleton). */
+  adapter: Database;
   /** App collections to sync. Must be a stable reference. */
   collections: CollectionDef[];
   /**
    * Auth session that auto-derives keypair, personalSpaceId, handle, getToken,
    * and epoch fields. Eliminates most boilerplate. Explicit props override session.
    */
-  session?: LessSession;
+  session?: Session;
   /** P-256 signing keypair as JWK pair (from auth scoped keys). Required unless `session` is provided. */
   keypair?: { privateKeyJwk: JsonWebKey; publicKeyJwk: JsonWebKey };
   /** The user's personal space ID. Required unless `session` is provided. */
@@ -178,10 +178,10 @@ export interface LessProviderProps {
   maxCacheBytes?: number;
   /**
    * Pre-created FileStore instance for local-first file caching.
-   * When provided, LessProvider calls `connect()` when auth resolves and
+   * When provided, BetterbaseProvider calls `connect()` when auth resolves and
    * `disconnect()` on unmount or epoch change. This allows the FileStore
    * to work before auth (local cache only) and progressively upgrade to sync.
-   * If omitted, LessProvider creates one internally.
+   * If omitted, BetterbaseProvider creates one internally.
    */
   fileStore?: FileStore;
   /**
@@ -193,7 +193,7 @@ export interface LessProviderProps {
   children: ReactNode;
 }
 
-interface LessContextValue {
+interface BetterbaseContextValue {
   db: TypedAdapter<SpaceFields, SpaceWriteOptions, SpaceQueryOptions>;
   files: FilesClient;
   spaceManager: SpaceManager;
@@ -230,17 +230,17 @@ const FileStoreContext = createContext<FileStoreContextValue | null>(null);
 // Context
 // ---------------------------------------------------------------------------
 
-const LessContext = createContext<LessContextValue | null>(null);
+const BetterbaseContext = createContext<BetterbaseContextValue | null>(null);
 
 /**
- * Context for sync readiness — always provided by LessProvider.
+ * Context for sync readiness — always provided by BetterbaseProvider.
  * `false` until the full sync infrastructure (session, adapter, WS) is ready;
- * `true` once `LessContext` is populated.
+ * `true` once `BetterbaseContext` is populated.
  */
 const SyncReadyContext = createContext<boolean>(false);
 
 // ---------------------------------------------------------------------------
-// LessProvider
+// BetterbaseProvider
 // ---------------------------------------------------------------------------
 
 /**
@@ -260,7 +260,9 @@ const SyncReadyContext = createContext<boolean>(false);
  * @throws Error if `session` is provided but async field resolution fails.
  *   Wrap in an Error Boundary to handle gracefully.
  */
-export function LessProvider(props: LessProviderProps): ReactElement {
+export function BetterbaseProvider(
+  props: BetterbaseProviderProps,
+): ReactElement {
   const {
     adapter,
     collections,
@@ -410,7 +412,7 @@ export function LessProvider(props: LessProviderProps): ReactElement {
   // Surface discovery errors
   if (discoveryError) {
     throw new Error(
-      `LessProvider: discovery failed for "${domain}": ${discoveryError}`,
+      `BetterbaseProvider: discovery failed for "${domain}": ${discoveryError}`,
     );
   }
 
@@ -421,7 +423,7 @@ export function LessProvider(props: LessProviderProps): ReactElement {
       sessionResolveError,
     );
     throw new Error(
-      `LessProvider: session resolution failed: ${sessionResolveError}`,
+      `BetterbaseProvider: session resolution failed: ${sessionResolveError}`,
     );
   }
 
@@ -431,7 +433,7 @@ export function LessProvider(props: LessProviderProps): ReactElement {
     (props.keypair || props.getToken || props.personalSpaceId || props.handle)
   ) {
     console.warn(
-      "[betterbase-sync] LessProvider: explicit auth props (keypair, getToken, personalSpaceId, handle) " +
+      "[betterbase-sync] BetterbaseProvider: explicit auth props (keypair, getToken, personalSpaceId, handle) " +
         "override session-derived values. Remove them to use session defaults.",
     );
   }
@@ -467,7 +469,7 @@ export function LessProvider(props: LessProviderProps): ReactElement {
   // Wait for discovery when domain is provided
   const discoveryResolved = !domain || !!metadata;
 
-  // Always render LessProviderInner — it provides a stable tree structure.
+  // Always render BetterbaseProviderInner — it provides a stable tree structure.
   // Session-dependent fields are passed as optional; Inner gates sync setup
   // on their availability.
   const canActivate = ready && discoveryResolved;
@@ -475,7 +477,7 @@ export function LessProvider(props: LessProviderProps): ReactElement {
   return createElement(
     FileStoreContext.Provider,
     { value: fileStoreContextValue },
-    createElement(LessProviderInner, {
+    createElement(BetterbaseProviderInner, {
       ...props,
       keypair: canActivate ? (keypair ?? undefined) : undefined,
       personalSpaceId: canActivate ? personalSpaceId : undefined,
@@ -508,8 +510,8 @@ export function LessProvider(props: LessProviderProps): ReactElement {
  * Sync infrastructure only activates once all required fields are present.
  * The tree structure is always stable (children always render).
  */
-interface LessProviderInnerProps extends Omit<
-  LessProviderProps,
+interface BetterbaseProviderInnerProps extends Omit<
+  BetterbaseProviderProps,
   "keypair" | "personalSpaceId" | "handle" | "getToken" | "epochKey" | "domain"
 > {
   keypair?: { privateKeyJwk: JsonWebKey; publicKeyJwk: JsonWebKey };
@@ -522,7 +524,7 @@ interface LessProviderInnerProps extends Omit<
   syncBaseUrl: string;
   /** Resolved accounts server base URL. */
   accountsBaseUrl: string;
-  /** FileStore instance (always provided by outer LessProvider). */
+  /** FileStore instance (always provided by outer BetterbaseProvider). */
   fileStore: FileStore;
 }
 
@@ -531,7 +533,7 @@ const noopSubscribe = () => () => {};
 /** Stable initial snapshot for useSyncExternalStore. */
 const initialSnapshot = () => initialSyncState;
 
-function LessProviderInner(props: LessProviderInnerProps) {
+function BetterbaseProviderInner(props: BetterbaseProviderInnerProps) {
   const {
     adapter,
     collections,
@@ -691,7 +693,7 @@ function LessProviderInner(props: LessProviderInnerProps) {
     });
   }, []);
 
-  const contextValue = useMemo<LessContextValue | null>(
+  const contextValue = useMemo<BetterbaseContextValue | null>(
     () =>
       engine
         ? {
@@ -733,7 +735,9 @@ function LessProviderInner(props: LessProviderInnerProps) {
 
   // Surface initialization errors via React Error Boundary
   if (syncState.error && !contextValue) {
-    throw new Error(`LessProvider initialization failed: ${syncState.error}`);
+    throw new Error(
+      `BetterbaseProvider initialization failed: ${syncState.error}`,
+    );
   }
 
   // Sync is ready when the engine exists (adapter initialized + bootstrap started)
@@ -745,7 +749,7 @@ function LessProviderInner(props: LessProviderInnerProps) {
     SyncReadyContext.Provider,
     { value: syncReady },
     createElement(
-      LessContext.Provider,
+      BetterbaseContext.Provider,
       { value: contextValue },
       createElement(
         SyncStatusContext.Provider,
@@ -755,7 +759,10 @@ function LessProviderInner(props: LessProviderInnerProps) {
     ),
   );
 
-  return createElement(LessDBProvider, { value: adapter, children: innerTree });
+  return createElement(DatabaseProvider, {
+    value: adapter,
+    children: innerTree,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -770,7 +777,7 @@ function LessProviderInner(props: LessProviderInnerProps) {
  * `useQuery()` (from sync/react), etc. are safe to call.
  *
  * Returns `false` during the async gap (session resolving, adapter
- * initializing) and outside of `LessProvider`.
+ * initializing) and outside of `BetterbaseProvider`.
  *
  * Use this to gate sync-dependent UI or to show loading states:
  * ```tsx
@@ -790,11 +797,11 @@ export function useSyncReady(): boolean {
  *
  * Eliminates the `SyncGuard` boilerplate that every app otherwise needs:
  * ```tsx
- * <LessProvider ...>
+ * <BetterbaseProvider ...>
  *   <SyncReady fallback={<Loading />}>
  *     <MyApp />
  *   </SyncReady>
- * </LessProvider>
+ * </BetterbaseProvider>
  * ```
  *
  * @param fallback - Optional element to render while sync is initializing. Defaults to `null`.
@@ -815,7 +822,7 @@ export function SyncReady({
 // ---------------------------------------------------------------------------
 
 /**
- * Access the space-aware TypedAdapter from LessProvider.
+ * Access the space-aware TypedAdapter from BetterbaseProvider.
  *
  * Returns a `TypedAdapter<SpaceFields>` where all records include `_spaceId`.
  * Use this for direct database operations with space awareness.
@@ -828,9 +835,9 @@ export function useSyncDb(): TypedAdapter<
   SpaceWriteOptions,
   SpaceQueryOptions
 > {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   if (!ctx)
-    throw new Error("useSyncDb: no LessProvider found in component tree");
+    throw new Error("useSyncDb: no BetterbaseProvider found in component tree");
   return ctx.db;
 }
 
@@ -839,12 +846,12 @@ export function useSyncDb(): TypedAdapter<
 // ---------------------------------------------------------------------------
 
 /**
- * Access the FilesClient for the personal space from LessProvider.
+ * Access the FilesClient for the personal space from BetterbaseProvider.
  *
- * Returns `null` outside LessProvider or before auth resolves (safe to call unconditionally).
+ * Returns `null` outside BetterbaseProvider or before auth resolves (safe to call unconditionally).
  */
 export function useFiles(): FilesClient | null {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   return ctx?.files ?? null;
 }
 
@@ -853,10 +860,10 @@ export function useFiles(): FilesClient | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Provides FileStore context outside of LessProvider.
+ * Provides FileStore context outside of BetterbaseProvider.
  *
  * Use this when you need `useFile()` / `useFileStore()` to work before auth
- * (e.g. local-first photo uploads). LessProvider includes this internally,
+ * (e.g. local-first photo uploads). BetterbaseProvider includes this internally,
  * so you only need it for the unauthenticated rendering path.
  */
 export function FileStoreProvider({
@@ -878,7 +885,7 @@ export function FileStoreProvider({
 // ---------------------------------------------------------------------------
 
 /**
- * Access the FileStore from LessProvider or FileStoreProvider.
+ * Access the FileStore from BetterbaseProvider or FileStoreProvider.
  *
  * Returns `null` outside a provider (safe to call unconditionally).
  * Before auth resolves, returns the FileStore in local-only mode.
@@ -914,9 +921,9 @@ const EMPTY_UPLOAD_QUEUE: FileUploadQueueResult = {
 };
 
 /**
- * Access the file upload queue status from LessProvider.
+ * Access the file upload queue status from BetterbaseProvider.
  *
- * Returns safe defaults outside LessProvider (no throw).
+ * Returns safe defaults outside BetterbaseProvider (no throw).
  * Reads directly from FileStore via useSyncExternalStore.
  */
 export function useFileUploadQueue(): FileUploadQueueResult {
@@ -961,7 +968,7 @@ export function useFileUploadQueue(): FileUploadQueueResult {
 /**
  * Read file cache statistics on mount.
  *
- * Returns `null` outside LessProvider or until stats are loaded.
+ * Returns `null` outside BetterbaseProvider or until stats are loaded.
  * Not reactive — reads once on mount.
  */
 export function useFileCacheStats(): CacheStats | null {
@@ -1008,7 +1015,7 @@ export function useFileCacheStats(): CacheStats | null {
  * - `'error'` — fetch threw an unexpected error
  *
  * Reactive: re-fetches when the FileStore is mutated (e.g. a file arrives
- * in cache after mount). Safe outside LessProvider — returns
+ * in cache after mount). Safe outside BetterbaseProvider — returns
  * `{ url: null, status: 'idle', error: null }` instead of throwing.
  *
  * @param id - File ID, or undefined to skip loading.
@@ -1018,7 +1025,7 @@ export function useFile(
   id: string | undefined,
   type?: string,
 ): { url: string | null; status: FileStatus; error: Error | null } {
-  // Safe outside LessProvider — reads from FileStoreContext
+  // Safe outside BetterbaseProvider — reads from FileStoreContext
   const fsCtx = useContext(FileStoreContext);
   const fileStore = fsCtx?.fileStore ?? null;
 
@@ -1111,15 +1118,15 @@ export interface UseSpacesResult {
 }
 
 /**
- * Access space lifecycle actions from LessProvider.
+ * Access space lifecycle actions from BetterbaseProvider.
  *
  * Returns methods for creating shared spaces, inviting users, accepting
  * invitations, and querying membership.
  */
 export function useSpaces(): UseSpacesResult {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   if (!ctx)
-    throw new Error("useSpaces: no LessProvider found in component tree");
+    throw new Error("useSpaces: no BetterbaseProvider found in component tree");
 
   const mgr = ctx.spaceManager;
   const { flushAll, scheduleSync, resubscribe, privateKeyJwk } = ctx;
@@ -1187,9 +1194,11 @@ export interface UseMembersResult {
  * @param spaceId - The space ID to get members for, or undefined to skip.
  */
 export function useMembers(spaceId: string | undefined): UseMembersResult {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   if (!ctx)
-    throw new Error("useMembers: no LessProvider found in component tree");
+    throw new Error(
+      "useMembers: no BetterbaseProvider found in component tree",
+    );
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -1272,10 +1281,10 @@ export function useActiveSpaces(): QueryResult<SpaceRecord & SpaceFields> {
 }
 
 // ---------------------------------------------------------------------------
-// useLessSync — sync status
+// useSync — sync status
 // ---------------------------------------------------------------------------
 
-export interface UseLessSyncResult {
+export interface UseSyncResult {
   /** Current lifecycle phase: connecting → bootstrapping → ready. */
   phase: SyncPhase;
   /** True when any sync operation is in progress. */
@@ -1287,12 +1296,12 @@ export interface UseLessSyncResult {
 }
 
 /**
- * Access sync status and manual sync trigger from LessProvider.
+ * Access sync status and manual sync trigger from BetterbaseProvider.
  */
-export function useLessSync(): UseLessSyncResult {
-  const ctx = useContext(LessContext);
+export function useSync(): UseSyncResult {
+  const ctx = useContext(BetterbaseContext);
   if (!ctx)
-    throw new Error("useLessSync: no LessProvider found in component tree");
+    throw new Error("useSync: no BetterbaseProvider found in component tree");
   return {
     phase: ctx.phase,
     syncing: ctx.syncing,
@@ -1309,15 +1318,15 @@ export function useLessSync(): UseLessSyncResult {
  * Observe a single record with space-aware enrichment.
  *
  * Returns `TRead & SpaceFields` (includes `_spaceId`) or `undefined`.
- * Uses the TypedAdapter from LessProvider for middleware enrichment.
+ * Uses the TypedAdapter from BetterbaseProvider for middleware enrichment.
  */
 export function useRecord<TName extends string, TSchema extends SchemaShape>(
   def: CollectionDefHandle<TName, TSchema>,
   id: string | undefined,
 ): (CollectionRead<TSchema> & SpaceFields) | undefined {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   if (!ctx)
-    throw new Error("useRecord: no LessProvider found in component tree");
+    throw new Error("useRecord: no BetterbaseProvider found in component tree");
   const db = ctx.db;
 
   type R = (CollectionRead<TSchema> & SpaceFields) | undefined;
@@ -1374,9 +1383,9 @@ export function useQuery<TName extends string, TSchema extends SchemaShape>(
   query?: QueryOptions,
   queryOptions?: SpaceQueryOptions,
 ): QueryResult<CollectionRead<TSchema> & SpaceFields> {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   if (!ctx)
-    throw new Error("useQuery: no LessProvider found in component tree");
+    throw new Error("useQuery: no BetterbaseProvider found in component tree");
   const db = ctx.db;
 
   type QR = QueryResult<CollectionRead<TSchema> & SpaceFields>;
@@ -1433,14 +1442,16 @@ export function useQuery<TName extends string, TSchema extends SchemaShape>(
 // ---------------------------------------------------------------------------
 
 /**
- * Access the SpaceManager from LessProvider.
+ * Access the SpaceManager from BetterbaseProvider.
  *
  * Useful for building per-space FileStores or accessing per-space sync state.
  */
 export function useSpaceManager(): SpaceManager {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   if (!ctx)
-    throw new Error("useSpaceManager: no LessProvider found in component tree");
+    throw new Error(
+      "useSpaceManager: no BetterbaseProvider found in component tree",
+    );
   return ctx.spaceManager;
 }
 
@@ -1449,15 +1460,15 @@ export function useSpaceManager(): SpaceManager {
 // ---------------------------------------------------------------------------
 
 /**
- * Access the PresenceManager from LessProvider.
+ * Access the PresenceManager from BetterbaseProvider.
  *
  * Returns `null` when the provider hasn't connected yet.
  */
 export function usePresenceManager(): PresenceManager | null {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   if (!ctx)
     throw new Error(
-      "usePresenceManager: no LessProvider found in component tree",
+      "usePresenceManager: no BetterbaseProvider found in component tree",
     );
   return ctx.presenceManager;
 }
@@ -1467,14 +1478,16 @@ export function usePresenceManager(): PresenceManager | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Access the EventManager from LessProvider.
+ * Access the EventManager from BetterbaseProvider.
  *
  * Returns `null` when the provider hasn't connected yet.
  */
 export function useEventManager(): EventManager | null {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   if (!ctx)
-    throw new Error("useEventManager: no LessProvider found in component tree");
+    throw new Error(
+      "useEventManager: no BetterbaseProvider found in component tree",
+    );
   return ctx.eventManager;
 }
 
@@ -1493,7 +1506,7 @@ export function useEventManager(): EventManager | null {
 export function usePeers<T = unknown>(
   spaceId: string | undefined,
 ): PeerPresence<T>[] {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   const pm = ctx?.presenceManager ?? null;
 
   // Subscribe to presence changes via useSyncExternalStore
@@ -1529,7 +1542,7 @@ export function usePeers<T = unknown>(
  * @param spaceId - Space ID, or undefined to skip.
  */
 export function usePresenceCount(spaceId: string | undefined): number {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   const pm = ctx?.presenceManager ?? null;
 
   const subscribe = useCallback(
@@ -1565,7 +1578,7 @@ export function usePresence<T = unknown>(
   spaceId: string | undefined,
   myData?: T,
 ): PeerPresence<T>[] {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   const pm = ctx?.presenceManager ?? null;
   const phase = ctx?.phase ?? "connecting";
 
@@ -1645,7 +1658,7 @@ export function useEvent(
   name: string,
   handler: (data: unknown, peer: string) => void,
 ): void {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   const em = ctx?.eventManager ?? null;
 
   // Stable handler ref to avoid re-subscribing on every render
@@ -1691,7 +1704,7 @@ export function useSendEvent<
 >(
   spaceId: string | undefined,
 ): <K extends string & keyof TMap>(name: K, data: TMap[K]) => void {
-  const ctx = useContext(LessContext);
+  const ctx = useContext(BetterbaseContext);
   const em = ctx?.eventManager ?? null;
 
   return useCallback(
@@ -1710,7 +1723,7 @@ export function useSendEvent<
 /**
  * Get the edit chain for a record.
  *
- * Requires `editChainCollections` to be set on `LessProvider`. Returns
+ * Requires `editChainCollections` to be set on `BetterbaseProvider`. Returns
  * `undefined` when the record is null, the collection is not tracked, or
  * the record hasn't been synced yet. The chain reflects the server's copy
  * at last sync — local edits are not included until the next push/pull cycle.

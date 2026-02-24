@@ -3,7 +3,7 @@
  * multiple spaces over a single WebSocket connection.
  *
  * Replaces MultiplexedClient + per-space SyncClient with WSClient.
- * Uses per-space LessSyncTransport for encrypt/decrypt at the sync boundary.
+ * Uses per-space SyncTransport for encrypt/decrypt at the sync boundary.
  *
  * Architecture:
  * - Personal space: always active (default for records without spaceId)
@@ -14,7 +14,7 @@
  */
 
 import type {
-  SyncTransport,
+  SyncTransport as SyncTransportInterface,
   OutboundRecord,
   PushAck,
   PullResult,
@@ -28,7 +28,7 @@ import type {
   SyncEventData,
   EpochConfig,
 } from "./types.js";
-import { LessSyncTransport, type EditChainIdentity } from "./transport.js";
+import { SyncTransport, type EditChainIdentity } from "./transport.js";
 import type { WSClient } from "./ws-client.js";
 import type {
   WSSyncData,
@@ -88,14 +88,14 @@ export interface WSTransportConfig {
  * Push: groups outbound records by spaceId → pushes per-space via WSClient.
  * Events: WS subscription → routes sync events by space.
  */
-export class WSTransport implements SyncTransport {
+export class WSTransport implements SyncTransportInterface {
   /** Max epoch rotations per pull to avoid blocking sync after long offline periods. */
   private static readonly MAX_ROTATIONS_PER_PULL = 3;
 
   private config: WSTransportConfig;
   private wsClient: WSClient;
-  private personalTransport: LessSyncTransport;
-  private spaceTransports = new Map<string, LessSyncTransport>();
+  private personalTransport: SyncTransport;
+  private spaceTransports = new Map<string, SyncTransport>();
 
   /** Per-space cursors. Key: `${collection}:${spaceId}`, Value: cursor number. */
   private cursors = new Map<string, number>();
@@ -104,7 +104,7 @@ export class WSTransport implements SyncTransport {
     this.config = config;
     this.wsClient = config.ws;
 
-    this.personalTransport = new LessSyncTransport({
+    this.personalTransport = new SyncTransport({
       push: (changes) => this.wsPush(config.personalSpaceId, changes),
       spaceId: config.personalSpaceId,
       paddingBuckets: config.paddingBuckets,
@@ -116,7 +116,7 @@ export class WSTransport implements SyncTransport {
 
   /**
    * Push changes to a space via WebSocket.
-   * Adapts WSClient.push() to the PushResult interface used by LessSyncTransport.
+   * Adapts WSClient.push() to the PushResult interface used by SyncTransport.
    * For shared spaces, includes the UCAN for authorization.
    */
   private async wsPush(space: string, changes: Change[]): Promise<PushResult> {
@@ -514,7 +514,7 @@ export class WSTransport implements SyncTransport {
   // Transport management
   // --------------------------------------------------------------------------
 
-  private getTransportForSpace(spaceId: string): LessSyncTransport | undefined {
+  private getTransportForSpace(spaceId: string): SyncTransport | undefined {
     if (spaceId === this.config.personalSpaceId) {
       return this.personalTransport;
     }
@@ -539,11 +539,11 @@ export class WSTransport implements SyncTransport {
   }
 
   /** Create (or replace) a shared-space transport with the current key from SpaceManager. */
-  private createSharedTransport(spaceId: string): LessSyncTransport {
+  private createSharedTransport(spaceId: string): SyncTransport {
     const spaceKey = this.config.spaceManager.getSpaceKey(spaceId);
     const spaceEpoch = this.config.spaceManager.getSpaceEpoch(spaceId) ?? 0;
 
-    const transport = new LessSyncTransport({
+    const transport = new SyncTransport({
       push: (changes) => this.wsPush(spaceId, changes),
       spaceId,
       paddingBuckets: this.config.paddingBuckets,

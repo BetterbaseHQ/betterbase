@@ -11,7 +11,7 @@ import {
   type User,
   type BenchUsersCollection,
 } from "./shared.js";
-import { createOpfsDb, type OpfsDb } from "../src/index.js";
+import { createDatabase, type Database } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // JS reference imports (aliased via vitest.bench.config.ts)
@@ -47,7 +47,7 @@ interface DexieUser extends User {
 // ---------------------------------------------------------------------------
 // WASM/OPFS lifecycle
 // ---------------------------------------------------------------------------
-let wasmDb: OpfsDb;
+let wasmDb: Database;
 let wasmDbName: string;
 let wasmCounter = 0;
 let wasmInsertedIds: string[] = [];
@@ -60,7 +60,7 @@ function createBenchWorker(): Worker {
 
 async function setupWasm() {
   wasmDbName = `wasm-bench-${Date.now()}-${wasmCounter++}`;
-  wasmDb = await createOpfsDb(wasmDbName, [wasmUsers], {
+  wasmDb = await createDatabase(wasmDbName, [wasmUsers], {
     worker: createBenchWorker(),
   });
   wasmInsertedIds = [];
