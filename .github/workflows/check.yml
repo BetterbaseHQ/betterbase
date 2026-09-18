@@ -1,0 +1,79 @@
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: betterbase
+    steps:
+      # json-joy-rs must be checked out as a sibling: betterbase-db depends
+      # on it via ../../../json-joy-rs path dependencies
+      - uses: actions/checkout@v4
+        with:
+          path: betterbase
+      - uses: actions/checkout@v4
+        with:
+          repository: BetterbaseHQ/json-joy-rs
+          path: json-joy-rs
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: betterbase
+      - run: cargo fmt --all -- --check
+      - run: |
+          cargo clippy -p betterbase-crypto --all-targets -- -D warnings -A deprecated
+          cargo clippy -p betterbase-discovery --all-targets -- -D warnings
+          cargo clippy -p betterbase-auth --all-targets -- -D warnings -A deprecated
+          cargo clippy -p betterbase-sync-core --all-targets -- -D warnings -A deprecated
+          cargo clippy -p betterbase-db --all-targets -- -D warnings
+          cargo clippy -p betterbase-wasm --target wasm32-unknown-unknown -- -D warnings -A deprecated
+          cargo clippy -p betterbase-db-wasm --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo test --workspace --exclude betterbase-wasm --exclude betterbase-db-wasm
+
+  js:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: betterbase/js
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: betterbase
+      - uses: actions/checkout@v4
+        with:
+          repository: BetterbaseHQ/json-joy-rs
+          path: json-joy-rs
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: betterbase
+      - uses: jetli/wasm-pack-action@v0.4.0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: betterbase/js/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # TS imports the generated pkg/ types — build wasm before typechecking
+      - run: pnpm build:wasm
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm exec prettier --check .
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:browser
