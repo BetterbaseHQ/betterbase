@@ -390,7 +390,7 @@ impl<B: StorageBackend> ReactiveAdapter<B> {
                 .drain()
                 .flat_map(|(key, subs)| subs.into_iter().map(move |s| (key.clone(), s)))
                 .collect();
-            let queries: Vec<Arc<QuerySub>> = st.dirty_queries.drain(..).collect();
+            let queries: Vec<Arc<QuerySub>> = std::mem::take(&mut st.dirty_queries);
             (records, queries)
         };
 
@@ -505,7 +505,7 @@ impl<B: StorageBackend> StorageLifecycle for ReactiveAdapter<B> {
             st.initialized = true;
 
             let pending_records: Vec<(String, Arc<RecordSub>)> =
-                st.pending_record_subs.drain(..).collect();
+                std::mem::take(&mut st.pending_record_subs);
             for (key, sub) in pending_records {
                 st.record_subs
                     .entry(key.clone())
@@ -517,7 +517,7 @@ impl<B: StorageBackend> StorageLifecycle for ReactiveAdapter<B> {
                 }
             }
 
-            let pending_queries: Vec<Arc<QuerySub>> = st.pending_query_subs.drain(..).collect();
+            let pending_queries: Vec<Arc<QuerySub>> = std::mem::take(&mut st.pending_query_subs);
             for sub in pending_queries {
                 let sub_id = sub.id;
                 st.query_subs.push(Arc::clone(&sub));

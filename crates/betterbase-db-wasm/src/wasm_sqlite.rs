@@ -423,7 +423,7 @@ impl Connection {
 
         // Finalize all cached statements before closing.
         let mut cache = self.stmt_cache.borrow_mut();
-        for (_, stmt) in cache.drain() {
+        for stmt in cache.drain().map(|(_, stmt)| stmt) {
             if !stmt.is_null() {
                 unsafe { ffi::sqlite3_finalize(stmt) };
             }

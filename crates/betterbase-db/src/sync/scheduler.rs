@@ -133,7 +133,7 @@ impl SyncScheduler {
         self.disposed.store(true, Ordering::SeqCst);
 
         let mut slots = self.slots.lock();
-        for (_, slot_arc) in slots.drain() {
+        for slot_arc in slots.drain().map(|(_, slot)| slot) {
             let mut slot = slot_arc.lock();
             for sender in slot.queued_senders.drain(..) {
                 let _ = sender.send(Err("SyncScheduler is disposed".to_string()));
@@ -204,7 +204,7 @@ impl SyncScheduler {
         let queued = {
             let mut slot = slot_arc.lock();
             slot.running = false;
-            slot.queued_senders.drain(..).collect::<Vec<_>>()
+            std::mem::take(&mut slot.queued_senders)
         };
 
         // Start cooldown timer and handle queued follow-up
@@ -234,7 +234,7 @@ impl SyncScheduler {
                 let cooldown_senders = {
                     let mut slot = slot_clone.lock();
                     slot.cooldown_active = false;
-                    slot.queued_senders.drain(..).collect::<Vec<_>>()
+                    std::mem::take(&mut slot.queued_senders)
                 };
 
                 // Merge with senders from before cooldown
@@ -265,7 +265,7 @@ impl SyncScheduler {
                     let mut slot = slot_clone.lock();
                     slot.running = false;
                     slot.cooldown_active = true;
-                    slot.queued_senders.drain(..).collect::<Vec<_>>()
+                    std::mem::take(&mut slot.queued_senders)
                 };
 
                 for sender in all_senders {

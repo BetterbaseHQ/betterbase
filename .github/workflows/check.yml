@@ -64,6 +64,8 @@ jobs:
           workspaces: betterbase
       - uses: jetli/wasm-pack-action@v0.4.0
       - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: betterbase/js/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: 24

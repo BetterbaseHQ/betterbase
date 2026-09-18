@@ -505,7 +505,8 @@ fn score_computed_index(
             } else {
                 return None;
             }
-        } else if let Some(ref range) = computed_cond.range {
+        } else {
+            let range = computed_cond.range.as_ref()?;
             (
                 IndexScanType::Range,
                 5.0,
@@ -514,8 +515,6 @@ fn score_computed_index(
                 range.1.clone(),
                 None,
             )
-        } else {
-            return None;
         };
 
     let scan = IndexScan {

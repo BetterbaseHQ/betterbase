@@ -116,7 +116,7 @@ impl EpochKeyCache {
 impl Drop for EpochKeyCache {
     fn drop(&mut self) {
         self.base_key.zeroize();
-        for (_, key) in self.cache.iter_mut() {
+        for key in self.cache.values_mut() {
             key.zeroize();
         }
     }
