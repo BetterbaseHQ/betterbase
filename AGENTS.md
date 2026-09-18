@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code when working with the Betterbase SDK.
+Guidance for AI coding agents working with the Betterbase SDK.
 
 ## Overview
 
@@ -114,5 +114,5 @@ Key functions by crate:
 - Rust: `cargo` workspace, `wasm-pack` for WASM builds
 - JS: `pnpm`, `tsc` (typecheck only — source exports used directly via subpath exports), `vitest`, `prettier`
 - `js/package.json` exports point to `./src/*.ts` source files (not compiled dist) for development
-- WASM crates build with `wasm-pack build --target bundler`
+- WASM crates build with `wasm-pack build --target bundler`, driven by `js/scripts/build-wasm.sh` (`pnpm build:wasm`). On macOS the wrapper forces `llvm-ar`/`llvm-ranlib` (brew llvm) because the host `ar` silently drops wasm32 members from static archives.
 - Clippy runs with `-D warnings` (no deprecation suppressions since the RustCrypto 0.14 migration)
