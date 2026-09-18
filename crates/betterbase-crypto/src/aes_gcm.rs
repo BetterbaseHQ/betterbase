@@ -28,7 +28,7 @@ fn build_aad(context: &EncryptionContext) -> Vec<u8> {
 /// Generate a random 12-byte IV for AES-GCM.
 pub fn generate_iv() -> Result<[u8; AES_GCM_IV_LENGTH], CryptoError> {
     let mut iv = [0u8; AES_GCM_IV_LENGTH];
-    getrandom::getrandom(&mut iv).map_err(|e| CryptoError::RngFailed(e.to_string()))?;
+    getrandom::fill(&mut iv).map_err(|e| CryptoError::RngFailed(e.to_string()))?;
     Ok(iv)
 }
 
@@ -66,7 +66,7 @@ impl SyncCrypto {
         context: Option<&EncryptionContext>,
     ) -> Result<Vec<u8>, CryptoError> {
         let iv = generate_iv()?;
-        let nonce = Nonce::from_slice(&iv);
+        let nonce = &Nonce::from(iv);
 
         let ciphertext = match context {
             Some(ctx) => {
@@ -108,7 +108,7 @@ impl SyncCrypto {
 
         let iv = &encrypted[1..1 + AES_GCM_IV_LENGTH];
         let ciphertext = &encrypted[1 + AES_GCM_IV_LENGTH..];
-        let nonce = Nonce::from_slice(iv);
+        let nonce = &Nonce::try_from(iv).expect("IV is 12 bytes");
 
         let plaintext = match context {
             Some(ctx) => {
@@ -146,7 +146,7 @@ pub fn encrypt_v4(
     let cipher =
         Aes256Gcm::new_from_slice(dek).map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
     let iv = generate_iv()?;
-    let nonce = Nonce::from_slice(&iv);
+    let nonce = &Nonce::from(iv);
 
     let ciphertext = match context {
         Some(ctx) => {
@@ -197,7 +197,7 @@ pub fn decrypt_v4(
 
     let cipher =
         Aes256Gcm::new_from_slice(dek).map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
-    let nonce = Nonce::from_slice(iv);
+    let nonce = &Nonce::try_from(iv).expect("IV is 12 bytes");
 
     let plaintext = match context {
         Some(ctx) => {
@@ -229,7 +229,7 @@ pub fn aes_gcm_encrypt(key: &[u8], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
     let iv = generate_iv()?;
-    let nonce = Nonce::from_slice(&iv);
+    let nonce = &Nonce::from(iv);
 
     let ciphertext = cipher
         .encrypt(
@@ -262,7 +262,7 @@ pub fn aes_gcm_decrypt(key: &[u8], data: &[u8], aad: &[u8]) -> Result<Vec<u8>, C
         Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
     let iv = &data[..AES_GCM_IV_LENGTH];
     let ciphertext = &data[AES_GCM_IV_LENGTH..];
-    let nonce = Nonce::from_slice(iv);
+    let nonce = &Nonce::try_from(iv).expect("IV is 12 bytes");
 
     cipher
         .decrypt(
@@ -283,7 +283,7 @@ mod tests {
 
     fn random_key() -> [u8; 32] {
         let mut key = [0u8; 32];
-        getrandom::getrandom(&mut key).unwrap();
+        getrandom::fill(&mut key).unwrap();
         key
     }
 
@@ -361,7 +361,7 @@ mod tests {
         let key = random_key();
         let sc = SyncCrypto::new(&key, 1).unwrap();
         let mut plaintext = vec![0u8; 100 * 1024];
-        getrandom::getrandom(&mut plaintext).unwrap();
+        getrandom::fill(&mut plaintext).unwrap();
         let encrypted = sc.encrypt(&plaintext, None).unwrap();
         let decrypted = sc.decrypt(&encrypted, None).unwrap();
         assert_eq!(decrypted, plaintext);
@@ -519,7 +519,7 @@ mod tests {
     fn v4_large_data() {
         let dek = random_key();
         let mut plaintext = vec![0u8; 100 * 1024];
-        getrandom::getrandom(&mut plaintext).unwrap();
+        getrandom::fill(&mut plaintext).unwrap();
         let encrypted = encrypt_v4(&plaintext, &dek, None).unwrap();
         let decrypted = decrypt_v4(&encrypted, &dek, None).unwrap();
         assert_eq!(decrypted, plaintext);

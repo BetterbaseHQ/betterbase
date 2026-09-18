@@ -10,11 +10,12 @@
 use crate::error::AuthError;
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
-use aes_kw::Kek;
+use aes_kw::KwAes256;
 use betterbase_crypto::{base64url_decode, base64url_encode};
 use p256::ecdh::EphemeralSecret;
-use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-use p256::{EncodedPoint, PublicKey};
+use p256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
+use p256::elliptic_curve::Generate;
+use p256::{PublicKey, Sec1Point};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
@@ -101,14 +102,15 @@ pub fn decrypt_jwe(
     // 8. AES-KW unwrap CEK
     let encrypted_key =
         base64url_decode(encrypted_key_b64).map_err(|e| AuthError::JweFormat(e.to_string()))?;
-    let kek = Kek::from(
-        <[u8; 32]>::try_from(kek_bytes.as_slice())
-            .map_err(|_| AuthError::JweDecryptionFailed("KEK is not 32 bytes".to_string()))?,
+    let kek = KwAes256::new(
+        &<[u8; 32]>::try_from(kek_bytes.as_slice())
+            .map_err(|_| AuthError::JweDecryptionFailed("KEK is not 32 bytes".to_string()))?
+            .into(),
     );
     kek_bytes.zeroize();
 
     let mut cek = [0u8; CEK_LENGTH];
-    kek.unwrap(&encrypted_key, &mut cek)
+    kek.unwrap_key(&encrypted_key, &mut cek)
         .map_err(|e| AuthError::JweDecryptionFailed(format!("AES-KW unwrap failed: {:?}", e)))?;
 
     // 9. AES-256-GCM decrypt
@@ -125,7 +127,8 @@ pub fn decrypt_jwe(
         .map_err(|e| AuthError::JweDecryptionFailed(format!("AES-GCM init: {:?}", e)))?;
     cek.zeroize();
 
-    let nonce = Nonce::from_slice(&iv);
+    let nonce = &Nonce::try_from(iv.as_slice())
+        .map_err(|_| AuthError::JweFormat("IV is not 12 bytes".to_string()))?;
 
     // AAD is the protected header base64url string (ASCII bytes)
     let aad = aes_gcm::aead::Payload {
@@ -155,9 +158,9 @@ pub fn encrypt_jwe(
     let recipient_public_key = import_p256_public_jwk(recipient_public_jwk)?;
 
     // Generate ephemeral keypair for ECDH
-    let ephemeral_secret = EphemeralSecret::random(&mut p256::elliptic_curve::rand_core::OsRng);
+    let ephemeral_secret = EphemeralSecret::generate();
     let ephemeral_public = p256::PublicKey::from(&ephemeral_secret);
-    let ephemeral_point = ephemeral_public.to_encoded_point(false);
+    let ephemeral_point = ephemeral_public.to_sec1_point(false);
 
     // ECDH key agreement
     let shared_secret = ephemeral_secret.diffie_hellman(&recipient_public_key);
@@ -167,18 +170,19 @@ pub fn encrypt_jwe(
 
     // Generate random CEK
     let mut cek = [0u8; CEK_LENGTH];
-    getrandom::getrandom(&mut cek)
+    getrandom::fill(&mut cek)
         .map_err(|e| AuthError::JweEncryptionFailed(format!("RNG failed: {}", e)))?;
 
     // AES-KW wrap CEK
-    let kek = Kek::from(
-        <[u8; 32]>::try_from(kek_bytes.as_slice())
-            .map_err(|_| AuthError::JweEncryptionFailed("KEK is not 32 bytes".to_string()))?,
+    let kek = KwAes256::new(
+        &<[u8; 32]>::try_from(kek_bytes.as_slice())
+            .map_err(|_| AuthError::JweEncryptionFailed("KEK is not 32 bytes".to_string()))?
+            .into(),
     );
     kek_bytes.zeroize();
 
     let mut wrapped_cek = [0u8; AES_KW_OUTPUT_LENGTH];
-    kek.wrap(&cek, &mut wrapped_cek)
+    kek.wrap_key(&cek, &mut wrapped_cek)
         .map_err(|e| AuthError::JweEncryptionFailed(format!("AES-KW wrap failed: {:?}", e)))?;
 
     // Build protected header with ephemeral public key
@@ -197,14 +201,15 @@ pub fn encrypt_jwe(
 
     // AES-256-GCM encrypt
     let mut iv = [0u8; 12];
-    getrandom::getrandom(&mut iv)
+    getrandom::fill(&mut iv)
         .map_err(|e| AuthError::JweEncryptionFailed(format!("RNG failed: {}", e)))?;
 
     let cipher = Aes256Gcm::new_from_slice(&cek)
         .map_err(|e| AuthError::JweEncryptionFailed(format!("AES-GCM init: {:?}", e)))?;
     cek.zeroize();
 
-    let nonce = Nonce::from_slice(&iv);
+    let nonce = &Nonce::try_from(iv.as_slice())
+        .map_err(|_| AuthError::JweFormat("IV is not 12 bytes".to_string()))?;
     let aad = aes_gcm::aead::Payload {
         msg: plaintext,
         aad: header_b64.as_bytes(),
@@ -290,10 +295,10 @@ fn import_p256_public_jwk(jwk: &serde_json::Value) -> Result<PublicKey, AuthErro
     }
     uncompressed.extend_from_slice(&y_bytes);
 
-    let point = EncodedPoint::from_bytes(&uncompressed)
+    let point = Sec1Point::from_bytes(&uncompressed)
         .map_err(|e| AuthError::InvalidJwk(format!("invalid EC point: {}", e)))?;
 
-    PublicKey::from_encoded_point(&point)
+    PublicKey::from_sec1_point(&point)
         .into_option()
         .ok_or_else(|| AuthError::InvalidJwk("EC point not on P-256 curve".to_string()))
 }
@@ -314,7 +319,7 @@ fn import_p256_private_jwk(jwk: &serde_json::Value) -> Result<p256::SecretKey, A
 }
 
 /// Encode an EC point as a JWK JSON value.
-fn encode_point_as_jwk(point: &EncodedPoint) -> serde_json::Value {
+fn encode_point_as_jwk(point: &Sec1Point) -> serde_json::Value {
     let x = point.x().expect("uncompressed point has x");
     let y = point.y().expect("uncompressed point has y");
 
@@ -332,9 +337,9 @@ mod tests {
 
     /// Generate a P-256 keypair for testing.
     fn generate_test_keypair() -> (serde_json::Value, serde_json::Value) {
-        let secret = p256::SecretKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let secret = p256::SecretKey::generate();
         let public = secret.public_key();
-        let point = public.to_encoded_point(false);
+        let point = public.to_sec1_point(false);
 
         let x = base64url_encode(point.x().unwrap().as_slice());
         let y = base64url_encode(point.y().unwrap().as_slice());
@@ -403,7 +408,7 @@ mod tests {
     fn binary_payload_round_trips() {
         let (public_jwk, private_jwk) = generate_test_keypair();
         let mut binary = [0u8; 256];
-        getrandom::getrandom(&mut binary).unwrap();
+        getrandom::fill(&mut binary).unwrap();
 
         let jwe = encrypt_jwe(&binary, &public_jwk).unwrap();
         let decrypted = decrypt_jwe(&jwe, &private_jwk).unwrap();
@@ -530,7 +535,7 @@ mod tests {
     fn large_payload_round_trip() {
         let (public_jwk, private_jwk) = generate_test_keypair();
         let mut large = vec![0u8; 64 * 1024]; // 64KB
-        getrandom::getrandom(&mut large).unwrap();
+        getrandom::fill(&mut large).unwrap();
 
         let jwe = encrypt_jwe(&large, &public_jwk).unwrap();
         let decrypted = decrypt_jwe(&jwe, &private_jwk).unwrap();

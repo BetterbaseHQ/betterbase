@@ -7,7 +7,7 @@
 
 use crate::error::CryptoError;
 use crate::types::AES_KEY_LENGTH;
-use aes_kw::Kek;
+use aes_kw::{KeyInit, KwAes256};
 
 /// Size of a wrapped DEK in bytes: 4 (epoch) + 40 (AES-KW output for 32-byte key).
 pub const WRAPPED_DEK_SIZE: usize = 44;
@@ -18,7 +18,7 @@ const AES_KW_OUTPUT_SIZE: usize = 40;
 /// Generate a random 256-bit Data Encryption Key.
 pub fn generate_dek() -> Result<[u8; AES_KEY_LENGTH], CryptoError> {
     let mut dek = [0u8; AES_KEY_LENGTH];
-    getrandom::getrandom(&mut dek).map_err(|e| CryptoError::RngFailed(e.to_string()))?;
+    getrandom::fill(&mut dek).map_err(|e| CryptoError::RngFailed(e.to_string()))?;
     Ok(dek)
 }
 
@@ -50,10 +50,10 @@ pub fn wrap_dek(dek: &[u8], kek: &[u8], epoch: u32) -> Result<[u8; WRAPPED_DEK_S
         expected: AES_KEY_LENGTH,
         got: kek.len(),
     })?;
-    let kek_key = Kek::from(kek_array);
+    let kek_key = KwAes256::new(&kek_array.into());
     let mut wrapped = [0u8; AES_KW_OUTPUT_SIZE];
     kek_key
-        .wrap(dek, &mut wrapped)
+        .wrap_key(dek, &mut wrapped)
         .map_err(|e| CryptoError::WrapFailed(format!("{:?}", e)))?;
 
     let mut result = [0u8; WRAPPED_DEK_SIZE];
@@ -96,10 +96,10 @@ pub fn unwrap_dek(wrapped_dek: &[u8], kek: &[u8]) -> Result<(Vec<u8>, u32), Cryp
         expected: AES_KEY_LENGTH,
         got: kek.len(),
     })?;
-    let kek_key = Kek::from(kek_array);
+    let kek_key = KwAes256::new(&kek_array.into());
     let mut dek = vec![0u8; AES_KEY_LENGTH];
     kek_key
-        .unwrap(wrapped_key_bytes, &mut dek)
+        .unwrap_key(wrapped_key_bytes, &mut dek)
         .map_err(|e| CryptoError::UnwrapFailed(format!("{:?}", e)))?;
 
     Ok((dek, epoch))
@@ -111,7 +111,7 @@ mod tests {
 
     fn random_key() -> [u8; 32] {
         let mut key = [0u8; 32];
-        getrandom::getrandom(&mut key).unwrap();
+        getrandom::fill(&mut key).unwrap();
         key
     }
 

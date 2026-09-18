@@ -128,7 +128,7 @@ mod tests {
 
     fn random_key() -> [u8; 32] {
         let mut key = [0u8; 32];
-        getrandom::getrandom(&mut key).unwrap();
+        getrandom::fill(&mut key).unwrap();
         key
     }
 

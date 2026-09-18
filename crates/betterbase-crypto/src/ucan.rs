@@ -3,7 +3,7 @@
 //! Provides DID key encoding and UCAN token issuance for P-256 keys.
 
 use p256::ecdsa::SigningKey;
-use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
+use p256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
 use serde_json::Value;
 
 use crate::base64url::{base64url_decode, base64url_encode};
@@ -137,12 +137,12 @@ pub fn decode_did_key_to_jwk(did: &str) -> Result<Value, CryptoError> {
     }
 
     // Decompress SEC1 point using p256
-    let point = p256::EncodedPoint::from_bytes(compressed)
+    let point = p256::Sec1Point::from_bytes(compressed)
         .map_err(|e| CryptoError::InvalidJwk(format!("invalid compressed point: {}", e)))?;
-    let public_key = p256::PublicKey::from_encoded_point(&point)
+    let public_key = p256::PublicKey::from_sec1_point(&point)
         .into_option()
         .ok_or_else(|| CryptoError::InvalidJwk("point not on P-256 curve".to_string()))?;
-    let uncompressed = public_key.to_encoded_point(false);
+    let uncompressed = public_key.to_sec1_point(false);
 
     let x = base64url_encode(uncompressed.x().unwrap().as_slice());
     let y = base64url_encode(uncompressed.y().unwrap().as_slice());
@@ -175,7 +175,7 @@ fn varint_decode(bytes: &[u8]) -> Result<(u32, usize), CryptoError> {
 /// Generate a random nonce (16 bytes, base64url).
 fn generate_nonce() -> Result<String, CryptoError> {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).map_err(|e| CryptoError::RngFailed(e.to_string()))?;
+    getrandom::fill(&mut bytes).map_err(|e| CryptoError::RngFailed(e.to_string()))?;
     Ok(base64url_encode(&bytes))
 }
 

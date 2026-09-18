@@ -8,13 +8,13 @@ repository.workspace = true
 description = "AES-256-GCM encryption, HKDF key derivation, ECDSA P-256 signing, and UCAN support"
 
 [dependencies]
-aes-gcm = { version = "0.10", features = ["zeroize"] }
-aes-kw = "0.2"
-hkdf = "0.12"
-sha2 = "0.10"
-p256 = { version = "0.13", features = ["ecdsa", "jwk"] }
-ecdsa = { version = "0.16", features = ["signing", "verifying"] }
-getrandom = { version = "0.2", features = ["js"] }
+aes-gcm = { version = "0.11", features = ["zeroize"] }
+aes-kw = "0.3"
+hkdf = "0.13"
+sha2 = "0.11"
+p256 = { version = "0.14", features = ["ecdsa", "getrandom"] }
+ecdsa = "0.17"
+getrandom = { version = "0.4", features = ["wasm_js"] }
 base64ct = { version = "1", features = ["alloc"] }
 zeroize = { version = "1", features = ["derive"] }
 bs58 = "0.5"

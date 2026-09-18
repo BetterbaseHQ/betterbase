@@ -10,14 +10,13 @@ fmt:
     cargo fmt --all
 
 # Run clippy linter
-# -A deprecated: aes-gcm's generic-array dependency triggers upstream deprecation warnings
 lint:
-    cargo clippy -p betterbase-crypto --all-targets -- -D warnings -A deprecated
+    cargo clippy -p betterbase-crypto --all-targets -- -D warnings
     cargo clippy -p betterbase-discovery --all-targets -- -D warnings
-    cargo clippy -p betterbase-auth --all-targets -- -D warnings -A deprecated
-    cargo clippy -p betterbase-sync-core --all-targets -- -D warnings -A deprecated
+    cargo clippy -p betterbase-auth --all-targets -- -D warnings
+    cargo clippy -p betterbase-sync-core --all-targets -- -D warnings
     cargo clippy -p betterbase-db --all-targets -- -D warnings
-    cargo clippy -p betterbase-wasm --target wasm32-unknown-unknown -- -D warnings -A deprecated
+    cargo clippy -p betterbase-wasm --target wasm32-unknown-unknown -- -D warnings
     cargo clippy -p betterbase-db-wasm --target wasm32-unknown-unknown -- -D warnings
 
 # Run Rust tests (pure crates only; WASM crates run via test-browser)

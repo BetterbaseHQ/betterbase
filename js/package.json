@@ -67,7 +67,7 @@
   },
   "license": "Apache-2.0",
   "scripts": {
-    "build:wasm": "wasm-pack build --target bundler ../crates/betterbase-wasm && wasm-pack build --target bundler ../crates/betterbase-db-wasm",
+    "build:wasm": "./scripts/build-wasm.sh",
     "build:ts": "tsc --project tsconfig.json",
     "build": "pnpm build:wasm && pnpm build:ts",
     "typecheck": "tsc --noEmit",

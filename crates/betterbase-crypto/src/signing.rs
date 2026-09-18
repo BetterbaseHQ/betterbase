@@ -4,6 +4,7 @@
 
 use ecdsa::signature::{Signer, Verifier};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
+use p256::elliptic_curve::Generate;
 use serde_json::Value;
 
 use crate::base64url::base64url_decode;
@@ -78,7 +79,7 @@ pub fn import_public_key_jwk(jwk: &Value) -> Result<VerifyingKey, CryptoError> {
 
 /// Export a P-256 verifying key to JWK format.
 pub fn export_public_key_jwk(key: &VerifyingKey) -> Value {
-    let point = key.to_encoded_point(false);
+    let point = key.to_sec1_point(false);
     let x = crate::base64url::base64url_encode(point.x().unwrap().as_slice());
     let y = crate::base64url::base64url_encode(point.y().unwrap().as_slice());
 
@@ -93,7 +94,7 @@ pub fn export_public_key_jwk(key: &VerifyingKey) -> Value {
 /// Export a P-256 signing key (private) to JWK format.
 pub fn export_private_key_jwk(key: &SigningKey) -> Value {
     let verifying_key = key.verifying_key();
-    let point = verifying_key.to_encoded_point(false);
+    let point = verifying_key.to_sec1_point(false);
     let x = crate::base64url::base64url_encode(point.x().unwrap().as_slice());
     let y = crate::base64url::base64url_encode(point.y().unwrap().as_slice());
     // to_bytes() returns a zeroize-on-drop FieldBytes, but we need to
@@ -119,13 +120,13 @@ pub fn import_private_key_jwk(jwk: &Value) -> Result<SigningKey, CryptoError> {
         .ok_or(CryptoError::MissingJwkField("d"))?;
     let d_bytes =
         base64url_decode(d_b64).map_err(|e| CryptoError::InvalidJwk(format!("d: {}", e)))?;
-    SigningKey::from_bytes(d_bytes.as_slice().into())
+    SigningKey::from_slice(&d_bytes)
         .map_err(|e| CryptoError::InvalidJwk(format!("P-256 scalar: {}", e)))
 }
 
 /// Generate a new P-256 signing key pair.
 pub fn generate_p256_keypair() -> SigningKey {
-    SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng)
+    SigningKey::generate()
 }
 
 #[cfg(test)]

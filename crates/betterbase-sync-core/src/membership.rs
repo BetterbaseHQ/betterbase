@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn encrypt_decrypt_membership_round_trip() {
         let mut key = [0u8; 32];
-        getrandom::getrandom(&mut key).unwrap();
+        getrandom::fill(&mut key).unwrap();
 
         let payload = r#"{"u":"ucan-jwt","t":"d","s":"sig"}"#;
         let encrypted = encrypt_membership_payload(payload, &key, "space-1", 1).unwrap();
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn wrong_space_fails_membership_decrypt() {
         let mut key = [0u8; 32];
-        getrandom::getrandom(&mut key).unwrap();
+        getrandom::fill(&mut key).unwrap();
 
         let payload = "test payload";
         let encrypted = encrypt_membership_payload(payload, &key, "space-1", 1).unwrap();

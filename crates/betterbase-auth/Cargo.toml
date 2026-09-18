@@ -9,14 +9,14 @@ description = "PKCE, JWE decryption, JWK thumbprint, and scoped key extraction"
 
 [dependencies]
 betterbase-crypto = { path = "../betterbase-crypto" }
-aes-gcm = "0.10"
-aes-kw = "0.2"
+aes-gcm = "0.11"
+aes-kw = "0.3"
 base64ct = { version = "1", features = ["alloc"] }
-getrandom = { version = "0.2", features = ["js"] }
-hkdf = "0.12"
+getrandom = { version = "0.4", features = ["wasm_js"] }
+hkdf = "0.13"
 hex = "0.4"
-p256 = { version = "0.13", features = ["ecdh", "jwk"] }
-sha2 = "0.10"
+p256 = { version = "0.14", features = ["ecdh", "getrandom"] }
+sha2 = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
