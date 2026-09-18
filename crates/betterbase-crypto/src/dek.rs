@@ -8,6 +8,7 @@
 use crate::error::CryptoError;
 use crate::types::AES_KEY_LENGTH;
 use aes_kw::{KeyInit, KwAes256};
+use zeroize::Zeroize;
 
 /// Size of a wrapped DEK in bytes: 4 (epoch) + 40 (AES-KW output for 32-byte key).
 pub const WRAPPED_DEK_SIZE: usize = 44;
@@ -46,11 +47,12 @@ pub fn wrap_dek(dek: &[u8], kek: &[u8], epoch: u32) -> Result<[u8; WRAPPED_DEK_S
     }
 
     // Length validated above, so try_into cannot fail
-    let kek_array: [u8; 32] = kek.try_into().map_err(|_| CryptoError::InvalidKeyLength {
+    let mut kek_array: [u8; 32] = kek.try_into().map_err(|_| CryptoError::InvalidKeyLength {
         expected: AES_KEY_LENGTH,
         got: kek.len(),
     })?;
     let kek_key = KwAes256::new(&kek_array.into());
+    kek_array.zeroize();
     let mut wrapped = [0u8; AES_KW_OUTPUT_SIZE];
     kek_key
         .wrap_key(dek, &mut wrapped)
@@ -92,11 +94,12 @@ pub fn unwrap_dek(wrapped_dek: &[u8], kek: &[u8]) -> Result<(Vec<u8>, u32), Cryp
     );
     let wrapped_key_bytes = &wrapped_dek[4..];
 
-    let kek_array: [u8; 32] = kek.try_into().map_err(|_| CryptoError::InvalidKeyLength {
+    let mut kek_array: [u8; 32] = kek.try_into().map_err(|_| CryptoError::InvalidKeyLength {
         expected: AES_KEY_LENGTH,
         got: kek.len(),
     })?;
     let kek_key = KwAes256::new(&kek_array.into());
+    kek_array.zeroize();
     let mut dek = vec![0u8; AES_KEY_LENGTH];
     kek_key
         .unwrap_key(wrapped_key_bytes, &mut dek)

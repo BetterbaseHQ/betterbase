@@ -9,7 +9,7 @@ set -e
 if [ "$(uname -s)" = "Darwin" ]; then
     if [ -x /opt/homebrew/opt/llvm/bin/llvm-ar ]; then
         LLVM_BIN=/opt/homebrew/opt/llvm/bin
-    elif command -v llvm-ar >/dev/null 2>&1; then
+    elif command -v llvm-ar >/dev/null 2>&1 && [ -x "$(dirname "$(command -v llvm-ar)")/llvm-ranlib" ]; then
         LLVM_BIN="$(dirname "$(command -v llvm-ar)")"
     fi
     if [ -n "${LLVM_BIN:-}" ]; then

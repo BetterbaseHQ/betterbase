@@ -115,4 +115,4 @@ Key functions by crate:
 - JS: `pnpm`, `tsc` (typecheck only — source exports used directly via subpath exports), `vitest`, `prettier`
 - `js/package.json` exports point to `./src/*.ts` source files (not compiled dist) for development
 - WASM crates build with `wasm-pack build --target bundler`
-- Clippy uses `-A deprecated` for some crates due to upstream `aes-gcm` / `generic-array` deprecation warnings
+- Clippy runs with `-D warnings` (no deprecation suppressions since the RustCrypto 0.14 migration)

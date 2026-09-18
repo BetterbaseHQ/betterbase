@@ -9,7 +9,7 @@ description = "AES-256-GCM encryption, HKDF key derivation, ECDSA P-256 signing,
 
 [dependencies]
 aes-gcm = { version = "0.11", features = ["zeroize"] }
-aes-kw = "0.3"
+aes-kw = { version = "0.3", features = ["zeroize"] }
 hkdf = "0.13"
 sha2 = "0.11"
 p256 = { version = "0.14", features = ["ecdsa", "getrandom"] }

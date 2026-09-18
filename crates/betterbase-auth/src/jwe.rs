@@ -208,8 +208,7 @@ pub fn encrypt_jwe(
         .map_err(|e| AuthError::JweEncryptionFailed(format!("AES-GCM init: {:?}", e)))?;
     cek.zeroize();
 
-    let nonce = &Nonce::try_from(iv.as_slice())
-        .map_err(|_| AuthError::JweFormat("IV is not 12 bytes".to_string()))?;
+    let nonce = &Nonce::from(iv);
     let aad = aes_gcm::aead::Payload {
         msg: plaintext,
         aad: header_b64.as_bytes(),
@@ -312,10 +311,12 @@ fn import_p256_private_jwk(jwk: &serde_json::Value) -> Result<p256::SecretKey, A
         .as_str()
         .ok_or_else(|| AuthError::InvalidJwk("missing d (private key)".to_string()))?;
 
-    let d_bytes = base64url_decode(d_b64).map_err(|e| AuthError::InvalidJwk(e.to_string()))?;
+    let mut d_bytes = base64url_decode(d_b64).map_err(|e| AuthError::InvalidJwk(e.to_string()))?;
 
-    p256::SecretKey::from_slice(&d_bytes)
-        .map_err(|e| AuthError::InvalidJwk(format!("invalid private key scalar: {}", e)))
+    let secret = p256::SecretKey::from_slice(&d_bytes)
+        .map_err(|e| AuthError::InvalidJwk(format!("invalid private key scalar: {}", e)));
+    d_bytes.zeroize();
+    secret
 }
 
 /// Encode an EC point as a JWK JSON value.
