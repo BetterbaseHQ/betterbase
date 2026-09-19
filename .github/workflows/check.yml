@@ -18,10 +18,10 @@ jobs:
     steps:
       # json-joy-rs must be checked out as a sibling: betterbase-db depends
       # on it via ../../../json-joy-rs path dependencies
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: betterbase
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: BetterbaseHQ/json-joy-rs
           path: json-joy-rs
@@ -49,10 +49,10 @@ jobs:
       run:
         working-directory: betterbase/js
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: betterbase
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: BetterbaseHQ/json-joy-rs
           path: json-joy-rs
@@ -62,11 +62,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: betterbase
-      - uses: jetli/wasm-pack-action@v0.4.0
-      - uses: pnpm/action-setup@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: betterbase/js/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
