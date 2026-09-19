@@ -6,7 +6,7 @@
  *
  * ```ts
  * // my-db-worker.ts
- * import { initWorker } from "betterbase-db-wasm/worker";
+ * import { initWorker } from "betterbase/db/worker";
  * import { users } from "./collections.js";
  * initWorker([users]);
  * ```

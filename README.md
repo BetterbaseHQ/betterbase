@@ -11,7 +11,7 @@ const tasks = collection("tasks").v(1, { title: t.string(), done: t.boolean() })
 const db = await createDatabase("my-app", [tasks], { worker: /* see below */ })
 
 await db.put(tasks, { title: "Ship it", done: false })
-const { data } = await db.query(tasks, { where: { done: { $eq: false } } })
+const { records } = await db.query(tasks, { filter: { done: { $eq: false } } })
 ```
 
 ## Features
@@ -84,11 +84,19 @@ const record = await db.get(tasks, task.id);
 await db.patch(tasks, task.id, { done: true });
 await db.delete(tasks, task.id);
 
-const { data } = await db.query(tasks, {
-  where: { done: { $eq: false } },
+const { records } = await db.query(tasks, {
+  filter: { done: { $eq: false } },
   sort: [{ field: "createdAt", direction: "desc" }],
   limit: 20,
 });
+```
+
+Filters support Mongo-style operators: comparison (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`), membership (`$in`, `$nin`), arrays (`$contains`, `$containsAny`, `$all`, `$size`), and combinators (`$and`, `$or`, `$not`, `$exists`, `$regex`). Plain values are shorthand for `$eq`:
+
+```ts
+db.query(tasks, { filter: { done: false } });       // same as { done: { $eq: false } }
+db.query(tasks, { filter: { title: { $in: ["a", "b"] } } });
+db.query(tasks, { filter: { $or: [{ done: false }, { priority: { $gt: 2 } }] } });
 ```
 
 ## React Hooks
@@ -106,11 +114,11 @@ function App() {
 
 function TaskList() {
   const result = useQuery(tasks, {
-    where: { done: { $eq: false } },
+    filter: { done: { $eq: false } },
     sort: [{ field: "createdAt", direction: "desc" }],
   });
   if (!result) return <p>Loading...</p>;
-  return result.data.map((t) => <TaskItem key={t.id} id={t.id} />);
+  return result.records.map((t) => <TaskItem key={t.id} id={t.id} />);
 }
 
 function TaskItem({ id }: { id: string }) {
@@ -144,12 +152,21 @@ if (result) {
 }
 ```
 
-Or use the React hook:
+Or wrap your app in `AuthProvider` — a headless provider that constructs the client from config, manages the session lifecycle, and exposes everything through `useAuth()`:
 
 ```tsx
-import { useAuth } from "betterbase/auth/react";
+import { AuthProvider, useAuth } from "betterbase/auth/react";
 
-const { session, isAuthenticated, isLoading, logout } = useAuth(client);
+function main() {
+  root.render(
+    <AuthProvider domain="betterbase.dev" clientId="your-client-id" scope="openid email sync">
+      <App />
+    </AuthProvider>,
+  );
+}
+
+// Anywhere in the tree:
+const { session, isAuthenticated, isLoading, error, login, logout, handle } = useAuth();
 ```
 
 ## Enable Sync
@@ -180,6 +197,53 @@ function App() {
 ```
 
 `BetterbaseProvider` handles everything: connection management, push/pull scheduling, encryption/decryption, key rotation, and multi-tab coordination.
+
+> **Note:** `BetterbaseProvider` can throw during render (e.g. server discovery fails). Wrap it in a React error boundary and render a retry path from there.
+
+### Two `useQuery` hooks
+
+There are two React query hooks and they are not interchangeable:
+
+- `useQuery` from `betterbase/db/react` — plain database queries. Returns `undefined` on the first render, then results. Use outside `BetterbaseProvider` (offline/local mode). Also available as `useDbQuery` for explicitness.
+- `useQuery` from `betterbase/sync/react` — space-aware queries that respect `SpaceQueryOptions`. Always returns a `QueryResult` (empty until data arrives — never `undefined`). Must be used inside `BetterbaseProvider`. Throws outside it.
+
+If both end up in the same file, alias the imports: `import { useQuery as useDbQuery } from "betterbase/db/react"`.
+
+### Sync readiness
+
+Sync startup has two stages, and conflating them causes subtle bugs (e.g. seeding default data twice):
+
+1. `useSyncReady()` — the sync context is populated (keys derived, engine mounted). Data is **not** necessarily loaded yet.
+2. `useSync().phase === "ready"` — the full bootstrap completed: connect → pull → subscribe → pull. Queries now reflect server data.
+
+Gate one-time seeding (e.g. "create a default list on first run") on `phase === "ready"`, not on `useSyncReady()`, and guard it with a ref so React strict mode doesn't fire it twice.
+
+### Spaces and sharing
+
+Every record lives in a space: the user's personal space by default, or a shared space created via `useSpaces()`. Records expose `_spaceId`. A record is shared when `_spaceId` differs from the user's personal space id (`isShared(record, personalSpaceId)`).
+
+Space routing rules:
+
+- **Creating** a record that belongs to a shared space requires routing: `db.put(notes, data, spaceOf(parentNotebook))`. Without the third argument the record lands in the personal space.
+- **Patching or deleting** an existing record never needs routing — the record's space is already recorded.
+- **Sharing a record** moves it to a new shared space via `moveToSpace` / `bulkMoveToSpace` (which return records with **new IDs** — cross-space moves are delete + create under the hood), then `invite(spaceId, handle, ...)`.
+
+### Designing schemas for collaboration
+
+Conflict resolution is per-field, which makes schema shape a collaboration decision:
+
+- `t.text()` fields merge character-by-character — ideal for titles, message bodies, any prose two people might edit simultaneously.
+- Plain `t.array()` / `t.object()` fields resolve concurrent edits to **one winner**. Two peers editing different items of the same embedded array concurrently will drop one side's edit.
+- If peers create items independently (todo items, cards, messages), model them as **separate records in their own collection** keyed by a parent id, not an embedded array. Records merge independently; embedded arrays don't.
+- Avoid storing serialized JSON inside `t.text()` hoping for structural merge: a character-level merge of two JSON strings can produce invalid JSON. Model structure with fields/records instead.
+
+## Files
+
+`FileStore` (from `betterbase/sync`) encrypts and syncs binary blobs — photos, attachments — alongside record data, with a local cache and offline upload queue. Request the `files` OAuth scope in addition to `sync`:
+
+```ts
+scope: "openid email sync files"
+```
 
 ## Conflict Resolution
 

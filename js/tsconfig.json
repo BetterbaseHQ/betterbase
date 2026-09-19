@@ -22,10 +22,11 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitReturns": true,
     "noImplicitOverride": true,
+    "jsx": "react-jsx",
     "allowUnreachableCode": false,
     "allowUnusedLabels": false
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": [
     "node_modules",
     "dist",

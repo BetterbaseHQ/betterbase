@@ -168,6 +168,11 @@ export function useRecord<S extends SchemaShape>(
  *
  * The query object is compared by deterministic JSON serialization,
  * so inline objects are safe (no need to memoize).
+ *
+ * This is the plain-database variant. `betterbase/sync/react` exports a
+ * space-aware `useQuery` with a different contract (never `undefined`,
+ * requires `BetterbaseProvider`) — alias imports when both appear in one
+ * file, or use `useDbQuery` for explicitness.
  */
 export function useQuery<S extends SchemaShape>(
   def: CollectionDefHandle<string, S>,
@@ -212,3 +217,22 @@ export function useQuery<S extends SchemaShape>(
     () => undefined,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Aliases — unambiguous names when both db and sync query hooks meet in one
+// file. `useDbQuery` IS `useQuery` (identical behavior), just explicitly the
+// plain-database variant rather than the space-aware one from
+// `betterbase/sync/react`.
+// ---------------------------------------------------------------------------
+
+/**
+ * Alias for the plain-database `useQuery` (this module). See `useQuery` for
+ * behavior; see the module header for how this differs from the space-aware
+ * `useQuery` in `betterbase/sync/react`.
+ */
+export const useDbQuery = useQuery;
+
+/**
+ * Alias for the plain-database `useRecord` (this module). See `useRecord`.
+ */
+export const useDbRecord = useRecord;

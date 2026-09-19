@@ -49,6 +49,10 @@ import {
 } from "../discovery/index.js";
 import { initialSyncState } from "./sync-state.js";
 import { stableStringify } from "./stable-stringify.js";
+import {
+  deriveConnectionStatus,
+  type ConnectionStatus as ConnectionStatusType,
+} from "./connection-status.js";
 import { SyncEngine } from "./sync-engine.js";
 import {
   TypedAdapter,
@@ -1744,7 +1748,124 @@ export function useEditChain(
 }
 
 // ---------------------------------------------------------------------------
+// useConnectionStatus — engine state + browser connectivity
+// ---------------------------------------------------------------------------
+
+export type { ConnectionStatus } from "./connection-status.js";
+export { deriveConnectionStatus } from "./connection-status.js";
+
+/**
+ * Combines sync-engine state with browser online/offline state into a single
+ * status apps can map straight to UI. Must be used inside a
+ * `BetterbaseProvider` tree.
+ *
+ * Precedence: `offline` (browser reports no network) > `error` (engine
+ * error) > `syncing` (including the `connecting`/`bootstrapping` phases) >
+ * `synced`.
+ */
+export function useConnectionStatus(): ConnectionStatusType {
+  const { phase, syncing, error } = useSync();
+  const [online, setOnline] = useState(() => navigator.onLine);
+
+  useEffect(() => {
+    const markOnline = () => setOnline(true);
+    const markOffline = () => setOnline(false);
+    window.addEventListener("online", markOnline);
+    window.addEventListener("offline", markOffline);
+    return () => {
+      window.removeEventListener("online", markOnline);
+      window.removeEventListener("offline", markOffline);
+    };
+  }, []);
+
+  return deriveConnectionStatus({ online, phase, syncing, error });
+}
+
+// ---------------------------------------------------------------------------
+// useTyping — typing-indicator protocol over space events
+// ---------------------------------------------------------------------------
+
+const TYPING_SEND_INTERVAL = 2000; // suppress duplicate sends within 2s
+const TYPING_RECEIVE_TIMEOUT = 3000; // expire peer after 3s of silence
+
+interface TypingPayload {
+  handle: string;
+}
+
+type TypingEventMap = { typing: TypingPayload };
+
+/**
+ * Typing broadcast/receive over space events.
+ *
+ * Call `sendTyping()` on every keystroke — it self-throttles (one event per
+ * 2s). `typingPeers` lists handles of currently-typing peers and
+ * auto-expires each after 3s of silence. Own echoes are ignored.
+ */
+export function useTyping(
+  spaceId: string | undefined,
+  myHandle: string | null,
+): {
+  typingPeers: string[];
+  sendTyping: () => void;
+} {
+  const [typingPeers, setTypingPeers] = useState<string[]>([]);
+  const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const lastSent = useRef(0);
+
+  const send = useSendEvent<TypingEventMap>(spaceId);
+
+  // Receive typing events from other peers
+  useEvent<TypingEventMap, "typing">(spaceId, "typing", (data) => {
+    if (data.handle === myHandle) return;
+
+    const handle = data.handle;
+    const existing = timers.current.get(handle);
+    if (existing) clearTimeout(existing);
+
+    setTypingPeers((prev) =>
+      prev.includes(handle) ? prev : [...prev, handle],
+    );
+
+    timers.current.set(
+      handle,
+      setTimeout(() => {
+        timers.current.delete(handle);
+        setTypingPeers((prev) => prev.filter((h) => h !== handle));
+      }, TYPING_RECEIVE_TIMEOUT),
+    );
+  });
+
+  // Reset peer state when the space changes so peers typing in the previous
+  // space don't linger in the new one; clear timers on unmount.
+  useEffect(() => {
+    setTypingPeers([]);
+    return () => {
+      for (const t of timers.current.values()) clearTimeout(t);
+      timers.current.clear();
+    };
+  }, [spaceId]);
+
+  const sendTyping = useCallback(() => {
+    if (!myHandle) return;
+    const now = Date.now();
+    if (now - lastSent.current < TYPING_SEND_INTERVAL) return;
+    lastSent.current = now;
+    send("typing", { handle: myHandle });
+  }, [myHandle, send]);
+
+  return { typingPeers, sendTyping };
+}
+
+// ---------------------------------------------------------------------------
 // Re-exports for app consumption (React-specific only)
 // ---------------------------------------------------------------------------
 
 export type { EditHistoryEntry } from "./spaces-middleware.js";
+export { isShared } from "./spaces-middleware.js";
+export { shareTree, ShareTreeError } from "./share-tree.js";
+export type {
+  ShareTreeOptions,
+  ShareTreeResult,
+  ShareTreeSpaces,
+  ShareTreeChildren,
+} from "./share-tree.js";

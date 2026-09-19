@@ -1,7 +1,7 @@
 /**
  * Deterministic personal space ID computation.
  *
- * Matches the Go server's spaceid.Personal() function:
+ * Matches the accounts server's personal-space computation:
  *   UUID5(LESS_NS, "{issuer}\0{userId}\0{clientId}")
  * where LESS_NS = UUID5(DNS, "betterbase.dev")
  *
@@ -21,7 +21,7 @@ const BETTERBASE_NAMESPACE = new Uint8Array([
 /**
  * Compute the deterministic personal space ID for a user.
  *
- * This MUST produce the same result as the Go server's spaceid.Personal()
+ * This MUST produce the same result as the server's personal-space computation
  * to ensure clients and servers agree on space IDs.
  *
  * @param issuer - JWT issuer URL (e.g., "https://accounts.betterbase.dev")

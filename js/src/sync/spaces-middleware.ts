@@ -62,6 +62,23 @@ export interface SpaceQueryOptions {
 }
 
 /**
+ * Whether a record lives in a shared space (i.e. a space other than the
+ * user's personal one). Records without a `_spaceId` (local/offline mode)
+ * are never shared.
+ *
+ * @example
+ * ```typescript
+ * const shared = isShared(notebook, session.getPersonalSpaceId());
+ * ```
+ */
+export function isShared(
+  record: { readonly _spaceId?: string },
+  personalSpaceId: string | null | undefined,
+): boolean {
+  return record._spaceId != null && record._spaceId !== personalSpaceId;
+}
+
+/**
  * Create a spaces middleware instance.
  *
  * Records with no `spaceId` in their metadata (e.g., created before middleware

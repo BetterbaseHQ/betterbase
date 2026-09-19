@@ -1,5 +1,5 @@
 /**
- * SyncEngine — framework-agnostic orchestrator for the Less sync lifecycle.
+ * SyncEngine — framework-agnostic orchestrator for the betterbase sync lifecycle.
  *
  * Owns the entire bootstrap/lifecycle sequence:
  *   create WSClient → wire PresenceManager → create WSTransport →

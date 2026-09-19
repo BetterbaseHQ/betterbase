@@ -1,7 +1,7 @@
 /**
  * Handle utilities for user@domain identity handles.
  *
- * Mirrors the server's services/identity.go logic.
+ * Mirrors the accounts server's identity logic.
  * The client receives handles from the server and passes them through —
  * these utilities are for parsing (e.g., extracting username for API paths)
  * and validation only.

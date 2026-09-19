@@ -3,13 +3,27 @@
  *
  * Import from "betterbase/auth/react".
  *
+ * - `AuthProvider` — headless provider that constructs an `OAuthClient` from
+ *   config props and manages the full lifecycle
+ * - `useAuth()` — read auth state from the nearest `AuthProvider`
+ * - `useAuth(client)` — manage the lifecycle yourself with your own client
  * - `useAuthSession(client)` — manages the full OAuth lifecycle (callback, restore, refresh, logout)
  * - `useSessionToken(session)` — provides a **stable** `getToken` reference that never changes identity
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  createContext,
+  createElement,
+  useContext,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { AuthSession } from "./session.js";
-import type { OAuthClient } from "./client.js";
+import { OAuthClient } from "./client.js";
 import type { AuthResult } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -252,8 +266,11 @@ export interface UseAuthResult {
  *
  * Pass an `OAuthClient` (or `null` to defer initialization). Returns the
  * full session lifecycle plus token/key accessors in a single call.
+ *
+ * Called with no arguments, reads from the nearest `AuthProvider` instead —
+ * see `useAuth()` (context form) below.
  */
-export function useAuth(client: OAuthClient | null): UseAuthResult {
+function useAuthWithClient(client: OAuthClient | null): UseAuthResult {
   const { session, isAuthenticated, isLoading, error, logout } =
     useAuthSession(client);
   const {
@@ -278,4 +295,170 @@ export function useAuth(client: OAuthClient | null): UseAuthResult {
     keypair,
     handle,
   };
+}
+
+// ---------------------------------------------------------------------------
+// AuthProvider — headless context provider
+// ---------------------------------------------------------------------------
+
+export interface AuthProviderProps {
+  children: ReactNode;
+  /** Auth server domain (e.g. "accounts.betterbase.dev" or "localhost:5377"). */
+  domain: string;
+  /**
+   * OAuth client ID. Pass an empty string when unconfigured — the provider
+   * renders normally but `login()` rejects with a helpful error.
+   */
+  clientId: string;
+  /**
+   * OAuth scopes to request. `"sync"` delivers the encryption key needed by
+   * `BetterbaseProvider`; `"files"` is additionally required by `FileStore`.
+   * Default: `"openid email sync"`.
+   */
+  scope?: string;
+  /** OAuth redirect URI. Default: `window.location.origin + "/"`. */
+  redirectUri?: string;
+}
+
+export interface AuthContextValue extends UseAuthResult {
+  /** Start the OAuth redirect flow. Rejects when no client is configured. */
+  login: () => Promise<void>;
+  /** The configured OAuth client ID (empty string when unset). */
+  clientId: string;
+}
+
+/**
+ * Context carrying auth state. Exported for test doubles — app code should
+ * read it via `useAuth()`.
+ */
+export const AuthContext = createContext<AuthContextValue | null>(null);
+
+/**
+ * Headless auth provider: constructs an `OAuthClient` from config, manages
+ * the full session lifecycle (callback handling, restore, refresh, logout),
+ * and exposes everything through `useAuth()`. Renders no UI.
+ *
+ * @example
+ * ```tsx
+ * <AuthProvider domain="localhost:5377" clientId={import.meta.env.VITE_OAUTH_CLIENT_ID}>
+ *   <App />
+ * </AuthProvider>
+ * ```
+ */
+export function AuthProvider({
+  children,
+  domain,
+  clientId,
+  scope = "openid email sync",
+  redirectUri,
+}: AuthProviderProps) {
+  const client = useMemo(
+    () =>
+      clientId
+        ? new OAuthClient({
+            clientId,
+            domain,
+            scope,
+            redirectUri: redirectUri ?? window.location.origin + "/",
+          })
+        : null,
+    [clientId, domain, scope, redirectUri],
+  );
+
+  const {
+    session,
+    isAuthenticated,
+    isLoading,
+    error: sessionError,
+    logout: sessionLogout,
+    getToken,
+    encryptionKey,
+    epochKey,
+    personalSpaceId,
+    keypair,
+    handle,
+  } = useAuthWithClient(client);
+
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  const login = useCallback(async () => {
+    if (!client) {
+      setLoginError("OAuth client ID is not configured");
+      throw new Error("OAuth client ID is not configured");
+    }
+    setLoginError(null);
+    try {
+      await client.startAuth();
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : "Login failed");
+      throw err;
+    }
+  }, [client]);
+
+  const logout = useCallback(() => {
+    sessionLogout();
+    setLoginError(null);
+  }, [sessionLogout]);
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      session,
+      getToken,
+      encryptionKey,
+      epochKey,
+      personalSpaceId,
+      keypair,
+      handle,
+      isAuthenticated,
+      isLoading,
+      error: loginError ?? sessionError,
+      login,
+      logout,
+      clientId,
+    }),
+    [
+      session,
+      getToken,
+      encryptionKey,
+      epochKey,
+      personalSpaceId,
+      keypair,
+      handle,
+      isAuthenticated,
+      isLoading,
+      loginError,
+      sessionError,
+      login,
+      logout,
+      clientId,
+    ],
+  );
+
+  return createElement(AuthContext.Provider, { value }, children);
+}
+
+/**
+ * Read auth state from the nearest `AuthProvider`.
+ *
+ * Two forms:
+ * - `useAuth()` — reads from an `AuthProvider` ancestor; additionally
+ *   provides `login()` and `clientId`.
+ * - `useAuth(client)` — manages the lifecycle with your own `OAuthClient`
+ *   (no provider needed).
+ *
+ * @throws Error (no-argument form) when no `AuthProvider` is found.
+ */
+export function useAuth(): AuthContextValue;
+export function useAuth(client: OAuthClient | null): UseAuthResult;
+export function useAuth(
+  client?: OAuthClient | null,
+): UseAuthResult | AuthContextValue {
+  if (client !== undefined) return useAuthWithClient(client);
+  const ctx = useContext(AuthContext);
+  if (!ctx) {
+    throw new Error(
+      "useAuth: no AuthProvider found in component tree (or pass an OAuthClient directly)",
+    );
+  }
+  return ctx;
 }

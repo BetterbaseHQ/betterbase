@@ -1,6 +1,6 @@
 /**
  * WebSocket RPC frame types and data interfaces for the betterbase-rpc-v1 subprotocol.
- * Matches the Go server protocol/rpc.go and protocol/ws.go definitions.
+ * Matches the sync server's protocol definitions (betterbase-rpc-v1 subprotocol).
  *
  * Frame envelope: {type: <int>, ...} using string keys.
  */

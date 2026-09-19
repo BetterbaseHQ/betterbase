@@ -101,7 +101,7 @@ export { spaces } from "./spaces-collection.js";
 export type { SpaceStatus, SpaceRole } from "./spaces-collection.js";
 
 // Spaces middleware
-export { createSpacesMiddleware } from "./spaces-middleware.js";
+export { createSpacesMiddleware, isShared } from "./spaces-middleware.js";
 export type {
   SpaceFields,
   SpaceWriteOptions,
@@ -119,6 +119,13 @@ export type {
 
 // Space operations
 export { moveToSpace, bulkMoveToSpace, spaceOf } from "./move-to-space.js";
+export { shareTree, ShareTreeError } from "./share-tree.js";
+export type {
+  ShareTreeOptions,
+  ShareTreeResult,
+  ShareTreeSpaces,
+  ShareTreeChildren,
+} from "./share-tree.js";
 
 // Presence & Events
 export { PresenceManager } from "./presence.js";

@@ -2,7 +2,7 @@
  * Schema builder helpers — matches the original betterbase-db `t` API.
  *
  * Usage:
- *   import { t } from "betterbase-db-wasm";
+ *   import { t } from "betterbase/db";
  *   const schema = { name: t.string(), age: t.optional(t.number()) };
  */
 

@@ -63,6 +63,18 @@
     "./db/worker": {
       "import": "./src/db/opfs/init.ts",
       "types": "./src/db/opfs/init.ts"
+    },
+    "./testing": {
+      "import": "./src/testing/index.ts",
+      "types": "./src/testing/index.ts"
+    },
+    "./testing/mock-sync": {
+      "import": "./src/testing/mock-sync.tsx",
+      "types": "./src/testing/mock-sync.tsx"
+    },
+    "./testing/mock-auth": {
+      "import": "./src/testing/mock-auth.tsx",
+      "types": "./src/testing/mock-auth.tsx"
     }
   },
   "license": "Apache-2.0",

@@ -4,7 +4,7 @@ Guidance for AI coding agents working with the Betterbase SDK.
 
 ## Overview
 
-Rust/WASM SDK for building local-first, end-to-end encrypted apps. Pure Rust core crates compiled to WebAssembly, with a TypeScript layer for browser APIs and React hooks. Published as `@betterbase/sdk` with subpath exports.
+Rust/WASM SDK for building local-first, end-to-end encrypted apps. Pure Rust core crates compiled to WebAssembly, with a TypeScript layer for browser APIs and React hooks. Published as `betterbase` with subpath exports.
 
 **Key design: encrypt at the boundary.** Data lives plaintext in SQLite (fully queryable). Encryption happens only when syncing to the server. The server never sees plaintext.
 
@@ -59,18 +59,19 @@ betterbase-db-wasm ──→ betterbase-db, sqlite-wasm-vfs
 
 ### TypeScript layer (`js/`)
 
-Standalone npm package `@betterbase/sdk` in `js/` with its own `package.json`, `tsconfig.json`, and vitest config. ESM-only with subpath exports:
+Standalone npm package `betterbase` in `js/` with its own `package.json`, `tsconfig.json`, and vitest config. ESM-only with subpath exports:
 
-- `@betterbase/sdk` — `initWasm()` entry point
-- `@betterbase/sdk/crypto` — `SyncCrypto`, `JsonCrypto` (thin wrappers calling WASM)
-- `@betterbase/sdk/auth` — `OAuthClient` (redirects, sessionStorage), `AuthSession` (localStorage, timers), `KeyStore` (IndexedDB)
-- `@betterbase/sdk/auth/react` — `useAuth`, `useAuthSession`, `useSessionToken`
-- `@betterbase/sdk/discovery` — `fetchServerMetadata()`, `resolveUser()` (fetch + WASM validation)
-- `@betterbase/sdk/sync` — `LessSyncTransport`, `SyncEngine`, `SpaceManager`, `InvitationClient`, `PresenceManager`, `EventManager`, `FileStore`
-- `@betterbase/sdk/sync/react` — `LessProvider`, `useSpaces`, `useQuery`, `useRecord`, `useFiles`, `usePeers`, `usePresence`, `useEvent`, `useEditChain`
-- `@betterbase/sdk/db` — `collection`, `t`, `createOpfsDb`, `SyncManager`, `SyncScheduler`
-- `@betterbase/sdk/db/react` — `LessDBProvider`, `useQuery`, `useRecord`, `useSyncStatus`
-- `@betterbase/sdk/db/worker` — `initOpfsWorker` (Web Worker entry point)
+- `betterbase` — `initWasm()` entry point
+- `betterbase/crypto` — `SyncCrypto`, `JsonCrypto` (thin wrappers calling WASM)
+- `betterbase/auth` — `OAuthClient` (redirects, sessionStorage), `AuthSession` (localStorage, timers), `KeyStore` (IndexedDB)
+- `betterbase/auth/react` — `AuthProvider`, `useAuth`, `useAuthSession`, `useSessionToken`
+- `betterbase/discovery` — `fetchServerMetadata()`, `resolveUser()` (fetch + WASM validation)
+- `betterbase/sync` — `SyncTransport`, `SyncEngine`, `SpaceManager`, `InvitationClient`, `PresenceManager`, `EventManager`, `FileStore`, `moveToSpace`/`bulkMoveToSpace`/`spaceOf`/`shareTree`/`isShared`
+- `betterbase/sync/react` — `BetterbaseProvider`, `useSpaces`, `useQuery`, `useRecord`, `useFiles`, `usePeers`, `usePresence`, `useEvent`, `useEditChain`, `useConnectionStatus`, `useTyping`
+- `betterbase/db` — `collection`, `t`, `createDatabase`, `SyncManager`, `SyncScheduler`
+- `betterbase/db/react` — `DatabaseProvider`, `useQuery` (alias `useDbQuery`), `useRecord` (alias `useDbRecord`), `useSyncStatus`
+- `betterbase/db/worker` — `initWorker` (Web Worker entry point)
+- `betterbase/testing` — test doubles for component tests (`mock-sync`, `mock-auth`)
 
 TypeScript stays in TS (not compiled to WASM) because it needs browser APIs: DOM, IndexedDB, WebSocket, localStorage, sessionStorage, Web Workers.
 

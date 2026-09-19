@@ -13,7 +13,7 @@
  *
  * @example
  * ```ts
- * import { createDatabase } from "betterbase-db-wasm";
+ * import { createDatabase } from "betterbase/db";
  * import { users } from "./collections.js";
  *
  * const db = await createDatabase("my-app", [users], {
