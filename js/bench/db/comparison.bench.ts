@@ -3,7 +3,7 @@
 // WASM operations go through a Web Worker (postMessage round-trip).
 // JS and Dexie operations are async (awaiting IDB transactions).
 
-import { bench, describe } from "vitest";
+import { describe, test } from "vitest";
 import Dexie, { type Table } from "dexie";
 import {
   generateUsers,
@@ -11,30 +11,11 @@ import {
   type User,
   type BenchUsersCollection,
 } from "./shared.js";
-import { createDatabase, type Database } from "../src/index.js";
-
-// ---------------------------------------------------------------------------
-// JS reference imports (aliased via vitest.bench.config.ts)
-// ---------------------------------------------------------------------------
-import {
-  collection as jsCollection,
-  t as jsT,
-  IndexedDBAdapter,
-} from "../../src/db";
+import { createDatabase, type Database } from "../../src/db/index.js";
 
 // ---------------------------------------------------------------------------
 // Collection definitions
 // ---------------------------------------------------------------------------
-const jsUsers = jsCollection("users")
-  .v(1, {
-    name: jsT.string(),
-    email: jsT.string(),
-    age: jsT.number(),
-  })
-  .index(["name"])
-  .index(["age"])
-  .build();
-
 const wasmUsers: BenchUsersCollection = buildBenchCollection();
 
 // ---------------------------------------------------------------------------
@@ -80,41 +61,6 @@ async function wasmInsertUsers(count: number): Promise<string[]> {
   return ids;
 }
 
-// ---------------------------------------------------------------------------
-// JS reference lifecycle
-// ---------------------------------------------------------------------------
-let jsAdapter: IndexedDBAdapter;
-let jsDbName: string;
-let jsCounter = 0;
-let jsInsertedIds: string[] = [];
-
-async function setupJs() {
-  jsDbName = `js-bench-${Date.now()}-${jsCounter++}`;
-  jsAdapter = new IndexedDBAdapter(jsDbName);
-  await jsAdapter.initialize([jsUsers]);
-  jsInsertedIds = [];
-}
-
-async function teardownJs() {
-  await jsAdapter.close();
-  const req = indexedDB.deleteDatabase(jsDbName);
-  await new Promise<void>((resolve, reject) => {
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function jsInsertUsers(count: number): Promise<string[]> {
-  const data = generateUsers(count);
-  const ids: string[] = [];
-  for (const u of data) {
-    const result = await jsAdapter.put(jsUsers, u);
-    ids.push(result.id);
-  }
-  return ids;
-}
-
-// ---------------------------------------------------------------------------
 // Dexie lifecycle
 // ---------------------------------------------------------------------------
 let dexieDb: Dexie & { users: Table<DexieUser, number> };
@@ -143,278 +89,190 @@ async function teardownDexie() {
 // ===========================================================================
 describe("single operations", () => {
   // --- put (insert) ---
-  bench(
-    "wasm: put",
-    async () => {
-      await wasmDb.put(wasmUsers, {
-        name: "test",
-        email: "test@example.com",
-        age: 25,
-      });
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: setupWasm,
-      teardown: teardownWasm,
-    },
-  );
+  test("wasm: put", async ({ bench }) => {
+    await bench(
+      "wasm: put",
+      { beforeAll: setupWasm, afterAll: teardownWasm },
+      async () => {
+        await wasmDb.put(wasmUsers, {
+          name: "test",
+          email: "test@example.com",
+          age: 25,
+        });
+      },
+    ).run({ iterations: 50, warmupIterations: 5 });
+  });
 
-  bench(
-    "js: put",
-    async () => {
-      await jsAdapter.put(jsUsers, {
-        name: "test",
-        email: "test@example.com",
-        age: 25,
-      });
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: setupJs,
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: add",
-    async () => {
-      await dexieDb.users.add({
-        name: "test",
-        email: "test@example.com",
-        age: 25,
-      });
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: setupDexie,
-      teardown: teardownDexie,
-    },
-  );
+  test("dexie: add", async ({ bench }) => {
+    await bench(
+      "dexie: add",
+      { beforeAll: setupDexie, afterAll: teardownDexie },
+      async () => {
+        await dexieDb.users.add({
+          name: "test",
+          email: "test@example.com",
+          age: 25,
+        });
+      },
+    ).run({ iterations: 50, warmupIterations: 5 });
+  });
 
   // --- get ---
-  bench(
-    "wasm: get",
-    async () => {
-      await wasmDb.get(wasmUsers, wasmInsertedIds[0]!);
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupWasm();
-        wasmInsertedIds = await wasmInsertUsers(1);
+  test("wasm: get", async ({ bench }) => {
+    await bench(
+      "wasm: get",
+      {
+        beforeAll: async () => {
+          await setupWasm();
+          wasmInsertedIds = await wasmInsertUsers(1);
+        },
+        afterAll: teardownWasm,
       },
-      teardown: teardownWasm,
-    },
-  );
+      async () => {
+        await wasmDb.get(wasmUsers, wasmInsertedIds[0]!);
+      },
+    ).run({ iterations: 50, warmupIterations: 5 });
+  });
 
-  bench(
-    "js: get",
-    async () => {
-      await jsAdapter.get(jsUsers, jsInsertedIds[0]!);
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupJs();
-        jsInsertedIds = await jsInsertUsers(1);
+  test("dexie: get", async ({ bench }) => {
+    await bench(
+      "dexie: get",
+      {
+        beforeAll: async () => {
+          await setupDexie();
+          await dexieDb.users.add({
+            name: "test",
+            email: "test@example.com",
+            age: 25,
+          });
+        },
+        afterAll: teardownDexie,
       },
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: get",
-    async () => {
-      await dexieDb.users.get(1);
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupDexie();
-        await dexieDb.users.add({
-          name: "test",
-          email: "test@example.com",
-          age: 25,
-        });
+      async () => {
+        await dexieDb.users.get(1);
       },
-      teardown: teardownDexie,
-    },
-  );
+    ).run({ iterations: 50, warmupIterations: 5 });
+  });
 
   // --- put (update) ---
-  bench(
-    "wasm: put (update)",
-    async () => {
-      await wasmDb.put(
-        wasmUsers,
-        { name: "test", email: "test@example.com", age: 30 },
-        { id: wasmInsertedIds[0]! },
-      );
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupWasm();
-        wasmInsertedIds = await wasmInsertUsers(1);
+  test("wasm: put (update)", async ({ bench }) => {
+    await bench(
+      "wasm: put (update)",
+      {
+        beforeAll: async () => {
+          await setupWasm();
+          wasmInsertedIds = await wasmInsertUsers(1);
+        },
+        afterAll: teardownWasm,
       },
-      teardown: teardownWasm,
-    },
-  );
-
-  bench(
-    "js: put (update)",
-    async () => {
-      const existing = await jsAdapter.get(jsUsers, jsInsertedIds[0]!);
-      await jsAdapter.put(jsUsers, { ...existing!.data, age: 30 });
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupJs();
-        jsInsertedIds = await jsInsertUsers(1);
+      async () => {
+        await wasmDb.put(
+          wasmUsers,
+          { name: "test", email: "test@example.com", age: 30 },
+          { id: wasmInsertedIds[0]! },
+        );
       },
-      teardown: teardownJs,
-    },
-  );
+    ).run({ iterations: 50, warmupIterations: 5 });
+  });
 
-  bench(
-    "dexie: put (upsert)",
-    async () => {
-      await dexieDb.users.put({
-        id: 1,
-        name: "test",
-        email: "test@example.com",
-        age: 30,
-      });
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupDexie();
-        await dexieDb.users.add({
+  test("dexie: put (upsert)", async ({ bench }) => {
+    await bench(
+      "dexie: put (upsert)",
+      {
+        beforeAll: async () => {
+          await setupDexie();
+          await dexieDb.users.add({
+            name: "test",
+            email: "test@example.com",
+            age: 25,
+          });
+        },
+        afterAll: teardownDexie,
+      },
+      async () => {
+        await dexieDb.users.put({
+          id: 1,
           name: "test",
           email: "test@example.com",
-          age: 25,
+          age: 30,
         });
       },
-      teardown: teardownDexie,
-    },
-  );
+    ).run({ iterations: 50, warmupIterations: 5 });
+  });
 
   // --- patch ---
-  bench(
-    "wasm: patch",
-    async () => {
-      await wasmDb.patch(wasmUsers, { id: wasmInsertedIds[0]!, age: 99 });
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupWasm();
-        wasmInsertedIds = await wasmInsertUsers(1);
+  test("wasm: patch", async ({ bench }) => {
+    await bench(
+      "wasm: patch",
+      {
+        beforeAll: async () => {
+          await setupWasm();
+          wasmInsertedIds = await wasmInsertUsers(1);
+        },
+        afterAll: teardownWasm,
       },
-      teardown: teardownWasm,
-    },
-  );
+      async () => {
+        await wasmDb.patch(wasmUsers, { id: wasmInsertedIds[0]!, age: 99 });
+      },
+    ).run({ iterations: 50, warmupIterations: 5 });
+  });
 
-  bench(
-    "js: patch",
-    async () => {
-      await jsAdapter.patch(jsUsers, { id: jsInsertedIds[0]!, age: 99 });
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupJs();
-        jsInsertedIds = await jsInsertUsers(1);
+  test("dexie: update (patch)", async ({ bench }) => {
+    await bench(
+      "dexie: update (patch)",
+      {
+        beforeAll: async () => {
+          await setupDexie();
+          await dexieDb.users.add({
+            name: "test",
+            email: "test@example.com",
+            age: 25,
+          });
+        },
+        afterAll: teardownDexie,
       },
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: update (patch)",
-    async () => {
-      await dexieDb.users.update(1, { age: 99 });
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupDexie();
-        await dexieDb.users.add({
-          name: "test",
-          email: "test@example.com",
-          age: 25,
-        });
+      async () => {
+        await dexieDb.users.update(1, { age: 99 });
       },
-      teardown: teardownDexie,
-    },
-  );
+    ).run({ iterations: 50, warmupIterations: 5 });
+  });
 
   // --- delete ---
-  bench(
-    "wasm: delete",
-    async () => {
-      await wasmDb.delete(wasmUsers, wasmInsertedIds[0]!);
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupWasm();
-        wasmInsertedIds = await wasmInsertUsers(1);
+  test("wasm: delete", async ({ bench }) => {
+    await bench(
+      "wasm: delete",
+      {
+        beforeAll: async () => {
+          await setupWasm();
+          wasmInsertedIds = await wasmInsertUsers(1);
+        },
+        afterAll: teardownWasm,
       },
-      teardown: teardownWasm,
-    },
-  );
+      async () => {
+        await wasmDb.delete(wasmUsers, wasmInsertedIds[0]!);
+      },
+    ).run({ iterations: 50, warmupIterations: 5 });
+  });
 
-  bench(
-    "js: delete",
-    async () => {
-      await jsAdapter.delete(jsUsers, jsInsertedIds[0]!);
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupJs();
-        jsInsertedIds = await jsInsertUsers(1);
+  test("dexie: delete", async ({ bench }) => {
+    await bench(
+      "dexie: delete",
+      {
+        beforeAll: async () => {
+          await setupDexie();
+          await dexieDb.users.add({
+            name: "test",
+            email: "test@example.com",
+            age: 25,
+          });
+        },
+        afterAll: teardownDexie,
       },
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: delete",
-    async () => {
-      await dexieDb.users.delete(1);
-    },
-    {
-      iterations: 50,
-      warmupIterations: 5,
-      setup: async () => {
-        await setupDexie();
-        await dexieDb.users.add({
-          name: "test",
-          email: "test@example.com",
-          age: 25,
-        });
+      async () => {
+        await dexieDb.users.delete(1);
       },
-      teardown: teardownDexie,
-    },
-  );
+    ).run({ iterations: 50, warmupIterations: 5 });
+  });
 });
 
 // ===========================================================================
@@ -422,233 +280,147 @@ describe("single operations", () => {
 // ===========================================================================
 describe("bulk operations", () => {
   // --- bulkPut 100 ---
-  bench(
-    "wasm: bulkPut 100",
-    async () => {
-      await wasmDb.bulkPut(wasmUsers, generateUsers(100));
-    },
-    {
-      iterations: 20,
-      warmupIterations: 2,
-      setup: setupWasm,
-      teardown: teardownWasm,
-    },
-  );
-
-  bench(
-    "js: bulkPut 100",
-    async () => {
-      await jsAdapter.bulkPut(jsUsers, generateUsers(100));
-    },
-    {
-      iterations: 20,
-      warmupIterations: 2,
-      setup: setupJs,
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: bulkAdd 100",
-    async () => {
-      await dexieDb.users.bulkAdd(generateUsers(100));
-    },
-    {
-      iterations: 20,
-      warmupIterations: 2,
-      setup: setupDexie,
-      teardown: teardownDexie,
-    },
-  );
-
-  // --- bulkPut 1000 ---
-  bench(
-    "wasm: bulkPut 1000",
-    async () => {
-      await wasmDb.bulkPut(wasmUsers, generateUsers(1000));
-    },
-    {
-      iterations: 10,
-      warmupIterations: 1,
-      setup: setupWasm,
-      teardown: teardownWasm,
-    },
-  );
-
-  bench(
-    "js: bulkPut 1000",
-    async () => {
-      await jsAdapter.bulkPut(jsUsers, generateUsers(1000));
-    },
-    {
-      iterations: 10,
-      warmupIterations: 1,
-      setup: setupJs,
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: bulkAdd 1000",
-    async () => {
-      await dexieDb.users.bulkAdd(generateUsers(1000));
-    },
-    {
-      iterations: 10,
-      warmupIterations: 1,
-      setup: setupDexie,
-      teardown: teardownDexie,
-    },
-  );
-
-  // --- getAll 100 ---
-  bench(
-    "wasm: getAll 100",
-    async () => {
-      await wasmDb.getAll(wasmUsers);
-    },
-    {
-      iterations: 20,
-      warmupIterations: 2,
-      setup: async () => {
-        await setupWasm();
+  test("wasm: bulkPut 100", async ({ bench }) => {
+    await bench(
+      "wasm: bulkPut 100",
+      { beforeAll: setupWasm, afterAll: teardownWasm },
+      async () => {
         await wasmDb.bulkPut(wasmUsers, generateUsers(100));
       },
-      teardown: teardownWasm,
-    },
-  );
+    ).run({ iterations: 20, warmupIterations: 2 });
+  });
 
-  bench(
-    "js: getAll 100",
-    async () => {
-      await jsAdapter.getAll(jsUsers);
-    },
-    {
-      iterations: 20,
-      warmupIterations: 2,
-      setup: async () => {
-        await setupJs();
-        await jsInsertUsers(100);
-      },
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: toArray 100",
-    async () => {
-      await dexieDb.users.toArray();
-    },
-    {
-      iterations: 20,
-      warmupIterations: 2,
-      setup: async () => {
-        await setupDexie();
+  test("dexie: bulkAdd 100", async ({ bench }) => {
+    await bench(
+      "dexie: bulkAdd 100",
+      { beforeAll: setupDexie, afterAll: teardownDexie },
+      async () => {
         await dexieDb.users.bulkAdd(generateUsers(100));
       },
-      teardown: teardownDexie,
-    },
-  );
+    ).run({ iterations: 20, warmupIterations: 2 });
+  });
 
-  // --- getAll 1000 ---
-  bench(
-    "wasm: getAll 1000",
-    async () => {
-      await wasmDb.getAll(wasmUsers);
-    },
-    {
-      iterations: 10,
-      warmupIterations: 1,
-      setup: async () => {
-        await setupWasm();
+  // --- bulkPut 1000 ---
+  test("wasm: bulkPut 1000", async ({ bench }) => {
+    await bench(
+      "wasm: bulkPut 1000",
+      { beforeAll: setupWasm, afterAll: teardownWasm },
+      async () => {
         await wasmDb.bulkPut(wasmUsers, generateUsers(1000));
       },
-      teardown: teardownWasm,
-    },
-  );
+    ).run({ iterations: 10, warmupIterations: 1 });
+  });
 
-  bench(
-    "js: getAll 1000",
-    async () => {
-      await jsAdapter.getAll(jsUsers);
-    },
-    {
-      iterations: 10,
-      warmupIterations: 1,
-      setup: async () => {
-        await setupJs();
-        await jsInsertUsers(1000);
-      },
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: toArray 1000",
-    async () => {
-      await dexieDb.users.toArray();
-    },
-    {
-      iterations: 10,
-      warmupIterations: 1,
-      setup: async () => {
-        await setupDexie();
+  test("dexie: bulkAdd 1000", async ({ bench }) => {
+    await bench(
+      "dexie: bulkAdd 1000",
+      { beforeAll: setupDexie, afterAll: teardownDexie },
+      async () => {
         await dexieDb.users.bulkAdd(generateUsers(1000));
       },
-      teardown: teardownDexie,
-    },
-  );
+    ).run({ iterations: 10, warmupIterations: 1 });
+  });
+
+  // --- getAll 100 ---
+  test("wasm: getAll 100", async ({ bench }) => {
+    await bench(
+      "wasm: getAll 100",
+      {
+        beforeAll: async () => {
+          await setupWasm();
+          await wasmDb.bulkPut(wasmUsers, generateUsers(100));
+        },
+        afterAll: teardownWasm,
+      },
+      async () => {
+        await wasmDb.getAll(wasmUsers);
+      },
+    ).run({ iterations: 20, warmupIterations: 2 });
+  });
+
+  test("dexie: toArray 100", async ({ bench }) => {
+    await bench(
+      "dexie: toArray 100",
+      {
+        beforeAll: async () => {
+          await setupDexie();
+          await dexieDb.users.bulkAdd(generateUsers(100));
+        },
+        afterAll: teardownDexie,
+      },
+      async () => {
+        await dexieDb.users.toArray();
+      },
+    ).run({ iterations: 20, warmupIterations: 2 });
+  });
+
+  // --- getAll 1000 ---
+  test("wasm: getAll 1000", async ({ bench }) => {
+    await bench(
+      "wasm: getAll 1000",
+      {
+        beforeAll: async () => {
+          await setupWasm();
+          await wasmDb.bulkPut(wasmUsers, generateUsers(1000));
+        },
+        afterAll: teardownWasm,
+      },
+      async () => {
+        await wasmDb.getAll(wasmUsers);
+      },
+    ).run({ iterations: 10, warmupIterations: 1 });
+  });
+
+  test("dexie: toArray 1000", async ({ bench }) => {
+    await bench(
+      "dexie: toArray 1000",
+      {
+        beforeAll: async () => {
+          await setupDexie();
+          await dexieDb.users.bulkAdd(generateUsers(1000));
+        },
+        afterAll: teardownDexie,
+      },
+      async () => {
+        await dexieDb.users.toArray();
+      },
+    ).run({ iterations: 10, warmupIterations: 1 });
+  });
 
   // --- bulkDelete 100 ---
-  bench(
-    "wasm: bulkDelete 100",
-    async () => {
-      await wasmDb.bulkDelete(wasmUsers, wasmInsertedIds);
-    },
-    {
-      iterations: 20,
-      warmupIterations: 2,
-      setup: async () => {
-        await setupWasm();
-        wasmInsertedIds = await wasmInsertUsers(100);
+  test("wasm: bulkDelete 100", async ({ bench }) => {
+    await bench(
+      "wasm: bulkDelete 100",
+      {
+        beforeAll: async () => {
+          await setupWasm();
+          wasmInsertedIds = await wasmInsertUsers(100);
+        },
+        afterAll: teardownWasm,
       },
-      teardown: teardownWasm,
-    },
-  );
+      async () => {
+        await wasmDb.bulkDelete(wasmUsers, wasmInsertedIds);
+      },
+    ).run({ iterations: 20, warmupIterations: 2 });
+  });
 
-  bench(
-    "js: bulkDelete 100",
-    async () => {
-      await jsAdapter.bulkDelete(jsUsers, jsInsertedIds);
-    },
-    {
-      iterations: 20,
-      warmupIterations: 2,
-      setup: async () => {
-        await setupJs();
-        jsInsertedIds = await jsInsertUsers(100);
+  test("dexie: bulkDelete 100", async ({ bench }) => {
+    await bench(
+      "dexie: bulkDelete 100",
+      {
+        beforeAll: async () => {
+          await setupDexie();
+          dexieInsertedIds = (await dexieDb.users.bulkAdd(generateUsers(100), {
+            allKeys: true,
+          })) as number[];
+        },
+        afterAll: teardownDexie,
       },
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: bulkDelete 100",
-    async () => {
-      await dexieDb.users.bulkDelete(dexieInsertedIds);
-    },
-    {
-      iterations: 20,
-      warmupIterations: 2,
-      setup: async () => {
-        await setupDexie();
-        dexieInsertedIds = (await dexieDb.users.bulkAdd(generateUsers(100), {
-          allKeys: true,
-        })) as number[];
+      async () => {
+        await dexieDb.users.bulkDelete(dexieInsertedIds);
       },
-      teardown: teardownDexie,
-    },
-  );
+    ).run({ iterations: 20, warmupIterations: 2 });
+  });
 });
 
 // ===========================================================================
@@ -660,217 +432,115 @@ describe("queries (1000 records)", () => {
     await wasmDb.bulkPut(wasmUsers, generateUsers(1000));
   };
 
-  const setupJsWith1000 = async () => {
-    await setupJs();
-    await jsInsertUsers(1000);
-  };
-
   const setupDexieWith1000 = async () => {
     await setupDexie();
     await dexieDb.users.bulkAdd(generateUsers(1000));
   };
 
   // --- equals (indexed) ---
-  bench(
-    "wasm: query equals (indexed)",
-    async () => {
-      await wasmDb.query(wasmUsers, { filter: { age: 25 } });
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupWasmWith1000,
-      teardown: teardownWasm,
-    },
-  );
+  test("wasm: query equals (indexed)", async ({ bench }) => {
+    await bench(
+      "wasm: query equals (indexed)",
+      { beforeAll: setupWasmWith1000, afterAll: teardownWasm },
+      async () => {
+        await wasmDb.query(wasmUsers, { filter: { age: 25 } });
+      },
+    ).run({ iterations: 30, warmupIterations: 3 });
+  });
 
-  bench(
-    "js: query equals (indexed)",
-    async () => {
-      await jsAdapter.query(jsUsers, { filter: { age: 25 } });
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupJsWith1000,
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: where equals (indexed)",
-    async () => {
-      await dexieDb.users.where("age").equals(25).toArray();
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupDexieWith1000,
-      teardown: teardownDexie,
-    },
-  );
+  test("dexie: where equals (indexed)", async ({ bench }) => {
+    await bench(
+      "dexie: where equals (indexed)",
+      { beforeAll: setupDexieWith1000, afterAll: teardownDexie },
+      async () => {
+        await dexieDb.users.where("age").equals(25).toArray();
+      },
+    ).run({ iterations: 30, warmupIterations: 3 });
+  });
 
   // --- range (indexed) ---
-  bench(
-    "wasm: query range (indexed)",
-    async () => {
-      await wasmDb.query(wasmUsers, {
-        filter: { age: { $gte: 20, $lt: 30 } },
-      });
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupWasmWith1000,
-      teardown: teardownWasm,
-    },
-  );
+  test("wasm: query range (indexed)", async ({ bench }) => {
+    await bench(
+      "wasm: query range (indexed)",
+      { beforeAll: setupWasmWith1000, afterAll: teardownWasm },
+      async () => {
+        await wasmDb.query(wasmUsers, {
+          filter: { age: { $gte: 20, $lt: 30 } },
+        });
+      },
+    ).run({ iterations: 30, warmupIterations: 3 });
+  });
 
-  bench(
-    "js: query range (indexed)",
-    async () => {
-      await jsAdapter.query(jsUsers, {
-        filter: { age: { $gte: 20, $lt: 30 } },
-      });
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupJsWith1000,
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: where between (indexed)",
-    async () => {
-      await dexieDb.users.where("age").between(20, 30).toArray();
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupDexieWith1000,
-      teardown: teardownDexie,
-    },
-  );
+  test("dexie: where between (indexed)", async ({ bench }) => {
+    await bench(
+      "dexie: where between (indexed)",
+      { beforeAll: setupDexieWith1000, afterAll: teardownDexie },
+      async () => {
+        await dexieDb.users.where("age").between(20, 30).toArray();
+      },
+    ).run({ iterations: 30, warmupIterations: 3 });
+  });
 
   // --- sort (indexed) ---
-  bench(
-    "wasm: query sort (indexed)",
-    async () => {
-      await wasmDb.query(wasmUsers, { sort: "age" });
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupWasmWith1000,
-      teardown: teardownWasm,
-    },
-  );
+  test("wasm: query sort (indexed)", async ({ bench }) => {
+    await bench(
+      "wasm: query sort (indexed)",
+      { beforeAll: setupWasmWith1000, afterAll: teardownWasm },
+      async () => {
+        await wasmDb.query(wasmUsers, { sort: "age" });
+      },
+    ).run({ iterations: 30, warmupIterations: 3 });
+  });
 
-  bench(
-    "js: query sort (indexed)",
-    async () => {
-      await jsAdapter.query(jsUsers, { sort: "age" });
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupJsWith1000,
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: orderBy (sort)",
-    async () => {
-      await dexieDb.users.orderBy("age").toArray();
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupDexieWith1000,
-      teardown: teardownDexie,
-    },
-  );
+  test("dexie: orderBy (sort)", async ({ bench }) => {
+    await bench(
+      "dexie: orderBy (sort)",
+      { beforeAll: setupDexieWith1000, afterAll: teardownDexie },
+      async () => {
+        await dexieDb.users.orderBy("age").toArray();
+      },
+    ).run({ iterations: 30, warmupIterations: 3 });
+  });
 
   // --- limit 10 ---
-  bench(
-    "wasm: query limit 10",
-    async () => {
-      await wasmDb.query(wasmUsers, { limit: 10 });
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupWasmWith1000,
-      teardown: teardownWasm,
-    },
-  );
+  test("wasm: query limit 10", async ({ bench }) => {
+    await bench(
+      "wasm: query limit 10",
+      { beforeAll: setupWasmWith1000, afterAll: teardownWasm },
+      async () => {
+        await wasmDb.query(wasmUsers, { limit: 10 });
+      },
+    ).run({ iterations: 30, warmupIterations: 3 });
+  });
 
-  bench(
-    "js: query limit 10",
-    async () => {
-      await jsAdapter.query(jsUsers, { limit: 10 });
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupJsWith1000,
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: limit 10",
-    async () => {
-      await dexieDb.users.limit(10).toArray();
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupDexieWith1000,
-      teardown: teardownDexie,
-    },
-  );
+  test("dexie: limit 10", async ({ bench }) => {
+    await bench(
+      "dexie: limit 10",
+      { beforeAll: setupDexieWith1000, afterAll: teardownDexie },
+      async () => {
+        await dexieDb.users.limit(10).toArray();
+      },
+    ).run({ iterations: 30, warmupIterations: 3 });
+  });
 
   // --- count ---
-  bench(
-    "wasm: count",
-    async () => {
-      await wasmDb.count(wasmUsers);
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupWasmWith1000,
-      teardown: teardownWasm,
-    },
-  );
+  test("wasm: count", async ({ bench }) => {
+    await bench(
+      "wasm: count",
+      { beforeAll: setupWasmWith1000, afterAll: teardownWasm },
+      async () => {
+        await wasmDb.count(wasmUsers);
+      },
+    ).run({ iterations: 30, warmupIterations: 3 });
+  });
 
-  bench(
-    "js: count",
-    async () => {
-      await jsAdapter.count(jsUsers);
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupJsWith1000,
-      teardown: teardownJs,
-    },
-  );
-
-  bench(
-    "dexie: count",
-    async () => {
-      await dexieDb.users.count();
-    },
-    {
-      iterations: 30,
-      warmupIterations: 3,
-      setup: setupDexieWith1000,
-      teardown: teardownDexie,
-    },
-  );
+  test("dexie: count", async ({ bench }) => {
+    await bench(
+      "dexie: count",
+      { beforeAll: setupDexieWith1000, afterAll: teardownDexie },
+      async () => {
+        await dexieDb.users.count();
+      },
+    ).run({ iterations: 30, warmupIterations: 3 });
+  });
 });

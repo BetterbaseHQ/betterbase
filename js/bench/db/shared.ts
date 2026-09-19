@@ -1,4 +1,4 @@
-import { collection, t } from "../src/index.js";
+import { collection, t } from "../../src/db/index.js";
 
 export interface User {
   name: string;

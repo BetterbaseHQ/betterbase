@@ -12,11 +12,10 @@ export default defineConfig({
     },
   },
   test: {
+    // *.bench.ts files form their own benchmark project (benchmark.include
+    // defaults to **/*.bench.ts); the old benchmark.outputJson config is gone
+    // in vitest 5 — results print via the default reporter
     include: ["bench/**/*.bench.ts"],
-    benchmark: {
-      include: ["bench/**/*.bench.ts"],
-      outputJson: "bench/results.json",
-    },
     testTimeout: 30_000,
     browser: {
       enabled: true,

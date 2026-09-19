@@ -1,0 +1,39 @@
+{
+  "files": [
+    {
+      "filepath": "/Users/nchapman/Code/betterbase-dev/betterbase/js/bench/scratch/probe.bench.ts",
+      "groups": [
+        {
+          "fullName": "bench/scratch/probe.bench.ts",
+          "benchmarks": [
+            {
+              "id": "-1048658811_0",
+              "name": "probe",
+              "rank": 1,
+              "rme": 2.7906551203311416,
+              "samples": [],
+              "totalTime": 500.00000017881393,
+              "min": 0,
+              "max": 0.9000000059604645,
+              "hz": 12629957.995483175,
+              "period": 0.00007917682706131152,
+              "mean": 0.00007917682706131152,
+              "variance": 0.000008025429642312091,
+              "sd": 0.002832918926180573,
+              "sem": 0.0000011273225400521544,
+              "df": 6314978,
+              "critical": 1.96,
+              "moe": 0.0000022095521785022227,
+              "p75": 0,
+              "p99": 0,
+              "p995": 0,
+              "p999": 0,
+              "sampleCount": 6314979,
+              "median": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
