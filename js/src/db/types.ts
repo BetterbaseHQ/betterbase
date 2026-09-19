@@ -69,59 +69,72 @@ export type SchemaShape = Record<string, SchemaNode>;
 // Inferred types from schema
 // ============================================================================
 
-/** Infer the read type from a schema node (what you get back from get/query). */
-export type InferRead<T extends SchemaNode> = T extends StringSchema
-  ? string
-  : T extends TextSchema
+/**
+ * Infer the read type from a schema node (what you get back from get/query).
+ * Stop at the unconstrained SchemaNode: its optional/union branches refer back
+ * to itself, so distributing over it would recurse forever. This also matters
+ * when TypeScript checks generic CRUD calls against their SchemaShape constraint.
+ * A schema whose concrete node is unknown must produce unknown, not any.
+ */
+export type InferRead<T extends SchemaNode> = SchemaNode extends T
+  ? unknown
+  : T extends StringSchema
     ? string
-    : T extends NumberSchema
-      ? number
-      : T extends BooleanSchema
-        ? boolean
-        : T extends DateSchema
-          ? Date
-          : T extends BytesSchema
-            ? Uint8Array
-            : T extends OptionalSchema<infer U>
-              ? InferRead<U> | undefined
-              : T extends ArraySchema<infer U>
-                ? InferRead<U>[]
-                : T extends RecordSchema<infer U>
-                  ? Record<string, InferRead<U>>
-                  : T extends ObjectSchema<infer U>
-                    ? { [K in keyof U]: InferRead<U[K]> }
-                    : T extends LiteralSchema<infer U>
-                      ? U
-                      : T extends UnionSchema<infer U>
-                        ? InferRead<U[number]>
-                        : unknown;
+    : T extends TextSchema
+      ? string
+      : T extends NumberSchema
+        ? number
+        : T extends BooleanSchema
+          ? boolean
+          : T extends DateSchema
+            ? Date
+            : T extends BytesSchema
+              ? Uint8Array
+              : T extends OptionalSchema<infer U>
+                ? InferRead<U> | undefined
+                : T extends ArraySchema<infer U>
+                  ? InferRead<U>[]
+                  : T extends RecordSchema<infer U>
+                    ? Record<string, InferRead<U>>
+                    : T extends ObjectSchema<infer U>
+                      ? { [K in keyof U]: InferRead<U[K]> }
+                      : T extends LiteralSchema<infer U>
+                        ? U
+                        : T extends UnionSchema<infer U>
+                          ? InferRead<U[number]>
+                          : unknown;
 
-/** Infer the write type from a schema node (what you pass to put). */
-export type InferWrite<T extends SchemaNode> = T extends StringSchema
-  ? string
-  : T extends TextSchema
+/**
+ * Infer the write type from a schema node (what you pass to put).
+ * Keep the broad-schema guard in sync with InferRead.
+ */
+export type InferWrite<T extends SchemaNode> = SchemaNode extends T
+  ? unknown
+  : T extends StringSchema
     ? string
-    : T extends NumberSchema
-      ? number
-      : T extends BooleanSchema
-        ? boolean
-        : T extends DateSchema
-          ? Date | string
-          : T extends BytesSchema
-            ? Uint8Array | string
-            : T extends OptionalSchema<infer U>
-              ? InferWrite<U> | undefined
-              : T extends ArraySchema<infer U>
-                ? InferWrite<U>[]
-                : T extends RecordSchema<infer U>
-                  ? Record<string, InferWrite<U>>
-                  : T extends ObjectSchema<infer U>
-                    ? { [K in keyof U]: InferWrite<U[K]> }
-                    : T extends LiteralSchema<infer U>
-                      ? U
-                      : T extends UnionSchema<infer U>
-                        ? InferWrite<U[number]>
-                        : unknown;
+    : T extends TextSchema
+      ? string
+      : T extends NumberSchema
+        ? number
+        : T extends BooleanSchema
+          ? boolean
+          : T extends DateSchema
+            ? Date | string
+            : T extends BytesSchema
+              ? Uint8Array | string
+              : T extends OptionalSchema<infer U>
+                ? InferWrite<U> | undefined
+                : T extends ArraySchema<infer U>
+                  ? InferWrite<U>[]
+                  : T extends RecordSchema<infer U>
+                    ? Record<string, InferWrite<U>>
+                    : T extends ObjectSchema<infer U>
+                      ? { [K in keyof U]: InferWrite<U[K]> }
+                      : T extends LiteralSchema<infer U>
+                        ? U
+                        : T extends UnionSchema<infer U>
+                          ? InferWrite<U[number]>
+                          : unknown;
 
 /** Extract schema shape from a CollectionDefHandle or pass through a SchemaShape directly. */
 type ExtractSchema<S> = S extends {
