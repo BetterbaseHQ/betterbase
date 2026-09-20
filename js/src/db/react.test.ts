@@ -26,19 +26,39 @@ const notes = { name: "notes" } as CollectionDefHandle<string, never>;
 function makeDb() {
   const recordCbs = new Map<string, (r: unknown) => void>();
   const queryCbs = new Map<string, (r: unknown) => void>();
+  const recordErrs = new Map<string, (e: Error) => void>();
+  const queryErrs = new Map<string, (e: Error) => void>();
   const db = {
     observe: vi.fn(
-      (def: { name: string }, id: string, cb: (r: unknown) => void) => {
+      (
+        def: { name: string },
+        id: string,
+        cb: (r: unknown) => void,
+        options?: { onError?: (e: Error) => void },
+      ) => {
         const key = `${def.name}:${id}`;
         recordCbs.set(key, cb);
-        return vi.fn(() => recordCbs.delete(key)); // spy-wrapped unsubscribe
+        if (options?.onError) recordErrs.set(key, options.onError);
+        return vi.fn(() => {
+          recordCbs.delete(key);
+          recordErrs.delete(key);
+        }); // spy-wrapped unsubscribe
       },
     ),
     observeQuery: vi.fn(
-      (def: { name: string }, query: unknown, cb: (r: unknown) => void) => {
+      (
+        def: { name: string },
+        query: unknown,
+        cb: (r: unknown) => void,
+        options?: { onError?: (e: Error) => void },
+      ) => {
         const key = `${def.name}:${JSON.stringify(query)}`;
         queryCbs.set(key, cb);
-        return () => queryCbs.delete(key);
+        if (options?.onError) queryErrs.set(key, options.onError);
+        return () => {
+          queryCbs.delete(key);
+          queryErrs.delete(key);
+        };
       },
     ),
     pushRecord(id: string, record: unknown) {
@@ -46,6 +66,12 @@ function makeDb() {
     },
     pushQuery(query: unknown, result: QueryResult<unknown>) {
       queryCbs.get(`${notes.name}:${JSON.stringify(query)}`)?.(result);
+    },
+    failRecord(id: string, err: Error) {
+      recordErrs.get(`${notes.name}:${id}`)?.(err);
+    },
+    failQuery(query: unknown, err: Error) {
+      queryErrs.get(`${notes.name}:${JSON.stringify(query)}`)?.(err);
     },
   };
   return db;
@@ -238,5 +264,18 @@ describe("useQuery", () => {
       ),
     );
     expect(result.current?.records).toEqual([{ id: "b" }]);
+  });
+
+  it("delivers query subscription errors via onError", () => {
+    const db = makeDb();
+    const onError = vi.fn();
+    const { result } = renderHook(
+      () => useQuery(notes, { filter: {} }, { onError }),
+      { wrapper: wrapper(db) },
+    );
+
+    act(() => db.failQuery({ filter: {} }, new Error("batch corrupt")));
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(result.current).toBeUndefined(); // snapshot untouched
   });
 });

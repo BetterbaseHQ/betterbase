@@ -381,3 +381,105 @@ describe("TypedAdapter reactive", () => {
     expect(seen[0]!.total).toBe(1);
   });
 });
+
+describe("TypedAdapter observe error plumbing", () => {
+  it("observe forwards options to the inner db", () => {
+    const db = makeDb();
+    db.observe = vi.fn(() => () => {});
+    const adapter = new TypedAdapter<Extra, SpaceOpts, SpaceOpts>(
+      db,
+      spacesMiddleware("s1"),
+    );
+
+    const onError = vi.fn();
+    adapter.observe(def, "n1", vi.fn(), { onError });
+
+    expect(db.observe).toHaveBeenCalledWith(def, "n1", expect.any(Function), {
+      onError,
+    });
+  });
+
+  it("observe reports enrichment failures via onError and skips the callback", () => {
+    const db = makeDb();
+    db.observe = vi.fn(
+      (_d: unknown, _i: unknown, wrapped: (r: unknown) => void) => {
+        wrapped({ id: "n1" });
+        return () => {};
+      },
+    );
+    const boom = new Error("enrichment boom");
+    const adapter = new TypedAdapter<Extra, SpaceOpts, SpaceOpts>(db, {
+      onRead: () => {
+        throw boom;
+      },
+    });
+
+    const onError = vi.fn();
+    const cb = vi.fn();
+    adapter.observe(def, "n1", cb, { onError });
+
+    expect(onError).toHaveBeenCalledWith(boom);
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("observe rethrows enrichment failures without onError", () => {
+    const db = makeDb();
+    db.observe = vi.fn(
+      (_d: unknown, _i: unknown, wrapped: (r: unknown) => void) => {
+        wrapped({ id: "n1" });
+        return () => {};
+      },
+    );
+    const adapter = new TypedAdapter<Extra, SpaceOpts, SpaceOpts>(db, {
+      onRead: () => {
+        throw new Error("enrichment boom");
+      },
+    });
+
+    expect(() => adapter.observe(def, "n1", vi.fn())).toThrow(
+      "enrichment boom",
+    );
+  });
+
+  it("observeQuery forwards options after query options", () => {
+    const db = makeDb();
+    db.observeQuery = vi.fn(() => () => {});
+    const adapter = new TypedAdapter<Extra, SpaceOpts, SpaceOpts>(
+      db,
+      spacesMiddleware("s1"),
+    );
+
+    const onError = vi.fn();
+    adapter.observeQuery(def, {}, vi.fn(), { space: "s1" }, { onError });
+
+    expect(db.observeQuery).toHaveBeenCalledWith(
+      def,
+      {},
+      expect.any(Function),
+      { onError },
+    );
+  });
+
+  it("observeQuery reports enrichment failures via onError", () => {
+    const db = makeDb();
+    db.observeQuery = vi.fn(
+      (_d: unknown, _q: unknown, wrapped: (r: unknown) => void) => {
+        wrapped({ records: [{ id: "n1" }], total: 1 });
+        return () => {};
+      },
+    );
+    const boom = new Error("enrichment boom");
+    const adapter = new TypedAdapter<Extra, SpaceOpts, SpaceOpts>(db, {
+      onRead: () => {
+        throw boom;
+      },
+    });
+
+    const onError = vi.fn();
+    const cb = vi.fn();
+    adapter.observeQuery(def, {}, cb, undefined, { onError });
+
+    expect(onError).toHaveBeenCalledWith(boom);
+    expect(cb).not.toHaveBeenCalled();
+  });
+});

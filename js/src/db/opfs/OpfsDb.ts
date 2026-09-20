@@ -14,6 +14,7 @@ import type {
   CollectionPatch,
   QueryOptions,
   QueryResult,
+  ObserveOptions,
   PutOptions,
   GetOptions,
   DeleteOptions,
@@ -308,21 +309,36 @@ export class Database {
     def: CollectionDefHandle<string, S>,
     id: string,
     callback: (record: CollectionRead<S> | null) => void,
+    options?: ObserveOptions,
   ): () => void {
     let unsubFn: (() => void) | null = null;
     let cancelled = false;
 
+    const reportError = (err: unknown) => {
+      if (options?.onError) {
+        options.onError(err instanceof Error ? err : new Error(String(err)));
+        return true;
+      }
+      return false;
+    };
+
     const wrappedCallback = (payload: unknown) => {
       const p = payload as { type: string; data: unknown };
-      if (p.data === null || p.data === undefined) {
-        callback(null);
-      } else {
-        callback(
-          deserializeFromRust(
-            p.data as Record<string, unknown>,
-            this.schemaFor(def),
-          ) as CollectionRead<S>,
-        );
+      try {
+        if (p.data === null || p.data === undefined) {
+          callback(null);
+        } else {
+          callback(
+            deserializeFromRust(
+              p.data as Record<string, unknown>,
+              this.schemaFor(def),
+            ) as CollectionRead<S>,
+          );
+        }
+      } catch (err) {
+        // Corrupt record delivered — surface via onError when provided,
+        // otherwise preserve the historical rethrow
+        if (!reportError(err)) throw err;
       }
     };
 
@@ -335,8 +351,10 @@ export class Database {
           unsubFn = unsub;
         }
       })
-      .catch(() => {
-        // Subscription failed — silently ignore (worker may have closed)
+      .catch((err) => {
+        // Subscription failed. Without a handler this stays silent (the
+        // worker may have closed); with one, surface it.
+        reportError(err);
       });
 
     return () => {
@@ -352,6 +370,7 @@ export class Database {
     def: CollectionDefHandle<string, S>,
     query: QueryOptions,
     callback: (result: QueryResult<CollectionRead<S>>) => void,
+    options?: ObserveOptions,
   ): () => void {
     let unsubFn: (() => void) | null = null;
     let cancelled = false;
@@ -360,18 +379,32 @@ export class Database {
       ? serializeForRust(query.filter)
       : undefined;
 
+    const reportError = (err: unknown) => {
+      if (options?.onError) {
+        options.onError(err instanceof Error ? err : new Error(String(err)));
+        return true;
+      }
+      return false;
+    };
+
     const wrappedCallback = (payload: unknown) => {
       const p = payload as {
         type: string;
         result: { records: Record<string, unknown>[]; total: number };
       };
-      callback({
-        records: p.result.records.map(
-          (r) =>
-            deserializeFromRust(r, this.schemaFor(def)) as CollectionRead<S>,
-        ),
-        total: p.result.total,
-      });
+      try {
+        callback({
+          records: p.result.records.map(
+            (r) =>
+              deserializeFromRust(r, this.schemaFor(def)) as CollectionRead<S>,
+          ),
+          total: p.result.total,
+        });
+      } catch (err) {
+        // A corrupt record in the batch — surface via onError when
+        // provided, otherwise preserve the historical rethrow
+        if (!reportError(err)) throw err;
+      }
     };
 
     this.rpc
@@ -387,7 +420,9 @@ export class Database {
           unsubFn = unsub;
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        reportError(err);
+      });
 
     return () => {
       cancelled = true;

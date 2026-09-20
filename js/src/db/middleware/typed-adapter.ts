@@ -19,6 +19,7 @@ import type {
   CollectionPatch,
   QueryOptions,
   QueryResult,
+  ObserveOptions,
   PutOptions,
   GetOptions,
   DeleteOptions,
@@ -191,14 +192,32 @@ export class TypedAdapter<
     def: CollectionDefHandle<string, S>,
     id: string,
     callback: (record: (CollectionRead<S> & TExtra) | undefined) => void,
+    options?: ObserveOptions,
   ): () => void {
-    return this.inner.observe(def, id, (record) => {
-      if (record === null) {
-        callback(undefined);
-      } else {
-        callback(this.enrichRecord(record));
-      }
-    });
+    return this.inner.observe(
+      def,
+      id,
+      (record) => {
+        try {
+          if (record === null) {
+            callback(undefined);
+          } else {
+            callback(this.enrichRecord(record));
+          }
+        } catch (err) {
+          // Enrichment failure — surface via onError when provided,
+          // otherwise preserve the historical rethrow
+          if (options?.onError) {
+            options.onError(
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          } else {
+            throw err;
+          }
+        }
+      },
+      options,
+    );
   }
 
   observeQuery<S extends SchemaShape>(
@@ -206,27 +225,47 @@ export class TypedAdapter<
     query: QueryOptions,
     callback: (result: QueryResult<CollectionRead<S> & TExtra>) => void,
     queryOptions?: TQueryOpts,
+    options?: ObserveOptions,
   ): () => void {
-    return this.inner.observeQuery(def, query, (result) => {
-      const metaFilter = this.resolveQueryFilter(queryOptions);
-      if (metaFilter) {
-        const filtered = result.records.filter((r) => {
-          const meta = (r as Record<string | symbol, unknown>)[META_KEY] as
-            | Record<string, unknown>
-            | undefined;
-          return metaFilter(meta);
-        });
-        callback({
-          records: filtered.map((r) => this.enrichRecord(r)),
-          total: filtered.length,
-        });
-      } else {
-        callback({
-          records: result.records.map((r) => this.enrichRecord(r)),
-          total: result.total,
-        });
-      }
-    });
+    return this.inner.observeQuery(
+      def,
+      query,
+      (result) => {
+        const deliver = (
+          records: CollectionRead<S>[],
+          total: number | undefined,
+        ) =>
+          callback({
+            records: records.map((r) => this.enrichRecord(r)),
+            total: total ?? records.length,
+          });
+        try {
+          const metaFilter = this.resolveQueryFilter(queryOptions);
+          if (metaFilter) {
+            const filtered = result.records.filter((r) => {
+              const meta = (r as Record<string | symbol, unknown>)[META_KEY] as
+                | Record<string, unknown>
+                | undefined;
+              return metaFilter(meta);
+            });
+            deliver(filtered, filtered.length);
+          } else {
+            deliver(result.records, result.total);
+          }
+        } catch (err) {
+          // Enrichment failure — surface via onError when provided,
+          // otherwise preserve the historical rethrow
+          if (options?.onError) {
+            options.onError(
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          } else {
+            throw err;
+          }
+        }
+      },
+      options,
+    );
   }
 
   onChange(callback: (event: ChangeEvent) => void): () => void {

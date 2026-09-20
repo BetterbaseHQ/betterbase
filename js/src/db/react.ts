@@ -143,10 +143,15 @@ export function useRecord<S extends SchemaShape>(
       subscribe.current = () => () => {};
     } else {
       subscribe.current = (onStoreChange: () => void) => {
-        return db.observe(def, id, (record) => {
-          snapshotRef.current = record ?? undefined;
-          onStoreChange();
-        });
+        return db.observe(
+          def,
+          id,
+          (record) => {
+            snapshotRef.current = record ?? undefined;
+            onStoreChange();
+          },
+          { onError: (err) => onErrorRef.current?.(err) },
+        );
       };
     }
   }
@@ -204,10 +209,15 @@ export function useQuery<S extends SchemaShape>(
     prevSubKey.current = subKey;
     snapshotRef.current = undefined;
     subscribe.current = (onStoreChange: () => void) => {
-      return db.observeQuery(def, stableQuery.current ?? {}, (result) => {
-        snapshotRef.current = result;
-        onStoreChange();
-      });
+      return db.observeQuery(
+        def,
+        stableQuery.current ?? {},
+        (result) => {
+          snapshotRef.current = result;
+          onStoreChange();
+        },
+        { onError: (err) => onErrorRef.current?.(err) },
+      );
     };
   }
 
