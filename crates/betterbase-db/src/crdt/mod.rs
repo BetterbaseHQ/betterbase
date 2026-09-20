@@ -6,7 +6,7 @@ use json_joy::json_crdt::nodes::TsKey;
 use json_joy::json_crdt::Model;
 use json_joy::json_crdt::ModelApi;
 use json_joy::json_crdt_diff::diff_node;
-use json_joy::json_crdt_patch::Patch;
+use json_joy::json_crdt_patch::{Patch, Ts};
 use serde_json::Value;
 
 use crate::error::{LessDbError, Result};
@@ -139,13 +139,45 @@ pub fn model_load(data: &[u8], session_id: u64) -> Result<Model> {
     Ok(model)
 }
 
+/// True when the model's vector clock has already observed the given op id —
+/// meaning the op was integrated (live or tombstoned) and must not be applied
+/// again.
+///
+/// json-joy's insert-path dedup is neighbor-local only (verified against
+/// upstream v17.67 and master: anchor-chunk interior, first-chunk on root
+/// inserts, and a rightward adjacency scan that breaks early), and the
+/// upstream contract is "operation ids are unique" (streamich/json-joy#930).
+/// Our replay-merge intentionally re-applies possibly-already-seen ops, so we
+/// enforce the contract here, at the only call site that needs it — keeping
+/// duplicate ids away from `node.ins()` entirely, which also avoids the
+/// orphan-chunk residue and mid-chunk live-duplicate wiring the neighbor-local
+/// dedup permits. See BetterbaseHQ/json-joy-rs#1.
+fn clock_seen(model: &Model, id: &Ts) -> bool {
+    let clock = &model.clock;
+    if id.sid == clock.sid {
+        clock.time > id.time
+    } else {
+        clock
+            .peers
+            .get(&id.sid)
+            .is_some_and(|edge| edge.time >= id.time)
+    }
+}
+
 /// Merge pending patches into a remote model.
 ///
-/// CRDT patches are idempotent — operations that the remote model has already
-/// seen (via its clock vector) are safely applied again without corruption.
+/// Ops whose ids the remote model's clock has already observed are skipped:
+/// replaying them could not add information (their content is live or
+/// tombstoned there already) and json-joy does not guarantee safe application
+/// of duplicate ids. Ops never seen by the remote are applied normally.
 pub fn merge_with_pending_patches(remote_model: &mut Model, pending_patches: &[Patch]) {
     for patch in pending_patches {
-        remote_model.apply_patch(patch);
+        for op in &patch.ops {
+            if !clock_seen(remote_model, &op.id()) {
+                remote_model.apply_operation(op);
+            }
+        }
+        remote_model.tick += 1;
     }
 }
 

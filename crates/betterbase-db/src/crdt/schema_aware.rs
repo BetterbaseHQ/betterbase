@@ -1250,5 +1250,75 @@ mod tests {
             merged_view["body"],
             "A was here — The quick brown fox jumps over the lazy dog"
         );
+
+        // Structural invariant enforced by the clock-seen gate in
+        // merge_with_pending_patches: the replayed op id must not appear
+        // twice among the str node's chunks (pre-gate this left an orphaned
+        // alive duplicate next to the pre-existing tombstone).
+        assert_no_duplicate_chunk_ids(&remote_model);
+    }
+
+    /// No str node in the model may contain two chunks whose id spans cover
+    /// the same (sid, time) — the invariant duplicate-id replay violates.
+    fn assert_no_duplicate_chunk_ids(model: &json_joy::json_crdt::Model) {
+        use json_joy::json_crdt::nodes::CrdtNode;
+        use std::collections::BTreeSet;
+        for node in model.index.values() {
+            if let CrdtNode::Str(str_node) = node {
+                let mut seen: BTreeSet<(u64, u64)> = BTreeSet::new();
+                for chunk in str_node.rga.chunks.iter() {
+                    for t in chunk.id.time..chunk.id.time + chunk.span {
+                        assert!(
+                            seen.insert((chunk.id.sid, t)),
+                            "duplicate chunk id ({}, {}) in str node {}",
+                            chunk.id.sid,
+                            t,
+                            str_node.id.time
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The clock-seen gate must not suppress ops the target model has never
+    /// seen — the healthy offline-divergence merge path. One side patches,
+    /// the other forks without the op; replay applies it and both edits
+    /// survive when the peer later merges back.
+    #[test]
+    fn merge_with_pending_patches_applies_unseen_ops() {
+        let sid_a = 1_000;
+        let sid_b = 2_000;
+        let body_schema = || {
+            let mut s = std::collections::BTreeMap::new();
+            s.insert("body".to_string(), SchemaNode::Text);
+            s
+        };
+
+        // Shared seed: root obj with a body str "hello"
+        let seed =
+            create_model_with_schema(&json!({"body": "hello"}), sid_a, &body_schema()).unwrap();
+        let seed_bin = crate::crdt::model_to_binary(&seed);
+
+        // B forks and appends " world", capturing its patch
+        let mut b = crate::crdt::model_load(&seed_bin, sid_b).unwrap();
+        let patch = diff_model_with_schema(&b, &json!({"body": "hello world"}), &body_schema())
+            .expect("diff should produce a patch");
+        crate::crdt::apply_patch(&mut b, &patch);
+
+        // A forks independently (never sees B's op)
+        let mut a = crate::crdt::model_load(&seed_bin, sid_a + 5).unwrap();
+
+        // Replay B's patch onto A's model: the op is unseen, must apply
+        crate::crdt::merge_with_pending_patches(&mut a, std::slice::from_ref(&patch));
+        let view = deserialize_from_crdt(&body_schema(), &crate::crdt::view_model(&a));
+        assert_eq!(view["body"], "hello world");
+        assert_no_duplicate_chunk_ids(&a);
+
+        // Replaying the same patch again is now a no-op (clock has seen it)
+        crate::crdt::merge_with_pending_patches(&mut a, std::slice::from_ref(&patch));
+        let view2 = deserialize_from_crdt(&body_schema(), &crate::crdt::view_model(&a));
+        assert_eq!(view2["body"], "hello world");
+        assert_no_duplicate_chunk_ids(&a);
     }
 }
