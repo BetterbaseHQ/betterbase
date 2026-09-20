@@ -152,6 +152,19 @@ describe("deserializeFromRust", () => {
     ).toThrowError(/field "createdAt".*corrupt/);
   });
 
+  it("truncates peer-controlled values in date error messages", () => {
+    const hostile = "<img onerror=alert(1)> ".repeat(20); // > 300 chars
+    let message = "";
+    try {
+      deserializeFromRust({ id: "1", when: hostile }, { when: t.date() });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/\(\d+ chars\)/); // length suffix present
+    expect(message).not.toContain(hostile); // full value never embedded
+    expect(message.length).toBeLessThan(250);
+  });
+
   it("reports the path for a malformed date nested in an array", () => {
     expect(() =>
       deserializeFromRust(

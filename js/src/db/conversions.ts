@@ -100,13 +100,19 @@ export function deserializeFromRust(
 /**
  * Parse a stored ISO date string. A malformed string would otherwise
  * become a silent `Invalid Date` that poisons comparisons downstream —
- * fail fast with the field named instead.
+ * fail fast with the field named instead. The value is truncated in the
+ * message: stored content is peer-controlled and must not flow unbounded
+ * into error surfaces.
  */
 function parseStoredDate(value: string, field: string): Date {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
+    const preview =
+      value.length > 64
+        ? `${value.slice(0, 64)}… (${value.length} chars)`
+        : value;
     throw new Error(
-      `Invalid date string "${value}" in field "${field}" — stored record is corrupt`,
+      `Invalid date string "${preview}" in field "${field}" — stored record is corrupt`,
     );
   }
   return date;

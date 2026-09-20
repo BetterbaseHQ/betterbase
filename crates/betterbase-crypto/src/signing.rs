@@ -125,6 +125,16 @@ pub fn export_private_key_jwk(key: &SigningKey) -> Value {
 
 /// Import a P-256 private key from JWK format.
 pub fn import_private_key_jwk(jwk: &Value) -> Result<SigningKey, CryptoError> {
+    // Same fail-closed label gate as the public-key import: a private JWK
+    // from another curve or key type must never be read as P-256.
+    let kty = jwk.get("kty").and_then(|v| v.as_str()).unwrap_or_default();
+    let crv = jwk.get("crv").and_then(|v| v.as_str()).unwrap_or_default();
+    if kty != "EC" || crv != "P-256" {
+        return Err(CryptoError::InvalidJwk(format!(
+            "expected EC/P-256 key, got kty={kty:?} crv={crv:?}"
+        )));
+    }
+
     let d_b64 = jwk
         .get("d")
         .and_then(|v| v.as_str())
@@ -218,5 +228,21 @@ mod tests {
         let mut unlabeled = export_public_key_jwk(key.verifying_key());
         unlabeled.as_object_mut().unwrap().remove("crv");
         assert!(!verify(&unlabeled, b"test", &signature));
+    }
+
+    #[test]
+    fn non_p256_private_jwk_fails_closed() {
+        let key = generate_p256_keypair();
+        let mut wrong = export_private_key_jwk(&key);
+        wrong["crv"] = serde_json::json!("Ed25519");
+        assert!(import_private_key_jwk(&wrong).is_err());
+
+        let mut unlabeled = export_private_key_jwk(&key);
+        unlabeled.as_object_mut().unwrap().remove("kty");
+        assert!(import_private_key_jwk(&unlabeled).is_err());
+
+        // Correctly labeled key still imports
+        let jwk = export_private_key_jwk(&key);
+        assert!(import_private_key_jwk(&jwk).is_ok());
     }
 }

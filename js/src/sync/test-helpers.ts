@@ -148,7 +148,11 @@ export class FakeSyncServer {
   readonly notifications: Array<{ method: string; params: unknown }> = [];
 
   private handlers = new Map<string, ServerHandler>();
-  private autoOpen: boolean;
+  /**
+   * When true (default), new sockets open automatically. Tests can flip
+   * this to false mid-scenario to simulate a server refusing connections.
+   */
+  autoOpen: boolean;
   private _active = false;
 
   constructor(options: { autoOpen?: boolean } = {}) {

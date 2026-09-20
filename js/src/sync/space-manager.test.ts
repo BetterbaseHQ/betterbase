@@ -261,6 +261,9 @@ describe("SpaceManager", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    // clearAllMocks does NOT reset implementations — restore the factory
+    // default so later tests don't inherit the last per-test stub
+    vi.mocked(decryptJwe).mockReset().mockReturnValue(new Uint8Array(0));
     state.verifyResult = true;
     state.destroyedCryptos.length = 0;
     resetFakeWebSocket();
@@ -486,6 +489,42 @@ describe("SpaceManager", () => {
 
       const members = await manager.getMembers("s1");
       expect(members).toEqual([]);
+    });
+
+    it("a malformed UCAN fails closed per entry, not the whole log", async () => {
+      await activate();
+      membershipLog.entries = [
+        logEntry({
+          seq: 1,
+          type: "d",
+          ucan: ucan(SELF_DID, "did:key:mock-alice", "/space/write"),
+          signerDID: SELF_DID,
+        }),
+        // Poison entry: invalid base64url in the UCAN body. A member can
+        // pre-position this before their revocation to try to freeze the
+        // victim's member list — it must be skipped, not abort parsing.
+        logEntry({
+          seq: 2,
+          type: "r",
+          ucan: "h.!!!not-base64url!!!.AQIDBA",
+          signerDID: SELF_DID,
+        }),
+        logEntry({
+          seq: 3,
+          type: "r",
+          ucan: ucan(SELF_DID, "did:key:mock-alice", "/space/write"),
+          signerDID: SELF_DID,
+        }),
+      ];
+
+      const members = await manager.getMembers("s1");
+
+      // The valid revocation at seq 3 still applies — alice is revoked,
+      // and the parse completed despite the poison at seq 2
+      expect(members[0]).toMatchObject({
+        did: "did:key:mock-alice",
+        status: "revoked",
+      });
     });
 
     it("caches the parsed list and uses incremental fetch when unchanged", async () => {
@@ -774,74 +813,59 @@ describe("SpaceManager", () => {
   });
 
   describe("membership append CAS retry", () => {
-    it("retries once on version conflict, never on hash-chain violations", async () => {
+    /**
+     * The real server collapses version conflicts and hash-chain breaks
+     * into a single {code: "conflict"} error, so the client retries any
+     * conflict exactly once — the retry re-reads the log head and
+     * rebuilds prev_hash/expected_version, which recovers both cases.
+     */
+    const declineWithConflicts = async (
+      conflictFirstAttempt: boolean,
+      conflictLaterAttempts: boolean,
+    ): Promise<number> => {
       await activate();
       let attempts = 0;
-      let conflictMessage = "expected version mismatch";
       server.handle("membership.append", (_params, reply) => {
         attempts++;
-        if (attempts === 1) {
+        const shouldConflict =
+          (attempts === 1 && conflictFirstAttempt) ||
+          (attempts > 1 && conflictLaterAttempts);
+        if (shouldConflict) {
           const req = reply.socket.sentFrames
             .filter((f) => f.method === "membership.append")
             .pop();
           reply.socket.serverMessage({
             type: 1,
             id: req!.id as string,
-            error: { code: "conflict", message: conflictMessage },
+            error: { code: "conflict", message: "conflict" },
           });
-          return undefined; // manual response already sent
+          return undefined;
         }
         return { chain_seq: 1, metadata_version: 1 };
       });
+      server.handle("invitation.delete", () => ({}));
 
-      // Build a pending invitation accept-like append via decline path:
-      // decline appends an "x" entry. Use a record with invited status.
-      db.records.set(
-        "rec-2",
-        spaceRecord({
-          id: "rec-2",
-          spaceId: "s2",
-          status: "invited",
-          role: "write",
-          serverInvitationId: "inv-9",
-        }),
+      const record = spaceRecord({
+        id: "rec-2",
+        spaceId: "s2",
+        status: "invited",
+        role: "write",
+        serverInvitationId: "inv-9",
+      });
+      db.records.set("rec-2", record);
+      await manager.decline(record as never).then(
+        () => undefined,
+        () => undefined,
       );
-      // s2 has no sync stack yet — decline passes the raw key
-      await manager.decline(
-        spaceRecord({
-          id: "rec-2",
-          spaceId: "s2",
-          status: "invited",
-          role: "write",
-          serverInvitationId: "inv-9",
-        }) as never,
-      );
+      return attempts;
+    };
 
-      expect(attempts).toBe(2); // conflicted, then retried
+    it("retries exactly once on conflict and succeeds", async () => {
+      expect(await declineWithConflicts(true, false)).toBe(2);
+    });
 
-      // Hash-chain conflicts are permanent — no retry
-      attempts = 0;
-      conflictMessage = "prev_hash mismatch (hash chain violation)";
-      db.records.set(
-        "rec-3",
-        spaceRecord({
-          id: "rec-3",
-          spaceId: "s3",
-          status: "invited",
-          role: "write",
-        }),
-      );
-      await expect(
-        manager.decline(
-          spaceRecord({
-            id: "rec-3",
-            spaceId: "s3",
-            status: "invited",
-            role: "write",
-          }) as never,
-        ),
-      ).rejects.toThrow(/hash chain|conflict/);
-      expect(attempts).toBe(1);
+    it("gives up after one retry when conflicts persist", async () => {
+      expect(await declineWithConflicts(true, true)).toBe(2);
     });
   });
 

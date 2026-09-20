@@ -310,6 +310,22 @@ describe("SyncManager.push", () => {
     expect(result2.errors[0]).toMatchObject({ kind: "permanent" });
   });
 
+  it("structural RPC errors (invalid params) are permanent, not retried forever", async () => {
+    const { manager, transport } = makeHarness({
+      adapter: { getDirty: vi.fn().mockResolvedValue([makeDirty()]) },
+    });
+    const rpcError = Object.assign(
+      new Error("invalid_params: push payload undecodable"),
+      { name: "RPCCallError", code: "invalid_params" },
+    );
+    transport.push.mockRejectedValue(rpcError);
+
+    const result = await manager.push(def);
+
+    expect(transport.pull).not.toHaveBeenCalled();
+    expect(result.errors[0]).toMatchObject({ kind: "permanent" });
+  });
+
   it("a transient push failure does not trigger the reconcile-retry path", async () => {
     const { manager, adapter, transport } = makeHarness({
       adapter: { getDirty: vi.fn().mockResolvedValue([makeDirty()]) },

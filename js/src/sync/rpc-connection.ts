@@ -39,6 +39,8 @@ interface PendingCall {
   timeout: ReturnType<typeof setTimeout>;
   onChunk?: (name: string, data: unknown) => void;
   chunkCount: number;
+  /** When the call started — chunked calls also have an absolute deadline. */
+  startedAt: number;
 }
 
 const REQUEST_TIMEOUT = 30_000;
@@ -53,6 +55,22 @@ const MAX_FRAME_BYTES = 4 * 1024 * 1024; // 4 MiB (matches server wsReadLimit)
 const STABLE_CONNECTION_MS = 5_000;
 
 /**
+ * A connection must have been up this long before a token-expired close
+ * earns an immediate (delay-0) reconnect. Short-lived expiries get the
+ * exponential backoff instead, so a hostile server that accepts a
+ * connection and immediately closes with 4001 cannot drive a
+ * reconnect/token-refresh cycle at full speed.
+ */
+const TOKEN_EXPIRY_TRUST_MS = 60_000;
+
+/**
+ * Absolute deadline for chunked calls. The per-chunk timeout is an idle
+ * timer — a server that drips a chunk every few seconds could otherwise
+ * keep a call (and its accumulated data) alive indefinitely.
+ */
+const MAX_CHUNKED_CALL_MS = 5 * 60_000;
+
+/**
  * WebSocket RPC connection with CBOR binary framing, auto-reconnect,
  * and typed call/callChunked/notify operations.
  */
@@ -64,6 +82,8 @@ export class RpcConnection {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private openedAt = 0;
+  /** How long the last connection stayed open (0 if it never opened). */
+  private lastOpenDuration = 0;
 
   // --- RPC pending tracking ---
   private pending = new Map<string, PendingCall>();
@@ -118,6 +138,7 @@ export class RpcConnection {
         reject,
         timeout,
         chunkCount: 0,
+        startedAt: Date.now(),
       });
       this.sendRaw({ type: RPC_REQUEST, method, id, params });
     });
@@ -142,6 +163,7 @@ export class RpcConnection {
         timeout,
         onChunk,
         chunkCount: 0,
+        startedAt: Date.now(),
       });
       this.sendRaw({ type: RPC_REQUEST, method, id, params });
     });
@@ -211,12 +233,17 @@ export class RpcConnection {
         // A connection that stayed open for a while was healthy — the next
         // drop starts backoff from scratch. A quick flap (or a server
         // repeatedly closing with token-expired) keeps growing the backoff.
+        // Consume openedAt so a *failed reconnect* can't re-trigger the
+        // reset with the stale timestamp of a long-dead connection.
         if (
           this.openedAt > 0 &&
           Date.now() - this.openedAt >= STABLE_CONNECTION_MS
         ) {
           this.reconnectAttempt = 0;
         }
+        this.lastOpenDuration =
+          this.openedAt > 0 ? Date.now() - this.openedAt : 0;
+        this.openedAt = 0;
         this.rejectAllPending(
           new Error(`connection lost (code ${event.code})`),
         );
@@ -334,6 +361,19 @@ export class RpcConnection {
     const call = this.pending.get(frame.id);
     if (!call?.onChunk) return;
 
+    // Absolute deadline — the idle timer below resets on every chunk, so a
+    // dripping server could otherwise keep the call alive indefinitely.
+    if (Date.now() - call.startedAt > MAX_CHUNKED_CALL_MS) {
+      clearTimeout(call.timeout);
+      this.pending.delete(frame.id);
+      call.reject(
+        new Error(
+          `chunked call exceeded ${MAX_CHUNKED_CALL_MS}ms total (possible server stall)`,
+        ),
+      );
+      return;
+    }
+
     // Reset timeout — data is still flowing (idle timeout, not total timeout)
     clearTimeout(call.timeout);
     call.timeout = setTimeout(() => {
@@ -361,22 +401,28 @@ export class RpcConnection {
       return;
     }
 
+    // Never leave two reconnect timers armed — a stale one would fire a
+    // parallel doConnect() and leak sockets.
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    const maxDelay = this.config.maxReconnectDelay ?? 30_000;
+    const baseDelay = Math.min(1000 * 2 ** this.reconnectAttempt, maxDelay);
     let delay: number;
-    if (closeCode === CLOSE_TOKEN_EXPIRED) {
-      if (this.reconnectAttempt === 0) {
-        // First expiration — reconnect immediately (getToken provides a fresh one)
-        delay = 0;
-      } else {
-        // Repeated expiration — server is rejecting our tokens, back off
-        const maxDelay = this.config.maxReconnectDelay ?? 30_000;
-        const baseDelay = Math.min(1000 * 2 ** this.reconnectAttempt, maxDelay);
-        delay = baseDelay;
-      }
+    if (
+      closeCode === CLOSE_TOKEN_EXPIRED &&
+      this.reconnectAttempt === 0 &&
+      this.lastOpenDuration >= TOKEN_EXPIRY_TRUST_MS
+    ) {
+      // Credible first expiration on a long-lived connection — reconnect
+      // immediately (getToken provides a fresh one). Short-lived expiries
+      // fall through to backoff so a hostile server can't cycle us at
+      // full speed.
+      delay = 0;
     } else {
-      const maxDelay = this.config.maxReconnectDelay ?? 30_000;
-      const baseDelay = Math.min(1000 * 2 ** this.reconnectAttempt, maxDelay);
-      const jitter = Math.random() * baseDelay * 0.3;
-      delay = baseDelay + jitter;
+      delay = baseDelay + Math.random() * baseDelay * 0.3;
     }
     this.reconnectAttempt++;
 
@@ -386,9 +432,11 @@ export class RpcConnection {
         await this.doConnect();
       } catch {
         // doConnect can fail in two ways:
-        // 1. WebSocket created but fails → onclose fires → scheduleReconnect called automatically
-        // 2. getToken() throws before WebSocket is created → no onclose, so re-schedule manually
-        if (!this.closed && !this.ws) {
+        // 1. WebSocket created but fails → onclose fires → scheduleReconnect
+        //    already ran (reconnectTimer is armed) — don't double-schedule
+        // 2. getToken() throws before WebSocket is created → no onclose,
+        //    so re-schedule manually
+        if (!this.closed && !this.reconnectTimer) {
           this.scheduleReconnect(closeCode);
         }
       }

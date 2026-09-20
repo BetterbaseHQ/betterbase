@@ -181,6 +181,24 @@ describe("RpcConnection", () => {
     server.chunk(req!.id as string, "pull.record", { late: true });
   });
 
+  it("rejects a chunked call that exceeds the total deadline", async () => {
+    await connect();
+    const promise = conn.callChunked("pull", {}, () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    const req = server.sent.find((f) => f.method === "pull");
+
+    // Drip chunks every 20s for over 5 minutes — each resets the idle
+    // timer, so only the absolute deadline can end it
+    for (let elapsed = 0; elapsed <= 5 * 60_000; elapsed += 20_000) {
+      server.chunk(req!.id as string, "pull.record", { i: elapsed });
+      await vi.advanceTimersByTimeAsync(20_000);
+    }
+    // One chunk past the deadline triggers the rejection
+    server.chunk(req!.id as string, "pull.record", { late: true });
+
+    await expect(promise).rejects.toThrow(/exceeded.*total/);
+  });
+
   it("dispatches notifications to registered handlers", async () => {
     const onSync = vi.fn();
     conn.onNotification("sync", onSync);
@@ -221,8 +239,12 @@ describe("RpcConnection", () => {
     expect(frame?.type).toBe(RPC_NOTIFICATION);
   });
 
-  it("call() before connect throws WebSocket not connected", () => {
+  it("notify() before connect throws WebSocket not connected", () => {
     expect(() => conn.notify("x", {})).toThrow("WebSocket not connected");
+  });
+
+  it("call() before connect rejects instead of hanging", async () => {
+    await expect(conn.call("x", {})).rejects.toThrow("WebSocket not connected");
   });
 
   describe("frame robustness", () => {
@@ -315,19 +337,35 @@ describe("RpcConnection", () => {
       expect(server.sockets).toHaveLength(3);
     });
 
-    it("reconnects immediately on first token expiry, then backs off", async () => {
+    it("reconnects immediately on credible token expiry, then backs off", async () => {
       await connect();
+      // Connection stays up well past the trust window, then expires
+      await vi.advanceTimersByTimeAsync(120_000);
 
       server.current.serverClose(CLOSE_TOKEN_EXPIRED);
       await vi.advanceTimersByTimeAsync(0); // immediate
       expect(server.sockets).toHaveLength(2);
 
-      // Reopened quickly, expired again: no reset — must back off (2s)
+      // Reopened quickly, expired again: not credible — must back off (2s)
       server.current.serverClose(CLOSE_TOKEN_EXPIRED);
       await vi.advanceTimersByTimeAsync(1_500);
       expect(server.sockets).toHaveLength(2);
       await vi.advanceTimersByTimeAsync(600);
       expect(server.sockets).toHaveLength(3);
+    });
+
+    it("does not immediately reconnect when a short-lived connection reports token expiry", async () => {
+      await connect();
+      // Server accepts, then closes with 4001 within the trust window —
+      // reconnecting at full speed would let a hostile server drive a
+      // getToken()/reconnect cycle every few seconds.
+      server.current.serverClose(CLOSE_TOKEN_EXPIRED);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(server.sockets).toHaveLength(1); // no immediate reconnect
+
+      await vi.advanceTimersByTimeAsync(1_000); // first backoff elapsed
+      expect(server.sockets).toHaveLength(2);
     });
 
     it("does not reconnect on auth failure close codes", async () => {
@@ -346,6 +384,41 @@ describe("RpcConnection", () => {
 
       await vi.advanceTimersByTimeAsync(120_000);
       expect(server.sockets).toHaveLength(1);
+    });
+
+    it("keeps growing backoff when reconnect attempts fail before opening", async () => {
+      await connect();
+      // Long-lived healthy connection, then the server goes down
+      await vi.advanceTimersByTimeAsync(10_000);
+      server.autoOpen = false;
+
+      server.current.serverClose(1006);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(server.sockets).toHaveLength(2); // first reconnect attempt
+
+      // Attempt fails to open — exactly ONE new socket per backoff window
+      // (double-scheduled reconnects would create extras), and the delay
+      // grows (2s, not 1s — the stale openedAt must not reset the counter)
+      server.current.serverClose(1006);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(server.sockets).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(server.sockets).toHaveLength(3);
+
+      // Third failure: 4s window (attempt grows despite the stale
+      // stability reset from the original healthy connection)
+      server.current.serverClose(1006);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(server.sockets).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(server.sockets).toHaveLength(4);
+
+      // Fourth failure: 8s window
+      server.current.serverClose(1006);
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(server.sockets).toHaveLength(4);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(server.sockets).toHaveLength(5);
     });
 
     it("reports close codes to onClose", async () => {

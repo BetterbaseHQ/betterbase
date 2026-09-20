@@ -12,7 +12,12 @@ export function decodeJwtClaim(
     const value = claims[claim];
     return typeof value === "string" ? value : undefined;
   } catch (err) {
-    console.error("[betterbase-auth] Failed to decode JWT claim:", err);
+    // Log the error kind only — SyntaxError messages embed a fragment of
+    // the input, which would echo unverified token material into logs.
+    console.error(
+      "[betterbase-auth] Failed to decode JWT claim:",
+      err instanceof Error ? err.name : String(err),
+    );
     return undefined;
   }
 }

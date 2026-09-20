@@ -105,15 +105,19 @@ export interface EditChainIdentity {
  */
 export class PushRejectedError extends Error {
   readonly rejected = true as const;
-  /** Server error code, e.g. "conflict" (see betterbase-sync protocol). */
+  /**
+   * Server error code, e.g. "conflict" (see betterbase-sync protocol).
+   * Server-supplied and untrusted — truncated so a hostile server can't
+   * stuff unbounded content into error messages and UIs.
+   */
   readonly code: string;
   /** Server cursor at rejection time, if provided. */
   readonly serverSequence: number;
 
   constructor(code: string, serverSequence: number) {
-    super(`push rejected by server: ${code}`);
+    super(`push rejected by server: ${code.slice(0, 128)}`);
     this.name = "PushRejectedError";
-    this.code = code;
+    this.code = code.slice(0, 128);
     this.serverSequence = serverSequence;
   }
 }

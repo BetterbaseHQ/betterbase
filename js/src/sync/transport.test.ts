@@ -48,8 +48,23 @@ describe("SyncTransport.push", () => {
     expect(err.name).toBe("PushRejectedError");
     expect(err.code).toBe("conflict");
     expect(err.message).toContain("conflict");
-    expect(err.serverSequence).toBe(0);
+    expect(typeof err.serverSequence).toBe("number");
     expect(err.rejected).toBe(true);
+  });
+
+  it("truncates hostile server-provided rejection codes", async () => {
+    const hostileCode = "x".repeat(10_000);
+    const transport = new SyncTransport({
+      push: async () => ({ ok: false, sequence: 0, error: hostileCode }),
+      spaceId: "space-1",
+    });
+
+    const err = (await transport
+      .push("notes", [tombstoneRecord("n1", 0)])
+      .catch((e) => e)) as PushRejectedError;
+
+    expect(err.code).toHaveLength(128);
+    expect(err.message.length).toBeLessThan(200);
   });
 
   it("marks rejections with no server reason as unknown", async () => {

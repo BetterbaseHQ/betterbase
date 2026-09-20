@@ -70,6 +70,17 @@ export class SpaceNotFoundError extends Error {
   }
 }
 
+/**
+ * Thrown when the server rejects a membership request as forbidden —
+ * the caller's UCAN is revoked or invalid for the space.
+ */
+export class ForbiddenError extends Error {
+  constructor(message = "membership request forbidden (status 403)") {
+    super(message);
+    this.name = "ForbiddenError";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // MembershipClient
 // ---------------------------------------------------------------------------
@@ -133,7 +144,7 @@ export class MembershipClient {
       if (err instanceof RPCCallError) {
         if (err.code === "not_found") throw new SpaceNotFoundError(spaceId);
         if (err.code === "forbidden")
-          throw new Error(`Get membership log failed: status 403`);
+          throw new ForbiddenError("Get membership log failed: status 403");
       }
       throw err;
     }
@@ -337,7 +348,14 @@ export function verifyMembershipEntry(
   entry: MembershipEntryPayload,
   spaceId: string,
 ): boolean {
-  const parsed = parseUCANPayload(entry.ucan);
+  let parsed: ParsedUCAN;
+  try {
+    parsed = parseUCANPayload(entry.ucan);
+  } catch {
+    // A malformed UCAN fails verification — one poison entry must not
+    // abort parsing of the whole membership log.
+    return false;
+  }
   let expectedSignerDID: string;
   switch (entry.type) {
     case "d":

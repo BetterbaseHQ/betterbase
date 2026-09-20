@@ -34,6 +34,7 @@ import { base64ToBytes, bytesToBase64 } from "./encoding.js";
 import {
   MembershipClient,
   VersionConflictError,
+  ForbiddenError,
   encryptMembershipPayload,
   decryptMembershipPayload,
   sha256,
@@ -481,14 +482,9 @@ export class SpaceManager {
     try {
       return await this.dedupFetchMembers(spaceId);
     } catch (err) {
-      // Re-throw auth failures — stale cache should not hide revoked access.
-      // getEntries maps server 403s to "status 403" messages.
+      // Re-throw auth failures — stale cache should not hide revoked access
       if (err instanceof AuthenticationError) throw err;
-      if (
-        err instanceof Error &&
-        /forbidden|revoked|status 403/i.test(err.message)
-      )
-        throw err;
+      if (err instanceof ForbiddenError) throw err;
       // Network/transient errors — return cached members for offline access
       const spaceRecord = await this.findBySpaceId(spaceId);
       return (spaceRecord?.members as Member[] | undefined) ?? [];
@@ -1523,7 +1519,7 @@ export class SpaceManager {
       return false; // Request succeeded — access is still valid
     } catch (err) {
       // 403 from the server means the UCAN was revoked
-      if (err instanceof Error && /status 403/.test(err.message)) return true;
+      if (err instanceof ForbiddenError) return true;
       return false; // Network error or other transient failure — don't revoke
     }
   }
@@ -1696,14 +1692,9 @@ export class SpaceManager {
         return;
       } catch (err) {
         if (err instanceof VersionConflictError && attempt === 0) {
-          // Only retry version conflicts (transient race condition).
-          // Hash chain violations are permanent — don't retry.
-          if (
-            err.message.includes("hash chain") ||
-            err.message.includes("prev_hash")
-          ) {
-            throw err;
-          }
+          // Retry version conflicts (transient race with another writer) —
+          // the retry re-reads the log and rebuilds prev_hash and
+          // expected_version from its current head.
           continue;
         }
         throw err;

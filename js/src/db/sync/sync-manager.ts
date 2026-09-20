@@ -524,10 +524,22 @@ function maxSequence(records: RemoteRecord[]): number {
  * Classify a transport push failure. Server rejections (PushRejectedError
  * from betterbase/sync) carry a protocol error code; conflicts reconcile
  * via pull, capacity/rate limits retry later, and authorization failures
- * are permanent until access is re-granted.
+ * are permanent until access is re-granted. RPC-level errors (invalid
+ * params, unknown method) are structural failures that retrying cannot
+ * fix — permanent as well.
  */
 function classifyPushRejection(e: unknown): SyncErrorKind {
-  const err = e as { rejected?: boolean; code?: string };
+  const err = e as { rejected?: boolean; code?: string; name?: string };
+  if (err?.name === "RPCCallError" && typeof err.code === "string") {
+    switch (err.code) {
+      case "invalid_params":
+      case "bad_request":
+      case "method_not_found":
+        return "permanent";
+      default:
+        return "transient";
+    }
+  }
   if (err?.rejected !== true) return "transient";
   switch (err.code) {
     case "conflict":
