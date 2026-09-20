@@ -13,7 +13,13 @@ export interface SyncResult {
 }
 
 /** Classification of sync errors for retry/quarantine decisions. */
-export type SyncErrorKind = "transient" | "permanent" | "auth" | "capacity";
+export type SyncErrorKind =
+  | "transient"
+  | "permanent"
+  | "auth"
+  | "capacity"
+  /** Push rejected by an expected-cursor conflict; reconciled via pull. */
+  | "conflict";
 
 /** An error that occurred during sync. */
 export interface SyncError {

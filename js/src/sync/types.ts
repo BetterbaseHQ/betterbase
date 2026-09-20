@@ -40,6 +40,8 @@ export interface PullResult {
 export interface PushResult {
   ok: boolean;
   sequence: number;
+  /** Server-side rejection reason when ok is false (e.g. cursor conflict). */
+  error?: string;
 }
 
 /**

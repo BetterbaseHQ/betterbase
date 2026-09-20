@@ -34,7 +34,7 @@ export type {
 } from "./file-store.js";
 
 // Transport (per-space encryption layer)
-export { SyncTransport } from "./transport.js";
+export { SyncTransport, PushRejectedError } from "./transport.js";
 export type { SyncTransportConfig, EditChainIdentity } from "./transport.js";
 
 // Types

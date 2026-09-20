@@ -96,6 +96,28 @@ export interface EditChainIdentity {
   publicKeyJwk: JsonWebKey;
 }
 
+/**
+ * The server rejected a push. `code` is the server's error code:
+ * "conflict" means an expected_cursor CAS rejection (another device pushed
+ * a newer version first) — the local records stay dirty and a pull
+ * reconciles the cursor so the next push succeeds. Other codes
+ * (forbidden, not_found, payload_too_large, …) are terminal for the batch.
+ */
+export class PushRejectedError extends Error {
+  readonly rejected = true as const;
+  /** Server error code, e.g. "conflict" (see betterbase-sync protocol). */
+  readonly code: string;
+  /** Server cursor at rejection time, if provided. */
+  readonly serverSequence: number;
+
+  constructor(code: string, serverSequence: number) {
+    super(`push rejected by server: ${code}`);
+    this.name = "PushRejectedError";
+    this.code = code;
+    this.serverSequence = serverSequence;
+  }
+}
+
 export interface SyncTransportConfig {
   /** Push function — sends encrypted changes to the server. */
   push: (changes: Change[]) => Promise<PushResult>;
@@ -237,7 +259,14 @@ export class SyncTransport implements SyncTransportInterface {
     const pushResult = await this.pushFn(changes);
 
     if (!pushResult.ok) {
-      return [];
+      // The server rejected the batch. Throwing (instead of returning empty
+      // acks) lets the sync layer classify the rejection — conflicts
+      // reconcile via pull — instead of silently retrying a stale cursor
+      // forever.
+      throw new PushRejectedError(
+        pushResult.error ?? "unknown",
+        pushResult.sequence,
+      );
     }
 
     // Only return acks for records that were actually sent

@@ -212,6 +212,118 @@ describe("SyncManager.push", () => {
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toMatchObject({ id: "a", kind: "transient" });
   });
+
+  it("a push conflict reconciles via pull and retries the push once", async () => {
+    const { manager, adapter, transport } = makeHarness({
+      adapter: {
+        getDirty: vi
+          .fn()
+          .mockResolvedValue([makeDirty({ id: "n1", sequence: 3 })]),
+      },
+      transport: {
+        // The reconcile pull delivers the winning remote state
+        pull: vi
+          .fn()
+          .mockResolvedValue({
+            records: [makeRemote({ id: "n1", sequence: 8 })],
+          }),
+      },
+    });
+    const conflict = Object.assign(
+      new Error("push rejected by server: conflict"),
+      {
+        rejected: true as const,
+        code: "conflict",
+      },
+    );
+    transport.push
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce([{ id: "n1", sequence: 8 }]);
+
+    const result = await manager.push(def);
+
+    // Rejected once, reconciled (pull), retried, second push accepted
+    expect(transport.push).toHaveBeenCalledTimes(2);
+    expect(transport.pull).toHaveBeenCalledTimes(1);
+    expect(adapter.applyRemoteChanges).toHaveBeenCalledTimes(1);
+    expect(adapter.markSynced).toHaveBeenCalledWith(
+      def,
+      "n1",
+      8,
+      expect.anything(),
+    );
+    expect(result.pushed).toBe(1);
+    expect(result.pulled).toBe(1);
+    // The conflict is visible to callers as a first-class error kind
+    expect(result.errors.filter((e) => e.kind === "conflict")).toHaveLength(1);
+    expect(result.errors[0]).toMatchObject({ phase: "push", kind: "conflict" });
+  });
+
+  it("a persistent conflict retries exactly once — no retry loop", async () => {
+    const { manager, transport } = makeHarness({
+      adapter: { getDirty: vi.fn().mockResolvedValue([makeDirty()]) },
+    });
+    const conflict = Object.assign(
+      new Error("push rejected by server: conflict"),
+      {
+        rejected: true as const,
+        code: "conflict",
+      },
+    );
+    transport.push.mockRejectedValue(conflict);
+
+    const result = await manager.push(def);
+
+    expect(transport.push).toHaveBeenCalledTimes(2);
+    expect(result.pushed).toBe(0);
+    expect(result.errors.filter((e) => e.kind === "conflict")).toHaveLength(2);
+  });
+
+  it("non-conflict rejections map to their error kinds without reconciling", async () => {
+    const { manager, adapter, transport } = makeHarness({
+      adapter: { getDirty: vi.fn().mockResolvedValue([makeDirty()]) },
+    });
+    const tooLarge = Object.assign(
+      new Error("push rejected by server: payload_too_large"),
+      {
+        rejected: true as const,
+        code: "payload_too_large",
+      },
+    );
+    transport.push.mockRejectedValue(tooLarge);
+
+    const result = await manager.push(def);
+
+    expect(transport.push).toHaveBeenCalledTimes(1);
+    expect(transport.pull).not.toHaveBeenCalled();
+    expect(adapter.applyRemoteChanges).not.toHaveBeenCalled();
+    expect(result.errors[0]).toMatchObject({ kind: "capacity" });
+
+    // Authorization failures are permanent
+    const forbidden = Object.assign(
+      new Error("push rejected by server: forbidden"),
+      {
+        rejected: true as const,
+        code: "forbidden",
+      },
+    );
+    transport.push.mockReset().mockRejectedValue(forbidden);
+    const result2 = await manager.push(def);
+    expect(result2.errors[0]).toMatchObject({ kind: "permanent" });
+  });
+
+  it("a transient push failure does not trigger the reconcile-retry path", async () => {
+    const { manager, adapter, transport } = makeHarness({
+      adapter: { getDirty: vi.fn().mockResolvedValue([makeDirty()]) },
+    });
+    transport.push.mockRejectedValue(new Error("ws closed"));
+
+    const result = await manager.push(def);
+
+    expect(transport.push).toHaveBeenCalledTimes(1);
+    expect(adapter.applyRemoteChanges).not.toHaveBeenCalled();
+    expect(result.errors[0]).toMatchObject({ kind: "transient" });
+  });
 });
 
 describe("SyncManager.pull", () => {

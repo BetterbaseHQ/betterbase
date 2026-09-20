@@ -131,7 +131,11 @@ export class WSTransport implements SyncTransportInterface {
         ? (this.config.spaceManager.getUCAN(space) ?? undefined)
         : undefined;
     const ack = await this.wsClient.push(space, wsChanges, ucan);
-    return { ok: ack.ok, sequence: ack.cursor ?? 0 };
+    return {
+      ok: ack.ok,
+      sequence: ack.cursor ?? 0,
+      ...(ack.error !== undefined ? { error: ack.error } : {}),
+    };
   }
 
   /** Connect to the WebSocket server. */

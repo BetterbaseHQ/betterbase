@@ -74,10 +74,10 @@ Gaps:
   on any object store anywhere in the service. The push path computes
   `deleted_file_ids` — exactly the hook needed — and the WS handler
   **throws it away**.
-- **Live bug:** `record_exists` has no `deleted = false` filter
+- ~~**Live bug:** `record_exists` has no `deleted = false` filter
   (`records.rs:374`), so uploads against tombstoned records succeed,
-  creating orphan rows that re-enter every peer's incremental pull. Fix
-  immediately.
+  creating orphan rows that re-enter every peer's incremental pull.~~
+  **Fixed** — filter added with a tombstone round-trip test.
 - **Peer cache eviction exists but is opt-in and string-typed.** The SDK
   already has the right hook: `SyncEngine`'s `onRemoteDelete` wrapper
   reads a `fileFields` config (collection → file-id field names) and
@@ -118,11 +118,12 @@ Verified in the engine (`remote_changes.rs`, 10-case matrix):
   and never converges. The default `RemoteWins` is not just "surprising,"
   it is the convergence-preserving choice; `DeleteWins` is the safe
   "deletes stick" option.
-- **Push conflicts are swallowed whole.** `ok:false` from the server
-  becomes an empty ack array — no `SyncError`, no `onError`, the
-  `error` string is dropped at `ws-transport.ts:134`, and there is no
-  pull-then-retry. A wedged tombstone is indistinguishable from "nothing
-  to push."
+- ~~**Push conflicts are swallowed whole.**~~ **Fixed:** `ok:false` now
+  throws `PushRejectedError` (carrying the server's error code) from
+  `SyncTransport.push`; `SyncManager` classifies it (`conflict` /
+  `capacity` / `permanent` / `transient`), and conflicts trigger a
+  reconciling pull + a single bounded push retry. The wedged-tombstone
+  failure mode is gone.
 - `onConflict` is plumbed through options → engine → React props and
   **never fired** — dead API surface.
 - The whole policy is global per SyncManager; no per-collection override.
@@ -331,9 +332,13 @@ simplification of the earlier proposal to soft-delete file rows):
 
 ## Phasing
 
-- **Phase 0 (now):** fix `record_exists` (`deleted = false`); surface
-  `ok:false` pushes as `SyncError` + fire `onConflict`; stop dropping the
-  server's conflict `error` string.
+- **Phase 0 (done):** `record_exists` fixed (`deleted = false`, tested
+  against live Postgres); `ok:false` pushes now throw
+  `PushRejectedError` → classified `SyncError` (conflict/capacity/
+  permanent/transient) + reconcile-pull and one bounded retry; the
+  server's conflict `error` string is propagated. (`onConflict` remains
+  unfired — it is typed for delete-conflicts specifically and is
+  superseded by the `conflict` error kind.)
 - **Phase 1:** declared edges + `fileFields` + per-collection
   `deleteStrategy`; derived `deleteTree`; document real strategy
   semantics (including the LocalWins/UpdateWins wedge).

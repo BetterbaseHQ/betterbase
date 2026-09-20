@@ -67,7 +67,7 @@ export class SyncManager {
   async sync(def: CollectionDefHandle): Promise<SyncResult> {
     return this.withLock(def.name, async () => {
       const pullResult = await this.pullImpl(def);
-      const pushResult = await this.pushImpl(def);
+      const pushResult = await this.pushWithConflictRetry(def);
       return {
         pushed: pushResult.pushed,
         pulled: pullResult.pulled,
@@ -91,7 +91,7 @@ export class SyncManager {
   }
 
   async push(def: CollectionDefHandle): Promise<SyncResult> {
-    return this.withLock(def.name, () => this.pushImpl(def));
+    return this.withLock(def.name, () => this.pushWithConflictRetry(def));
   }
 
   async pull(def: CollectionDefHandle): Promise<SyncResult> {
@@ -194,6 +194,28 @@ export class SyncManager {
     return [...this.collections.values()];
   }
 
+  /**
+   * Push, reconciling once if the server rejects the batch on an
+   * expected-cursor conflict: a pull merges the winning remote state (which
+   * advances the local cursors), then a single retry push converges. Without
+   * this, conflicting records would retry the same stale cursor forever.
+   */
+  private async pushWithConflictRetry(
+    def: CollectionDefHandle,
+  ): Promise<SyncResult> {
+    const first = await this.pushImpl(def);
+    if (!first.errors.some((e) => e.kind === "conflict")) return first;
+
+    const reconciled = await this.pullImpl(def);
+    const retry = await this.pushImpl(def);
+    return {
+      pushed: first.pushed + retry.pushed,
+      pulled: reconciled.pulled,
+      merged: reconciled.merged,
+      errors: [...first.errors, ...reconciled.errors, ...retry.errors],
+    };
+  }
+
   private async pushImpl(def: CollectionDefHandle): Promise<SyncResult> {
     const result = emptySyncResult();
     const collection = def.name;
@@ -243,7 +265,13 @@ export class SyncManager {
         acks = await this.transport.push(collection, batch);
       } catch (e) {
         result.errors.push(
-          this.makeSyncError("push", collection, undefined, e, "transient"),
+          this.makeSyncError(
+            "push",
+            collection,
+            undefined,
+            e,
+            classifyPushRejection(e),
+          ),
         );
         break;
       }
@@ -490,4 +518,31 @@ function maxSequence(records: RemoteRecord[]): number {
     if (r.sequence > max) max = r.sequence;
   }
   return max;
+}
+
+/**
+ * Classify a transport push failure. Server rejections (PushRejectedError
+ * from betterbase/sync) carry a protocol error code; conflicts reconcile
+ * via pull, capacity/rate limits retry later, and authorization failures
+ * are permanent until access is re-granted.
+ */
+function classifyPushRejection(e: unknown): SyncErrorKind {
+  const err = e as { rejected?: boolean; code?: string };
+  if (err?.rejected !== true) return "transient";
+  switch (err.code) {
+    case "conflict":
+      return "conflict";
+    case "payload_too_large":
+      return "capacity";
+    case "rate_limited":
+    case "internal":
+    case "key_generation_stale":
+      return "transient";
+    case "forbidden":
+    case "not_found":
+    case "bad_request":
+      return "permanent";
+    default:
+      return "transient";
+  }
 }
