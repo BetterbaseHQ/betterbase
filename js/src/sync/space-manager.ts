@@ -481,9 +481,13 @@ export class SpaceManager {
     try {
       return await this.dedupFetchMembers(spaceId);
     } catch (err) {
-      // Re-throw auth failures — stale cache should not hide revoked access
+      // Re-throw auth failures — stale cache should not hide revoked access.
+      // getEntries maps server 403s to "status 403" messages.
       if (err instanceof AuthenticationError) throw err;
-      if (err instanceof Error && /forbidden|revoked/i.test(err.message))
+      if (
+        err instanceof Error &&
+        /forbidden|revoked|status 403/i.test(err.message)
+      )
         throw err;
       // Network/transient errors — return cached members for offline access
       const spaceRecord = await this.findBySpaceId(spaceId);
