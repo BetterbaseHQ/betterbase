@@ -187,6 +187,7 @@ pub fn process_remote_record(
                 def,
                 local,
                 crdt_bytes,
+                remote.meta.as_ref(),
                 remote.sequence,
                 remote.version,
                 received_at,

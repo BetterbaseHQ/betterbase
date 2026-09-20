@@ -774,6 +774,7 @@ pub fn merge_records(
     def: &CollectionDef,
     local: &SerializedRecord,
     remote_crdt: &[u8],
+    remote_meta: Option<&Value>,
     remote_sequence: i64,
     remote_version: u32,
     _received_at: Option<&str>,
@@ -784,6 +785,7 @@ pub fn merge_records(
             def,
             local,
             remote_crdt,
+            remote_meta,
             remote_sequence,
             remote_version,
         );
@@ -810,8 +812,13 @@ pub fn merge_records(
     let computed = compute_index_values(&validated, &def.indexes);
     let merged_crdt = crdt::model_to_binary(&remote_model);
 
-    // Check if local still has changes beyond what the remote already contains
-    let had_local_changes = !local_patches.is_empty() && raw_merged_view != remote_only_view;
+    // Check if local still has changes beyond what the remote already contains.
+    // A dirty record with an unpushed meta-only change (empty pending log)
+    // must also count: marking it clean here would strand the meta write —
+    // it would never push, and the next pull would overwrite it.
+    let meta_changed = local.dirty && local.meta.as_ref() != remote_meta;
+    let had_local_changes =
+        (!local_patches.is_empty() && raw_merged_view != remote_only_view) || meta_changed;
 
     let record = SerializedRecord {
         id: local.id.clone(),
@@ -850,6 +857,7 @@ fn merge_with_migrated_remote(
     def: &CollectionDef,
     local: &SerializedRecord,
     remote_crdt: &[u8],
+    remote_meta: Option<&Value>,
     remote_sequence: i64,
     remote_version: u32,
 ) -> Result<MergeRecordsResult> {
@@ -902,8 +910,11 @@ fn merge_with_migrated_remote(
     // Step 3: Diff migrated remote vs local data to find local edits
     let local_edit_patch = diff_model_with_schema(&remote_model, &local.data, &def.current_schema);
 
-    // Step 4: Apply local edits on top of migrated remote
-    let had_local_changes = local_edit_patch.is_some();
+    // Step 4: Apply local edits on top of migrated remote.
+    // As in merge_records, an unpushed meta-only change keeps the record
+    // dirty so the meta write is not stranded by the merge.
+    let meta_changed = local.dirty && local.meta.as_ref() != remote_meta;
+    let had_local_changes = local_edit_patch.is_some() || meta_changed;
     if let Some(ref p) = local_edit_patch {
         crdt::apply_patch(&mut remote_model, p);
     }

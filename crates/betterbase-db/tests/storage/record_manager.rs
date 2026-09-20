@@ -689,8 +689,8 @@ fn merge_records_applies_local_patches_to_remote() {
     // Remote is at the original state (same CRDT binary)
     let remote_crdt = local.crdt.clone();
 
-    let result =
-        merge_records(&def, &dirty_local, &remote_crdt, 10, 1, None).expect("merge_records failed");
+    let result = merge_records(&def, &dirty_local, &remote_crdt, None, 10, 1, None)
+        .expect("merge_records failed");
 
     // Merged record should have Alice's local change
     assert_eq!(result.record.data["name"], json!("Alice Updated"));
@@ -707,7 +707,7 @@ fn merge_records_clears_dirty_when_remote_already_has_changes() {
     // Remote already has exactly the same state → no local changes survive
     // Use the local's own CRDT as the "remote" (fully subsumed)
     let result =
-        merge_records(&def, &local, &local.crdt, 5, 1, None).expect("merge_records failed");
+        merge_records(&def, &local, &local.crdt, None, 5, 1, None).expect("merge_records failed");
 
     // No pending changes remain
     assert!(!result.had_local_changes);
@@ -760,7 +760,7 @@ fn merge_records_cross_version_migrates_remote_and_preserves_local_edits() {
     };
 
     // Merge: remote is v1, local is v2 → triggers cross-version merge
-    let result = merge_records(&def, &local, &remote_crdt, 10, 1, None)
+    let result = merge_records(&def, &local, &remote_crdt, None, 10, 1, None)
         .expect("merge_records should succeed");
 
     // Merged record should be at current version
@@ -817,8 +817,8 @@ fn merge_records_cross_version_with_local_title_change() {
         computed: None,
     };
 
-    let result =
-        merge_records(&def, &local, &remote_crdt, 5, 1, None).expect("cross-version merge failed");
+    let result = merge_records(&def, &local, &remote_crdt, None, 5, 1, None)
+        .expect("cross-version merge failed");
 
     // Local title change should be reapplied on top of migrated remote
     assert_eq!(result.record.data["title"], json!("Local Title"));
@@ -1173,10 +1173,78 @@ fn merge_records_meta_both_none_stays_none() {
 
     // Merge with self (remote == local CRDT), no meta on either side
     let result =
-        merge_records(&def, &local, &local.crdt, 5, 1, None).expect("merge_records failed");
+        merge_records(&def, &local, &local.crdt, None, 5, 1, None).expect("merge_records failed");
 
     assert!(
         result.record.meta.is_none(),
         "meta should remain None when both sides have no meta"
+    );
+}
+
+/// Issue #1: a dirty local record whose only change is meta (empty pending
+/// log) must stay dirty through a merge — otherwise the meta write is
+/// stranded and the next pull overwrites it.
+#[test]
+fn merge_records_keeps_dirty_for_unpushed_meta_only_change() {
+    let def = users_def();
+    let mut local = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+    local.dirty = true;
+    local.pending_patches = Vec::new();
+    local.meta = Some(json!({"spaceId": "s1"}));
+
+    let result =
+        merge_records(&def, &local, &local.crdt, None, 5, 1, None).expect("merge_records failed");
+
+    assert!(result.had_local_changes, "unpushed meta counts as a change");
+    assert!(
+        result.record.dirty,
+        "record must stay dirty so the meta pushes"
+    );
+    assert_eq!(result.record.meta, Some(json!({"spaceId": "s1"})));
+    assert_eq!(
+        result.record.sequence, 5,
+        "sequence tracks the remote pull so the record is not re-pulled"
+    );
+}
+
+/// The local-unpushed-wins rule only holds while the meta actually differs —
+/// once the remote carries the same meta, the merge converges clean.
+#[test]
+fn merge_records_converges_when_remote_meta_matches_local() {
+    let def = users_def();
+    let mut local = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+    local.dirty = true;
+    local.pending_patches = Vec::new();
+    local.meta = Some(json!({"spaceId": "s1"}));
+
+    let remote_meta = json!({"spaceId": "s1"});
+    let result = merge_records(&def, &local, &local.crdt, Some(&remote_meta), 5, 1, None)
+        .expect("merge_records failed");
+
+    assert!(
+        !result.had_local_changes,
+        "identical remote meta is not a local change"
+    );
+    assert!(
+        !result.record.dirty,
+        "identical remote meta converges clean"
+    );
+    assert_eq!(result.record.meta, Some(json!({"spaceId": "s1"})));
+}
+
+/// A clean local record's meta is not resurrected as a pending change.
+#[test]
+fn merge_records_ignores_meta_divergence_when_local_clean() {
+    let def = users_def();
+    let mut local = make_record(&def, "u1", json!({"name": "Alice", "email": "a@b.com"}));
+    local.dirty = false;
+    local.meta = Some(json!({"spaceId": "stale-local"}));
+
+    let result =
+        merge_records(&def, &local, &local.crdt, None, 5, 1, None).expect("merge_records failed");
+
+    assert!(
+        !result.had_local_changes,
+        "clean local records never claim meta changes"
     );
 }

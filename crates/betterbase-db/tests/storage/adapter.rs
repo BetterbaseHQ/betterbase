@@ -1930,3 +1930,202 @@ fn patch_with_base_covers_optional_text() {
     );
     assert_eq!(result.data["label"], json!("renamed"));
 }
+
+// ============================================================================
+// Meta-only dirty writes vs interleaved pulls (issue #1)
+// ============================================================================
+
+/// Regression test for issue #1: a meta-only write (e.g. a space move) is
+/// dirty with an empty pending log. An interleaved pull must not mark the
+/// record clean — the meta change has to survive, ride the next push, and
+/// still be intact on the pull after it.
+#[test]
+fn meta_only_dirty_write_survives_interleaved_pulls() {
+    use betterbase_db::crdt::schema_aware::diff_model_with_schema;
+    use betterbase_db::crdt::{apply_patch, model_load, model_to_binary};
+
+    let def = Arc::new(notes_def());
+    let adapter = make_adapter_arc(def.clone());
+    let sid_local = MIN_SESSION_ID;
+    let sid_peer = MIN_SESSION_ID + 7;
+
+    // Seed + push ack (clean).
+    let rec = adapter
+        .put(
+            &def,
+            json!({"body": "hello", "pinned": false}),
+            &PutOptions {
+                session_id: Some(sid_local),
+                ..Default::default()
+            },
+        )
+        .expect("seed put");
+    adapter
+        .mark_synced(&def, &rec.id, 1, None)
+        .expect("mark synced");
+
+    // Meta-only write (e.g. space-move middleware state).
+    let patched = adapter
+        .patch(
+            &def,
+            json!({"id": rec.id.clone()}),
+            &PatchOptions {
+                id: rec.id.clone(),
+                session_id: Some(sid_local),
+                meta: Some(json!({"spaceId": "s-shared"})),
+                ..Default::default()
+            },
+        )
+        .expect("meta-only patch");
+    assert!(patched.dirty, "meta-only write must be dirty");
+
+    // Peer edit lands while the meta write is unpushed (Case-10 merge).
+    let seed_crdt = adapter
+        .get(&def, &rec.id, &GetOptions::default())
+        .unwrap()
+        .unwrap()
+        .crdt;
+    let mut peer_dst = rec.data.clone();
+    peer_dst["body"] = json!("hello — peer edit");
+    let mut peer = model_load(&seed_crdt, sid_peer).unwrap();
+    let p = diff_model_with_schema(&peer, &peer_dst, &def.current_schema).unwrap();
+    apply_patch(&mut peer, &p);
+    let peer_crdt = model_to_binary(&peer);
+    adapter
+        .apply_remote_changes(
+            &def,
+            &[RemoteRecord {
+                id: rec.id.clone(),
+                version: 1,
+                crdt: Some(peer_crdt.clone()),
+                deleted: false,
+                sequence: 2,
+                meta: None,
+            }],
+            &ApplyRemoteOptions::default(),
+        )
+        .expect("apply remote 1");
+
+    let after_merge = adapter
+        .get(&def, &rec.id, &GetOptions::default())
+        .unwrap()
+        .unwrap();
+    assert!(
+        after_merge.dirty,
+        "unpushed meta-only change must keep the record dirty after a merge"
+    );
+    assert_eq!(after_merge.meta, Some(json!({"spaceId": "s-shared"})));
+    assert_eq!(after_merge.data["body"], json!("hello — peer edit"));
+
+    // The next push must carry the meta so the server sees it.
+    let dirty = adapter.get_dirty(&def).expect("get_dirty");
+    assert_eq!(dirty.records.len(), 1, "meta-dirty record must push");
+    assert_eq!(dirty.records[0].meta, Some(json!({"spaceId": "s-shared"})));
+    adapter
+        .mark_synced(&def, &rec.id, 2, None)
+        .expect("mark synced 2");
+
+    // A later pull (Case 4, clean local) returns the server's meta — which
+    // now includes our pushed spaceId. The meta survives the full cycle.
+    let mut peer2_dst = peer_dst.clone();
+    peer2_dst["body"] = json!("hello — peer edit 2");
+    let mut peer2 = model_load(&peer_crdt, sid_peer + 1).unwrap();
+    let p2 = diff_model_with_schema(&peer2, &peer2_dst, &def.current_schema).unwrap();
+    apply_patch(&mut peer2, &p2);
+    adapter
+        .apply_remote_changes(
+            &def,
+            &[RemoteRecord {
+                id: rec.id.clone(),
+                version: 1,
+                crdt: Some(model_to_binary(&peer2)),
+                deleted: false,
+                sequence: 3,
+                meta: Some(json!({"spaceId": "s-shared"})),
+            }],
+            &ApplyRemoteOptions::default(),
+        )
+        .expect("apply remote 2");
+
+    let after = adapter
+        .get(&def, &rec.id, &GetOptions::default())
+        .unwrap()
+        .unwrap();
+    assert!(!after.dirty);
+    assert_eq!(
+        after.meta,
+        Some(json!({"spaceId": "s-shared"})),
+        "meta must survive the full pull → merge → push → pull cycle"
+    );
+    assert_eq!(after.data["body"], json!("hello — peer edit 2"));
+}
+
+/// When the remote already carries the same meta (a peer pushed the same
+/// change), the merge converges clean — no redundant push.
+#[test]
+fn meta_only_write_converges_when_peer_pushed_same_meta() {
+    use betterbase_db::crdt::{model_load, model_to_binary};
+
+    let def = Arc::new(notes_def());
+    let adapter = make_adapter_arc(def.clone());
+    let sid = MIN_SESSION_ID;
+
+    let rec = adapter
+        .put(
+            &def,
+            json!({"body": "hello", "pinned": false}),
+            &PutOptions {
+                session_id: Some(sid),
+                ..Default::default()
+            },
+        )
+        .expect("seed put");
+    adapter
+        .mark_synced(&def, &rec.id, 1, None)
+        .expect("mark synced");
+
+    adapter
+        .patch(
+            &def,
+            json!({"id": rec.id.clone()}),
+            &PatchOptions {
+                id: rec.id.clone(),
+                session_id: Some(sid),
+                meta: Some(json!({"spaceId": "s-shared"})),
+                ..Default::default()
+            },
+        )
+        .expect("meta-only patch");
+
+    let local_crdt = adapter
+        .get(&def, &rec.id, &GetOptions::default())
+        .unwrap()
+        .unwrap()
+        .crdt;
+    // Peer pulls our record, sets the same meta, pushes. Remote CRDT is
+    // content-identical to local (no data divergence), meta identical.
+    adapter
+        .apply_remote_changes(
+            &def,
+            &[RemoteRecord {
+                id: rec.id.clone(),
+                version: 1,
+                crdt: Some(model_to_binary(&model_load(&local_crdt, sid + 3).unwrap())),
+                deleted: false,
+                sequence: 2,
+                meta: Some(json!({"spaceId": "s-shared"})),
+            }],
+            &ApplyRemoteOptions::default(),
+        )
+        .expect("apply remote");
+
+    let after = adapter
+        .get(&def, &rec.id, &GetOptions::default())
+        .unwrap()
+        .unwrap();
+    assert!(
+        !after.dirty,
+        "identical remote meta converges — no redundant push"
+    );
+    assert_eq!(after.meta, Some(json!({"spaceId": "s-shared"})));
+}
