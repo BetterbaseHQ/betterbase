@@ -349,6 +349,47 @@ export class Database {
     callback: (record: CollectionRead<S> | null) => void,
     options?: ObserveOptions,
   ): () => void {
+    return this.observeImpl(def, id, false, callback, options);
+  }
+
+  /**
+   * Observe a record with its base snapshot delivered atomically alongside
+   * the data. The `base` argument is an opaque CRDT snapshot corresponding
+   * to exactly the delivered view — the version the UI rendered. Pass it
+   * back as `patch(def, data, { base })` so concurrent peer edits are
+   * merged rather than tombstoned.
+   */
+  observeWithBase<S extends SchemaShape>(
+    def: CollectionDefHandle<string, S>,
+    id: string,
+    callback: (
+      record: CollectionRead<S> | null,
+      base: Uint8Array | null,
+    ) => void,
+    options?: ObserveOptions,
+  ): () => void {
+    return this.observeImpl(
+      def,
+      id,
+      true,
+      callback as (
+        record: CollectionRead<S> | null,
+        base?: Uint8Array | null,
+      ) => void,
+      options,
+    );
+  }
+
+  private observeImpl<S extends SchemaShape>(
+    def: CollectionDefHandle<string, S>,
+    id: string,
+    includeBase: boolean,
+    callback: (
+      record: CollectionRead<S> | null,
+      base?: Uint8Array | null,
+    ) => void,
+    options?: ObserveOptions,
+  ): () => void {
     let unsubFn: (() => void) | null = null;
     let cancelled = false;
 
@@ -359,15 +400,24 @@ export class Database {
     const wrappedCallback = (payload: unknown) => {
       const p = payload as { type: string; data: unknown };
       try {
-        if (p.data === null || p.data === undefined) {
-          callback(null);
+        const raw =
+          includeBase && p.data !== null && p.data !== undefined
+            ? ((p.data as { data: unknown }).data ?? null)
+            : p.data;
+        const base =
+          includeBase && p.data !== null && p.data !== undefined
+            ? ((p.data as { base?: Uint8Array }).base ?? null)
+            : null;
+        if (raw === null || raw === undefined) {
+          if (includeBase) callback(null, null);
+          else callback(null);
         } else {
-          callback(
-            deserializeFromRust(
-              p.data as Record<string, unknown>,
-              this.schemaFor(def),
-            ) as CollectionRead<S>,
-          );
+          const record = deserializeFromRust(
+            raw as Record<string, unknown>,
+            this.schemaFor(def),
+          ) as CollectionRead<S>;
+          if (includeBase) callback(record, base);
+          else callback(record);
         }
       } catch (err) {
         // Corrupt record delivered — route to onError (or the default
@@ -377,7 +427,7 @@ export class Database {
     };
 
     this.rpc
-      .subscribe("observe", [def.name, id], wrappedCallback)
+      .subscribe("observe", [def.name, id, includeBase], wrappedCallback)
       .then(([, unsub]) => {
         if (cancelled) {
           unsub();

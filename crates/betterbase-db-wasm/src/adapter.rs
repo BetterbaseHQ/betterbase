@@ -405,21 +405,57 @@ impl WasmDb {
         collection: &str,
         id: &str,
         callback: js_sys::Function,
+        include_base: JsValue,
     ) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
         let cb = Arc::new(SendSyncCallback(callback));
-        let unsub = self.adapter.observe(
-            def,
-            id,
-            Arc::new(move |record: Option<Value>| {
-                let js_val = match record {
-                    Some(ref data) => value_to_js(data).unwrap_or(JsValue::NULL),
-                    None => JsValue::NULL,
-                };
-                let _ = cb.0.call1(&JsValue::NULL, &js_val);
-            }),
-            None,
-        );
+        let unsub = if include_base.is_truthy() {
+            // Base-aware variant: the delivered view and its CRDT binary
+            // are an atomic pair — the snapshot the UI rendered and the
+            // anchor for `patch(def, data, { base })`.
+            self.adapter.observe_with_crdt(
+                def,
+                id,
+                Arc::new(
+                    move |rec: Option<betterbase_db::reactive::adapter::ObservedRecord>| {
+                        let js_val = match rec {
+                            Some(r) => {
+                                let obj = js_sys::Object::new();
+                                js_sys::Reflect::set(
+                                    &obj,
+                                    &JsValue::from_str("data"),
+                                    &value_to_js(&r.data).unwrap_or(JsValue::NULL),
+                                )
+                                .ok();
+                                js_sys::Reflect::set(
+                                    &obj,
+                                    &JsValue::from_str("base"),
+                                    &js_sys::Uint8Array::from(&r.base[..]).into(),
+                                )
+                                .ok();
+                                obj.into()
+                            }
+                            None => JsValue::NULL,
+                        };
+                        let _ = cb.0.call1(&JsValue::NULL, &js_val);
+                    },
+                ),
+                None,
+            )
+        } else {
+            self.adapter.observe(
+                def,
+                id,
+                Arc::new(move |record: Option<Value>| {
+                    let js_val = match record {
+                        Some(ref data) => value_to_js(data).unwrap_or(JsValue::NULL),
+                        None => JsValue::NULL,
+                    };
+                    let _ = cb.0.call1(&JsValue::NULL, &js_val);
+                }),
+                None,
+            )
+        };
 
         let unsub_fn = idempotent_unsub(unsub);
         Ok(unsub_fn)

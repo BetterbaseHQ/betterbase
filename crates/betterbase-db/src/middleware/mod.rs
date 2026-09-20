@@ -7,6 +7,7 @@
 pub mod typed_adapter;
 pub mod types;
 
+pub use crate::reactive::adapter::ObservedRecord;
 pub use typed_adapter::{
     MiddlewareBatchResult, MiddlewarePatchManyResult, MiddlewareQueryResult, TypedAdapter,
 };

@@ -481,21 +481,55 @@ impl WasmTypedDb {
         collection: &str,
         id: &str,
         callback: js_sys::Function,
+        include_base: JsValue,
     ) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
         let cb = Arc::new(SendSyncCallback(callback));
-        let unsub = self.typed()?.observe(
-            def,
-            id,
-            Arc::new(move |data: Option<Value>| {
-                let js_val = match data {
-                    Some(ref d) => value_to_js(d).unwrap_or(JsValue::NULL),
-                    None => JsValue::NULL,
-                };
-                let _ = cb.0.call1(&JsValue::NULL, &js_val);
-            }),
-            None,
-        );
+        let with_base = include_base.is_truthy();
+        let unsub = if with_base {
+            self.typed()?.observe_with_base(
+                def,
+                id,
+                Arc::new(
+                    move |rec: Option<betterbase_db::middleware::ObservedRecord>| {
+                        let js_val = match rec {
+                            Some(r) => {
+                                let obj = js_sys::Object::new();
+                                js_sys::Reflect::set(
+                                    &obj,
+                                    &JsValue::from_str("data"),
+                                    &value_to_js(&r.data).unwrap_or(JsValue::NULL),
+                                )
+                                .ok();
+                                js_sys::Reflect::set(
+                                    &obj,
+                                    &JsValue::from_str("base"),
+                                    &js_sys::Uint8Array::from(&r.base[..]).into(),
+                                )
+                                .ok();
+                                obj.into()
+                            }
+                            None => JsValue::NULL,
+                        };
+                        let _ = cb.0.call1(&JsValue::NULL, &js_val);
+                    },
+                ),
+                None,
+            )
+        } else {
+            self.typed()?.observe(
+                def,
+                id,
+                Arc::new(move |data: Option<Value>| {
+                    let js_val = match data {
+                        Some(ref d) => value_to_js(d).unwrap_or(JsValue::NULL),
+                        None => JsValue::NULL,
+                    };
+                    let _ = cb.0.call1(&JsValue::NULL, &js_val);
+                }),
+                None,
+            )
+        };
 
         let unsub_fn = Closure::once_into_js(move || {
             unsub();

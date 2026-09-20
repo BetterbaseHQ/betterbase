@@ -82,7 +82,23 @@ struct RecordSub {
     record_id: String,
     def: Arc<CollectionDef>,
     callback: Arc<dyn Fn(Option<Value>) + Send + Sync>,
+    /// Base-aware variant — when set, delivered instead of `callback`, with
+    /// the record's CRDT binary atomically paired with the data.
+    crdt_callback: Option<Arc<dyn Fn(Option<ObservedRecord>) + Send + Sync>>,
     on_error: Option<Arc<dyn Fn(LessDbError) + Send + Sync>>,
+}
+
+/// A delivered observation: the record view, its meta, and its CRDT binary
+/// (an opaque base snapshot for base-aware patching — see `snapshot_base`).
+pub struct ObservedRecord {
+    pub data: Value,
+    pub meta: Option<Value>,
+    pub base: Vec<u8>,
+}
+
+/// Placeholder for the data callback when only the crdt_callback is used.
+fn unused_callback() -> Arc<dyn Fn(Option<Value>) + Send + Sync> {
+    Arc::new(|_data: Option<Value>| {})
 }
 
 struct QuerySub {
@@ -243,6 +259,31 @@ impl<B: StorageBackend> ReactiveAdapter<B> {
         callback: Arc<dyn Fn(Option<Value>) + Send + Sync>,
         on_error: Option<Arc<dyn Fn(LessDbError) + Send + Sync>>,
     ) -> Unsubscribe {
+        self.observe_impl(def, id, callback, None, on_error)
+    }
+
+    /// Observe with the record's CRDT binary delivered atomically with the
+    /// data — an opaque base snapshot for base-aware patching, captured at
+    /// notification time so it always corresponds to the delivered view.
+    pub fn observe_with_crdt(
+        &self,
+        def: Arc<CollectionDef>,
+        id: impl Into<String>,
+        crdt_callback: Arc<dyn Fn(Option<ObservedRecord>) + Send + Sync>,
+        on_error: Option<Arc<dyn Fn(LessDbError) + Send + Sync>>,
+    ) -> Unsubscribe {
+        self.observe_impl(def, id, unused_callback(), Some(crdt_callback), on_error)
+    }
+
+    #[allow(clippy::redundant_closure)]
+    fn observe_impl(
+        &self,
+        def: Arc<CollectionDef>,
+        id: impl Into<String>,
+        callback: Arc<dyn Fn(Option<Value>) + Send + Sync>,
+        crdt_callback: Option<Arc<dyn Fn(Option<ObservedRecord>) + Send + Sync>>,
+        on_error: Option<Arc<dyn Fn(LessDbError) + Send + Sync>>,
+    ) -> Unsubscribe {
         let id = id.into();
         let collection = def.name.clone();
         let key = format!("{collection}:{id}");
@@ -258,6 +299,7 @@ impl<B: StorageBackend> ReactiveAdapter<B> {
                 record_id: id.clone(),
                 def: Arc::clone(&def),
                 callback,
+                crdt_callback,
                 on_error,
             });
 
@@ -403,10 +445,21 @@ impl<B: StorageBackend> ReactiveAdapter<B> {
 
             match result {
                 Ok(maybe_record) => {
-                    let data = maybe_record.map(|r| r.data);
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        (sub.callback)(data);
-                    }));
+                    if let Some(ccb) = &sub.crdt_callback {
+                        let observed = maybe_record.map(|r| ObservedRecord {
+                            data: r.data,
+                            meta: r.meta,
+                            base: r.crdt,
+                        });
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            ccb(observed);
+                        }));
+                    } else {
+                        let data = maybe_record.map(|r| r.data);
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            (sub.callback)(data);
+                        }));
+                    }
                 }
                 Err(e) => {
                     if let Some(on_err) = &sub.on_error {

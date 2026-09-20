@@ -176,3 +176,131 @@ describe("Base-aware patching (online stale write)", () => {
     }
   });
 });
+
+describe("observeWithBase (atomic base delivery)", () => {
+  it("delivers the CRDT base alongside each record version", async () => {
+    const { db } = await openFreshOpfsDb([notes], "opfs-obsbase-a");
+    try {
+      // Subscribe before writing — deliveries fire on mutations.
+      const created = await db.put(notes, { body: "v0", pinned: false });
+      const deliveries: Array<{ body: string; base: Uint8Array | null }> = [];
+
+      const unsub = db.observeWithBase(notes, created.id, (record, base) => {
+        if (record) deliveries.push({ body: record.body, base });
+      });
+      // Subscribing delivers the current state as the first snapshot.
+      await waitFor(() => deliveries.some((d) => d.body === "v0"));
+      const v0 = deliveries.find((d) => d.body === "v0")!;
+      expect(v0.base).toBeInstanceOf(Uint8Array);
+      expect(v0.base!.length).toBeGreaterThan(0);
+
+      await db.patch(notes, { id: created.id, body: "v1" });
+      await waitFor(() => deliveries.some((d) => d.body === "v1"));
+      await db.patch(notes, { id: created.id, body: "v2" });
+      await waitFor(() => deliveries.some((d) => d.body === "v2"));
+      unsub();
+
+      const v1 = deliveries.find((d) => d.body === "v1")!;
+      const v2 = deliveries.find((d) => d.body === "v2")!;
+      expect(hex(v1.base!)).not.toBe(hex(v2.base!));
+      // And the latest base matches an edit-time snapshot of the same state.
+      const fresh = await db.snapshotBase(notes, created.id);
+      expect(hex(fresh!)).toBe(hex(v2.base!));
+    } finally {
+      await cleanupOpfsDb(db);
+    }
+  });
+
+  it("delivery-time base closes the render→save race that edit-time snapshotBase cannot", async () => {
+    const BASE = "shared text";
+    const { db: dbA } = await openFreshOpfsDb([notes], "opfs-obsbase-b");
+    const { db: dbB } = await openFreshOpfsDb([notes], "opfs-obsbase-c");
+    try {
+      // The app renders v1 and captures (record, base) atomically.
+      // Subscribe before the first write so the render delivery fires.
+      const created = await dbA.put(notes, { body: "seed", pinned: false });
+      let rendered: { body: string; base: Uint8Array | null } | null = null;
+      const unsub = dbA.observeWithBase(notes, created.id, (record, base) => {
+        if (record && record.body !== "seed")
+          rendered = { body: record.body, base };
+      });
+      await dbA.patch(notes, { id: created.id, body: BASE });
+      await waitFor(() => rendered !== null);
+      // The app goes away — later deliveries must not retcon what it saw.
+      unsub();
+      const seen = rendered!;
+      expect(seen.body).toBe(BASE);
+
+      const seed = await outbound(dbA, created.id);
+      await dbA.markSynced(notes, created.id, 1);
+
+      // Peer B edits; the change lands on A before A's user saves.
+      await apply(dbB, seed, 1);
+      await dbB.patch(notes, { id: created.id, body: `${BASE} — B` });
+      const forkB = await outbound(dbB, created.id);
+      await apply(dbA, forkB, 2);
+
+      // A's user, still editing the rendered v1, saves a v1-derived value.
+      const v1Derived = `A — ${seen.body}`;
+
+      // (a) With the DELIVERY-time base (what the app rendered): merged.
+      await dbA.patch(
+        notes,
+        { id: created.id, body: v1Derived },
+        { base: seen.base ?? undefined },
+      );
+      const merged = (await dbA.get(notes, created.id))!.body;
+      expect(merged, `delivery-time base merge: ${merged}`).toBe(
+        "A — shared text — B",
+      );
+    } finally {
+      await cleanupOpfsDb(dbA);
+      await cleanupOpfsDb(dbB);
+    }
+  });
+
+  it("edit-time snapshotBase with a stale-derived value tombstones (the hazard)", async () => {
+    const BASE = "shared text";
+    const { db: dbA } = await openFreshOpfsDb([notes], "opfs-obsbase-d");
+    const { db: dbB } = await openFreshOpfsDb([notes], "opfs-obsbase-e");
+    try {
+      const created = await dbA.put(notes, { body: BASE, pinned: false });
+      const seed = await outbound(dbA, created.id);
+      await dbA.markSynced(notes, created.id, 1);
+
+      await apply(dbB, seed, 1);
+      await dbB.patch(notes, { id: created.id, body: `${BASE} — B` });
+      const forkB = await outbound(dbB, created.id);
+      await apply(dbA, forkB, 2);
+
+      // The app missed the update and saves a v1-derived value with a
+      // FRESHLY captured base — the base no longer corresponds to the
+      // value's provenance, so the peer text is tombstoned.
+      const freshBase = await dbA.snapshotBase(notes, created.id);
+      await dbA.patch(
+        notes,
+        { id: created.id, body: `A — ${BASE}` },
+        { base: freshBase ?? undefined },
+      );
+      const body = (await dbA.get(notes, created.id))!.body;
+      expect(body, `edit-time base hazard: ${body}`).toBe("A — shared text");
+      expect(body).not.toContain("— B");
+    } finally {
+      await cleanupOpfsDb(dbA);
+      await cleanupOpfsDb(dbB);
+    }
+  });
+});
+
+function hex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Poll until cond() is true (bounded). */
+async function waitFor(cond: () => boolean, ms = 2000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error("waitFor timed out");
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}

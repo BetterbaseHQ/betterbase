@@ -21,6 +21,7 @@ use crate::{
 };
 
 use super::types::Middleware;
+use crate::reactive::adapter::ObservedRecord;
 
 // ============================================================================
 // TypedAdapter
@@ -442,36 +443,53 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
         callback: Arc<dyn Fn(Option<Value>) + Send + Sync>,
         on_error: Option<Arc<dyn Fn(LessDbError) + Send + Sync>>,
     ) -> Unsubscribe {
-        let id_str: String = id.into();
-        let inner_clone = Arc::clone(&self.inner);
         let mw = Arc::clone(&self.middleware);
-        let def_clone = Arc::clone(&def);
-        let id_for_lookup = id_str.clone();
-        let on_error_clone = on_error.clone();
-
-        let wrapped = Arc::new(move |_data: Option<Value>| {
-            // Secondary lookup to get StoredRecordWithMeta (with meta)
-            match inner_clone.get(&def_clone, &id_for_lookup, &GetOptions::default()) {
-                Ok(Some(stored)) => {
+        self.inner.observe_with_crdt(
+            def,
+            id,
+            Arc::new(move |rec: Option<ObservedRecord>| match rec {
+                Some(r) => {
                     let empty = Value::Object(Default::default());
-                    let meta = stored.meta.as_ref().unwrap_or(&empty);
-                    let enriched = mw.on_read(stored.data, meta);
-                    callback(Some(enriched));
+                    let meta = r.meta.as_ref().unwrap_or(&empty);
+                    callback(Some(mw.on_read(r.data, meta)));
                 }
-                Ok(None) => {
-                    callback(None);
-                }
-                Err(e) => {
-                    if let Some(ref on_err) = on_error_clone {
-                        on_err(e);
-                    } else {
-                        callback(None);
-                    }
-                }
-            }
-        });
+                None => callback(None),
+            }),
+            on_error,
+        )
+    }
 
-        self.inner.observe(def, id_str, wrapped, on_error)
+    /// Observe with the record's CRDT binary delivered alongside the data —
+    /// an opaque base snapshot for base-aware patching, captured atomically
+    /// with the notification so it always corresponds to the delivered view.
+    /// This is what the UI rendered; `patch(def, data, { base })` diffs
+    /// against it instead of the current view, preserving concurrent peer
+    /// edits the writer never saw.
+    pub fn observe_with_base(
+        &self,
+        def: Arc<CollectionDef>,
+        id: impl Into<String>,
+        callback: Arc<dyn Fn(Option<ObservedRecord>) + Send + Sync>,
+        on_error: Option<Arc<dyn Fn(LessDbError) + Send + Sync>>,
+    ) -> Unsubscribe {
+        let mw = Arc::clone(&self.middleware);
+        self.inner.observe_with_crdt(
+            def,
+            id,
+            Arc::new(move |rec: Option<ObservedRecord>| match rec {
+                Some(r) => {
+                    let empty = Value::Object(Default::default());
+                    let meta = r.meta.as_ref().unwrap_or(&empty);
+                    callback(Some(ObservedRecord {
+                        data: mw.on_read(r.data, meta),
+                        meta: r.meta,
+                        base: r.base,
+                    }));
+                }
+                None => callback(None),
+            }),
+            on_error,
+        )
     }
 
     /// Observe query results. The callback receives enriched results (via `on_read`),

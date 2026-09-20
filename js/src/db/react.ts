@@ -13,6 +13,7 @@
 import {
   createContext,
   createElement,
+  useCallback,
   useContext,
   useRef,
   useSyncExternalStore,
@@ -22,6 +23,7 @@ import { reportObserveError, type Database } from "./opfs/OpfsDb.js";
 import type {
   CollectionDefHandle,
   SchemaShape,
+  CollectionPatch,
   CollectionRead,
   QueryOptions,
   QueryResult,
@@ -161,6 +163,108 @@ export function useRecord<S extends SchemaShape>(
     () => snapshotRef.current,
     () => undefined,
   );
+}
+
+// ---------------------------------------------------------------------------
+// useEditableRecord
+// ---------------------------------------------------------------------------
+
+/** Return value of {@link useEditableRecord}. */
+export interface EditableRecord<S extends SchemaShape> {
+  /** The current record view — `undefined` until loaded (or after delete). */
+  record: CollectionRead<S> | undefined;
+  /**
+   * Opaque CRDT snapshot captured atomically with `record` — the version
+   * the UI rendered. Pass-aware edits via `update()` diff against this, not
+   * against the current state, so peer edits that land between render and
+   * write are merged rather than tombstoned.
+   */
+  base: Uint8Array | null;
+  /**
+   * Patch fields onto the record, anchored to `base`. The next rendered
+   * version becomes the new anchor automatically.
+   */
+  update: (
+    fields: Partial<Omit<CollectionPatch<S>, "id">>,
+  ) => Promise<CollectionRead<S>>;
+}
+
+/**
+ * Subscribe to a single record for editing, with base-aware writes.
+ *
+ * Like `useRecord`, but the delivered snapshot carries its CRDT binary and
+ * `update()` patches against it. This closes the render→save race that an
+ * edit-time `snapshotBase()` call cannot: if a peer edit syncs in between,
+ * `snapshotBase()` would return the newer state while the edited value was
+ * derived from the older view — diffing them tombstones the peer's text.
+ * Here the base always corresponds to exactly what the caller rendered.
+ *
+ * The returned container is always present; `record` is `undefined` until
+ * the record loads (and after deletion). `update()` rejects while so.
+ */
+export function useEditableRecord<S extends SchemaShape>(
+  def: CollectionDefHandle<string, S>,
+  id: string | undefined,
+  options?: ObserveOptions,
+): EditableRecord<S> {
+  const db = useDatabase();
+  const snapshotRef = useRef<EditableRecord<S> | undefined>(undefined);
+
+  const onErrorRef = useRef(options?.onError);
+  onErrorRef.current = options?.onError;
+
+  const subscribe = useRef<
+    ((onStoreChange: () => void) => () => void) | undefined
+  >(undefined);
+  const key = `${def.name}:${id ?? ""}`;
+  const prevKey = useRef(key);
+  if (!subscribe.current || prevKey.current !== key) {
+    prevKey.current = key;
+    snapshotRef.current = undefined;
+    if (id === undefined) {
+      subscribe.current = () => () => {};
+    } else {
+      subscribe.current = (onStoreChange: () => void) => {
+        return db.observeWithBase(
+          def,
+          id,
+          (record, base) => {
+            snapshotRef.current =
+              record === null
+                ? undefined
+                : Object.freeze({ record, base } as EditableRecord<S>);
+            onStoreChange();
+          },
+          { onError: (err) => reportObserveError(err, onErrorRef.current) },
+        );
+      };
+    }
+  }
+
+  const frozen = useSyncExternalStore(
+    subscribe.current!,
+    () => snapshotRef.current,
+    () => undefined,
+  );
+
+  const update = useCallback(
+    async (fields: Partial<Omit<CollectionPatch<S>, "id">>) => {
+      const current = snapshotRef.current;
+      if (!current?.record) {
+        throw new Error(
+          "useEditableRecord.update: record not loaded (or deleted)",
+        );
+      }
+      return db.patch(
+        def,
+        { ...(fields as object), id: current.record.id } as CollectionPatch<S>,
+        current.base ? { base: current.base } : undefined,
+      );
+    },
+    [db, def],
+  );
+
+  return { record: frozen?.record, base: frozen?.base ?? null, update };
 }
 
 // ---------------------------------------------------------------------------

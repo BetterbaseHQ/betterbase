@@ -152,16 +152,23 @@ export class OpfsWorkerHost {
   private handleObserve(_requestId: number, args: unknown[]): undefined {
     const collection = args[0] as string;
     const id = args[1] as string;
-    const subscriptionId = args[2] as number;
-
-    const unsub = this.wasm.observe(collection, id, (data) => {
-      const notification: WorkerNotification = {
-        type: "notification",
-        subscriptionId,
-        payload: { type: "observe", data },
-      };
-      self.postMessage(notification);
-    });
+    // Subscribe calls append the subscription id after the caller's params:
+    // [collection, id, includeBase, subscriptionId].
+    const includeBase = args[2] === true;
+    const subscriptionId = args[3] as number;
+    const unsub = this.wasm.observe(
+      collection,
+      id,
+      (data) => {
+        const notification: WorkerNotification = {
+          type: "notification",
+          subscriptionId,
+          payload: { type: "observe", data },
+        };
+        self.postMessage(notification);
+      },
+      includeBase,
+    );
 
     this.unsubscribers.set(subscriptionId, unsub);
     // Flush fires the initial callback synchronously so the subscriber gets

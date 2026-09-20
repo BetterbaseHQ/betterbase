@@ -51,6 +51,7 @@ export interface WasmDbInstance {
     collection: string,
     id: string,
     callback: (data: unknown) => void,
+    includeBase?: boolean,
   ): () => void;
   observeQuery(
     collection: string,

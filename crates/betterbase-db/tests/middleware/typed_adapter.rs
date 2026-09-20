@@ -1693,3 +1693,109 @@ fn patch_diagnostic_silent_when_base_provided() {
         .expect("patch");
     assert!(!flagged, "base-anchored deletions are deliberate edits");
 }
+
+// ============================================================================
+// observe_with_base
+// ============================================================================
+
+/// The base delivered with a notification must be the record's CRDT binary
+/// at delivery time — the atomic pair that base-aware patching anchors to.
+#[test]
+fn observe_with_base_delivers_crdt_atomic_with_data() {
+    let def = todos_def();
+    let typed = make_typed(&def);
+
+    let record = typed
+        .put(
+            &def,
+            json!({"title": "First", "done": false}),
+            None,
+            Some(&put_opts()),
+        )
+        .expect("put");
+    let id = get_id(&record).to_string();
+
+    #[allow(clippy::type_complexity)]
+    let observed: Arc<Mutex<Vec<(Value, Vec<u8>)>>> = Arc::new(Mutex::new(Vec::new()));
+    let obs_clone = Arc::clone(&observed);
+    let _unsub = typed.observe_with_base(
+        Arc::new(todos_def()),
+        id.clone(),
+        Arc::new(move |rec| {
+            if let Some(r) = rec {
+                obs_clone.lock().unwrap().push((r.data, r.base));
+            }
+        }),
+        None,
+    );
+    typed.wait_for_flush();
+
+    // A write updates the record and re-delivers with the new binary.
+    typed
+        .patch(
+            &def,
+            json!({"id": id.clone(), "title": "Second"}),
+            None,
+            None,
+        )
+        .expect("patch");
+
+    let log = observed.lock().unwrap();
+    assert!(log.len() >= 2, "initial + post-write deliveries");
+    let stored = typed
+        .inner()
+        .get(&Arc::new(todos_def()), &id, &GetOptions::default())
+        .unwrap()
+        .unwrap();
+    let (last_data, last_base) = log.last().unwrap();
+    assert_eq!(last_data["title"], json!("Second"));
+    assert_eq!(
+        last_base, &stored.crdt,
+        "base is the delivered record's CRDT"
+    );
+    // And it differs from the pre-write delivery.
+    let (first_data, first_base) = &log[0];
+    assert_eq!(first_data["title"], json!("First"));
+    assert_ne!(
+        first_base, last_base,
+        "each delivery carries its own version"
+    );
+}
+
+/// A deleted record delivers None (no base to anchor to).
+#[test]
+fn observe_with_base_delivers_none_after_delete() {
+    let def = todos_def();
+    let typed = make_typed(&def);
+
+    let record = typed
+        .put(
+            &def,
+            json!({"title": "Doomed", "done": false}),
+            None,
+            Some(&put_opts()),
+        )
+        .expect("put");
+    let id = get_id(&record).to_string();
+
+    #[allow(clippy::type_complexity)]
+    let observed: Arc<Mutex<Vec<Option<(Value, Vec<u8>)>>>> = Arc::new(Mutex::new(Vec::new()));
+    let obs_clone = Arc::clone(&observed);
+    let _unsub = typed.observe_with_base(
+        Arc::new(todos_def()),
+        id.clone(),
+        Arc::new(move |rec| {
+            obs_clone
+                .lock()
+                .unwrap()
+                .push(rec.map(|r| (r.data, r.base)))
+        }),
+        None,
+    );
+    typed.wait_for_flush();
+
+    typed.delete(&def, &id, None, None).expect("delete");
+
+    let log = observed.lock().unwrap();
+    assert!(log.iter().any(|e| e.is_none()), "deletion delivers None");
+}
