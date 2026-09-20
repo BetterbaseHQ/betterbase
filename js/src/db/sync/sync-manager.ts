@@ -330,7 +330,7 @@ export class SyncManager {
           recordsToApply,
           {
             delete_conflict_strategy: this.mapDeleteStrategy(
-              this.options.deleteStrategy,
+              this.resolveDeleteStrategy(def),
             ),
           },
         );
@@ -455,7 +455,6 @@ export class SyncManager {
     this.options.onProgress?.({ phase, collection, processed, total });
   }
 
-  /** Map betterbase-db delete strategy names to Rust enum variants. */
   /**
    * Delete-conflict strategy for a collection: the collection's declared
    * `deleteStrategy` wins over the manager-wide option. Unset both places
@@ -465,6 +464,7 @@ export class SyncManager {
     return def.deleteStrategy ?? this.options.deleteStrategy;
   }
 
+  /** Map betterbase-db delete strategy names to Rust enum variants. */
   private mapDeleteStrategy(
     strategy?: string,
   ): "RemoteWins" | "LocalWins" | "DeleteWins" | "UpdateWins" | undefined {

@@ -254,9 +254,9 @@ Edges are metadata, never enforced — in a CRDT store orphans are structurally 
 ```ts
 const report = await deleteTree(db, boards, board.id);
 // report.deleted: { cards: [...], columns: [...], boards: [board.id] }
-// report.failed:  [] — a failed level aborts shallower levels so the tree
-//                 keeps a live root; re-running retries the remainder.
 ```
+
+If any level fails, `deleteTree` throws a `DeleteTreeError` carrying the partial-success report (`error.report`): a failed level aborts shallower levels so the tree keeps a live root, and re-running retries only what remains.
 
 Child discovery is scoped to the parent's space, so records in other spaces are never swept up. For schemas without declared edges, list children explicitly:
 

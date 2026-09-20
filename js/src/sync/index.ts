@@ -120,7 +120,7 @@ export type {
 // Space operations
 export { moveToSpace, bulkMoveToSpace, spaceOf } from "./move-to-space.js";
 export { shareTree, ShareTreeError } from "./share-tree.js";
-export { deleteTree } from "./delete-tree.js";
+export { deleteTree, DeleteTreeError } from "./delete-tree.js";
 export type {
   DeleteTreeChildren,
   DeleteTreeOptions,

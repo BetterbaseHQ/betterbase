@@ -666,7 +666,9 @@ function BetterbaseProviderInner(props: BetterbaseProviderInnerProps) {
     engine.onConflict = onConflict;
     engine.onRemoteDelete = onRemoteDelete;
     engine.onEpochAdvanced = onEpochAdvanced;
-    engine.fileFields = fileFields;
+    // The prop overrides the engine's declared-defaults merge (see create);
+    // assigning unconditionally would clobber collection-declared fileFields.
+    if (fileFields !== undefined) engine.fileFields = fileFields;
   });
 
   // --- State via useSyncExternalStore ---
@@ -1863,7 +1865,7 @@ export function useTyping(
 export type { EditHistoryEntry } from "./spaces-middleware.js";
 export { isShared } from "./spaces-middleware.js";
 export { shareTree, ShareTreeError } from "./share-tree.js";
-export { deleteTree } from "./delete-tree.js";
+export { deleteTree, DeleteTreeError } from "./delete-tree.js";
 export type {
   DeleteTreeChildren,
   DeleteTreeOptions,

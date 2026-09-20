@@ -140,7 +140,13 @@ export function createSpacesMiddleware(
       if (options.sameSpaceAs) targetSpaceId = options.sameSpaceAs._spaceId;
       else if (options.space) targetSpaceId = options.space;
       if (!targetSpaceId) return undefined;
-      return (meta) => (meta?.spaceId as string) === targetSpaceId;
+      // Coalesce unstamped records to the default (personal) space, matching
+      // onRead — records created before any space routing (e.g. offline,
+      // pre-first-sync) otherwise become invisible to space-scoped queries,
+      // including deleteTree's child discovery.
+      return (meta) =>
+        ((meta?.spaceId as string | undefined) ?? defaultSpaceId) ===
+        targetSpaceId;
     },
 
     shouldResetSyncState(oldMeta, newMeta) {

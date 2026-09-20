@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { deleteTree } from "./delete-tree.js";
+import { deleteTree, DeleteTreeError } from "./delete-tree.js";
 import type { DeleteTreeChildren } from "./delete-tree.js";
 
 // Erased defs — the builder's generic instantiation through a test fixture
@@ -29,7 +29,13 @@ function makeDb(
   return {
     get: vi.fn().mockResolvedValue({ id: "board-1", _spaceId: spaceId }),
     query: vi.fn().mockResolvedValue({ records: [] }),
-    bulkDelete: vi.fn().mockResolvedValue({ deleted_ids: [] }),
+    // The real API resolves with in-band per-record errors; it only rejects
+    // on transport-level faults.
+    bulkDelete: vi
+      .fn()
+      .mockImplementation((_def: unknown, ids: string[]) =>
+        Promise.resolve({ deleted_ids: [...ids], errors: [] }),
+      ),
     inner: { collections: registry },
   };
 }
@@ -126,18 +132,62 @@ describe("deleteTree", () => {
     db.query
       .mockResolvedValueOnce({ records: [{ id: "col-1" }] })
       .mockResolvedValueOnce({ records: [{ id: "card-1" }] });
-    db.bulkDelete
-      .mockResolvedValueOnce({ deleted_ids: ["card-1"] })
-      .mockRejectedValueOnce(new Error("column delete failed"));
+    // In-band per-record errors (the real bulkDelete contract).
+    db.bulkDelete.mockImplementation(async (_def: unknown, ids: string[]) =>
+      ids.includes("col-1")
+        ? { deleted_ids: [], errors: [{ id: "col-1", error: "boom" }] }
+        : { deleted_ids: [...ids], errors: [] },
+    );
 
-    const report = await call(db, boards, "board-1");
+    // cards deleted; columns failed → DeleteTreeError with the report; board untouched
+    let caught: unknown;
+    try {
+      await call(db, boards, "board-1");
+    } catch (err) {
+      caught = err;
+    }
 
-    // cards deleted; columns failed; board untouched
+    expect(caught).toBeInstanceOf(DeleteTreeError);
+    const report = (caught as DeleteTreeError).report;
     expect(db.bulkDelete).toHaveBeenCalledTimes(2);
     expect(report.deleted).toEqual({ cards: ["card-1"] });
     expect(report.failed).toEqual([
       { collection: "columns", ids: ["col-1"], error: expect.any(Error) },
     ]);
+  });
+
+  it("reports a failed parent (last) level without losing the deleted children", async () => {
+    const db = makeDb();
+    db.query.mockResolvedValueOnce({ records: [{ id: "col-1" }] });
+    db.bulkDelete.mockImplementation(async (_def: unknown, ids: string[]) =>
+      ids.includes("board-1")
+        ? { deleted_ids: [], errors: [{ id: "board-1", error: "boom" }] }
+        : { deleted_ids: [...ids], errors: [] },
+    );
+
+    let caught: unknown;
+    try {
+      await call(db, boards, "board-1");
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(DeleteTreeError);
+    // Children still deleted — visible on the error's report.
+    expect((caught as DeleteTreeError).report.deleted).toEqual({
+      columns: ["col-1"],
+    });
+    expect((caught as DeleteTreeError).report.failed[0]!.collection).toBe(
+      "boards",
+    );
+  });
+
+  it("transport-level bulkDelete rejection also fail-fasts", async () => {
+    const db = makeDb();
+    db.query.mockResolvedValueOnce({ records: [{ id: "col-1" }] });
+    db.bulkDelete.mockRejectedValue(new Error("worker died"));
+
+    await expect(call(db, boards, "board-1")).rejects.toThrow(DeleteTreeError);
+    expect(db.bulkDelete).toHaveBeenCalledTimes(1);
   });
 
   it("throws when the parent record does not exist", async () => {
@@ -223,10 +273,59 @@ describe("deleteTree", () => {
       boards,
       ["board-1"],
     ]);
-    // Empty children specs are skipped; the parent still deletes.
     expect(report.deleted).toEqual({
       columns: ["col-1", "col-2"],
       boards: ["board-1"],
     });
+  });
+
+  it("merges duplicate explicit-children entries for the same collection", async () => {
+    const db = makeDb();
+    db.inner = { collections: [] as unknown[] };
+
+    await callWithChildren(db, {
+      collection: boards,
+      id: "board-1",
+      children: [
+        { collection: columns, ids: ["col-1"] },
+        { collection: columns, ids: ["col-1", "col-2"] },
+      ],
+    });
+
+    expect(db.bulkDelete).toHaveBeenCalledTimes(2);
+    expect(db.bulkDelete.mock.calls[0]!.slice(0, 2)).toEqual([
+      columns,
+      ["col-1", "col-2"],
+    ]);
+  });
+
+  it("descends self-referential edges level by level", async () => {
+    const folders = {
+      name: "folders",
+      parent: { field: "parentId", collection: () => folders },
+    } as never;
+    const db = makeDb(undefined, [folders]);
+    db.get.mockResolvedValue({ id: "f-1", _spaceId: undefined });
+    db.query
+      .mockResolvedValueOnce({ records: [{ id: "f-2" }] })
+      .mockResolvedValueOnce({ records: [{ id: "f-3" }] })
+      .mockResolvedValueOnce({ records: [] });
+
+    const report = await call(db, folders, "f-1");
+
+    // f-3 (child of f-2) deletes before f-2 before f-1
+    expect(db.bulkDelete.mock.calls[0]!.slice(0, 2)).toEqual([
+      folders,
+      ["f-3"],
+    ]);
+    expect(db.bulkDelete.mock.calls[1]!.slice(0, 2)).toEqual([
+      folders,
+      ["f-2"],
+    ]);
+    expect(db.bulkDelete.mock.calls[2]!.slice(0, 2)).toEqual([
+      folders,
+      ["f-1"],
+    ]);
+    expect(report.deleted).toEqual({ folders: ["f-3", "f-2", "f-1"] });
   });
 });

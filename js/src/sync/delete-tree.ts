@@ -29,6 +29,9 @@
  * await deleteTree(db, boards, board.id); // → cards, columns, board
  * ```
  *
+ * Throws `DeleteTreeError` if any level failed (the partial-success report
+ * is attached as `error.report`); throws if the parent record is missing.
+ *
  * For schemas without declared edges, pass child ids explicitly (deleted in
  * the order listed, parent last):
  * ```ts
@@ -95,6 +98,25 @@ export interface DeleteTreeReport {
 }
 
 /**
+ * Thrown by `deleteTree` when any level failed (per-record delete errors are
+ * reported in-band by `bulkDelete`, not thrown). The partial-success report
+ * is attached so callers can see exactly what was deleted before failing.
+ */
+export class DeleteTreeError extends Error {
+  readonly report: DeleteTreeReport;
+
+  constructor(report: DeleteTreeReport) {
+    super(
+      `deleteTree: failed to delete ${report.failed
+        .map((f) => `${f.ids.length} record(s) in "${f.collection}"`)
+        .join(", ")}`,
+    );
+    this.name = "DeleteTreeError";
+    this.report = report;
+  }
+}
+
+/**
  * Delete a record and, via its declared parent edges, everything that
  * references it — deepest level first, one atomic bulk per collection.
  *
@@ -139,11 +161,21 @@ export async function deleteTree(
 
   let frontier: Level[] = [];
   if (children && children.length > 0) {
+    // Explicit children replace first-level edge discovery. Duplicate
+    // entries for the same collection merge their ids.
+    const byName = new Map<string, Level>();
     for (const child of children) {
-      if (child.ids.length === 0 || planned.has(child.collection.name))
+      if (child.ids.length === 0) continue;
+      const existing = byName.get(child.collection.name);
+      if (existing) {
+        existing.ids.push(
+          ...child.ids.filter((id2) => !existing.ids.includes(id2)),
+        );
         continue;
+      }
+      const level: Level = { def: child.collection, ids: [...child.ids] };
+      byName.set(child.collection.name, level);
       planned.add(child.collection.name);
-      const level = { def: child.collection, ids: [...child.ids] };
       levels.push(level);
       frontier.push(level);
     }
@@ -151,12 +183,19 @@ export async function deleteTree(
     frontier.push({ def: collection, ids: [parentId] });
   }
 
-  while (frontier.length > 0) {
+  // Self-referential edges (folders → folders) descend repeatedly; the
+  // depth cap bounds pathological schemas.
+  const MAX_LEVELS = 64;
+  while (frontier.length > 0 && levels.length < MAX_LEVELS) {
     const next: Level[] = [];
     for (const node of frontier) {
       for (const childDef of childCollectionsOf(db, node.def)) {
-        if (planned.has(childDef.name)) continue; // cycle / aliasing guard
-        planned.add(childDef.name);
+        // Self-referential edges always descend (bounded by MAX_LEVELS);
+        // distinct-collection cycles are cut by the `planned` set.
+        if (childDef.name !== node.def.name) {
+          if (planned.has(childDef.name)) continue;
+          planned.add(childDef.name);
+        }
         const edge = childDef.parent!;
         const ids = await queryChildIds(
           db,
@@ -180,23 +219,42 @@ export async function deleteTree(
 
   const report: DeleteTreeReport = { deleted: {}, failed: [] };
   for (const level of order) {
+    // bulkDelete reports per-record failures in-band (`errors`) rather than
+    // rejecting — only transport-level faults throw.
+    let result: {
+      deleted_ids?: string[];
+      errors?: { id: string; error: string }[];
+    };
     try {
-      await db.bulkDelete(level.def, level.ids);
-      report.deleted[level.def.name] = [
-        ...(report.deleted[level.def.name] ?? []),
-        ...level.ids,
-      ];
+      result = (await db.bulkDelete(level.def, level.ids)) as typeof result;
     } catch (err) {
       report.failed.push({
         collection: level.def.name,
         ids: level.ids,
         error: err,
       });
+      break;
+    }
+    const deleted = result?.deleted_ids ?? level.ids;
+    if (deleted.length > 0) {
+      report.deleted[level.def.name] = [
+        ...(report.deleted[level.def.name] ?? []),
+        ...deleted,
+      ];
+    }
+    const errors = result?.errors ?? [];
+    if (errors.length > 0) {
+      report.failed.push({
+        collection: level.def.name,
+        ids: errors.map((e) => e.id),
+        error: new Error(errors.map((e) => `${e.id}: ${e.error}`).join("; ")),
+      });
       // Fail-fast: leave shallower levels (and the root) intact so a retry
       // converges instead of orphaning survivors under a deleted parent.
       break;
     }
   }
+  if (report.failed.length > 0) throw new DeleteTreeError(report);
   return report;
 }
 
