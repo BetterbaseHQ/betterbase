@@ -1863,6 +1863,14 @@ export function useTyping(
 export type { EditHistoryEntry } from "./spaces-middleware.js";
 export { isShared } from "./spaces-middleware.js";
 export { shareTree, ShareTreeError } from "./share-tree.js";
+export { deleteTree } from "./delete-tree.js";
+export type {
+  DeleteTreeChildren,
+  DeleteTreeOptions,
+  DeleteTreeReport,
+  DeleteTreeFailure,
+  DeleteTreeDb,
+} from "./delete-tree.js";
 export type {
   ShareTreeOptions,
   ShareTreeResult,

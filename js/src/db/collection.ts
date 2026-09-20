@@ -13,6 +13,7 @@ import type {
   CollectionDefHandle,
   VersionEntry,
   IndexEntry,
+  DeleteConflictStrategy,
 } from "./types.js";
 import { BLUEPRINT } from "./types.js";
 
@@ -22,6 +23,13 @@ const RESERVED_FIELDS = new Set([
   "createdAt",
   "updatedAt",
   "__betterbase_meta",
+]);
+
+const DELETE_STRATEGIES = new Set<DeleteConflictStrategy>([
+  "remote-wins",
+  "local-wins",
+  "delete-wins",
+  "update-wins",
 ]);
 
 function validateSchemaFields(
@@ -50,6 +58,25 @@ export interface IndexOptions {
 export interface ComputedOptions {
   unique?: boolean;
   sparse?: boolean;
+}
+
+/**
+ * Options accepted by {@link CollectionBuilderWithVersions.build}.
+ *
+ * All of it is SDK-level metadata — the engine never enforces referential
+ * integrity or file fields; helpers like `deleteTree` and the sync engine's
+ * file-eviction derive their behavior from these declarations.
+ */
+export interface CollectionBuildOptions {
+  /** Declare this collection's parent for derived cascade deletes and FK rewrites. */
+  parent?: { field: string; collection: () => CollectionDefHandle };
+  /**
+   * Fields holding file IDs. The sync engine evicts cached file blobs when a
+   * record with declared file fields is tombstoned remotely.
+   */
+  fileFields?: string[];
+  /** Delete-conflict strategy for this collection (overrides the global). */
+  deleteStrategy?: DeleteConflictStrategy;
 }
 
 // ============================================================================
@@ -90,7 +117,7 @@ export interface CollectionBuilderWithVersions<
   ): this;
 
   /** Build the collection definition. */
-  build(): CollectionDefHandle<TName, TSchema>;
+  build(options?: CollectionBuildOptions): CollectionDefHandle<TName, TSchema>;
 }
 
 // ============================================================================
@@ -181,16 +208,57 @@ class CollectionBuilderWithVersionsImpl<
     return this;
   }
 
-  build(): CollectionDefHandle<TName, TSchema> {
+  build(
+    options: CollectionBuildOptions = {},
+  ): CollectionDefHandle<TName, TSchema> {
+    validateBuildOptions(this.#name, this.#currentSchema, options);
+    const { parent, fileFields, deleteStrategy } = options;
     return {
       name: this.#name,
       currentVersion: Math.max(...this.#versions.map((v) => v.version)),
       schema: this.#currentSchema,
+      ...(parent ? { parent } : {}),
+      ...(fileFields ? { fileFields: [...fileFields] } : {}),
+      ...(deleteStrategy ? { deleteStrategy } : {}),
       [BLUEPRINT]: {
         versions: this.#versions,
         indexes: this.#indexes,
       },
     };
+  }
+}
+
+function validateBuildOptions(
+  name: string,
+  schema: SchemaShape,
+  options: CollectionBuildOptions,
+): void {
+  if (options.parent) {
+    if (typeof options.parent.collection !== "function") {
+      throw new Error(
+        `[betterbase-db] collection "${name}": parent.collection must be a function returning the parent collection definition`,
+      );
+    }
+    if (!(options.parent.field in schema)) {
+      throw new Error(
+        `[betterbase-db] collection "${name}": parent.field "${options.parent.field}" is not a field in this collection's schema`,
+      );
+    }
+  }
+  for (const field of options.fileFields ?? []) {
+    if (!(field in schema)) {
+      throw new Error(
+        `[betterbase-db] collection "${name}": fileFields entry "${field}" is not a field in this collection's schema`,
+      );
+    }
+  }
+  if (
+    options.deleteStrategy !== undefined &&
+    !DELETE_STRATEGIES.has(options.deleteStrategy)
+  ) {
+    throw new Error(
+      `[betterbase-db] collection "${name}": invalid deleteStrategy "${options.deleteStrategy}" (expected one of: ${[...DELETE_STRATEGIES].join(", ")})`,
+    );
   }
 }
 

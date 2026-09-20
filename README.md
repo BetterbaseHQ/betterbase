@@ -237,6 +237,39 @@ Conflict resolution is per-field, which makes schema shape a collaboration decis
 - If peers create items independently (todo items, cards, messages), model them as **separate records in their own collection** keyed by a parent id, not an embedded array. Records merge independently; embedded arrays don't.
 - Avoid storing serialized JSON inside `t.text()` hoping for structural merge: a character-level merge of two JSON strings can produce invalid JSON. Model structure with fields/records instead.
 
+When you model children as their own collection, declare the relationship so SDK helpers can derive cascades, FK rewrites, and file cleanup from it:
+
+```ts
+const columns = collection("columns")
+  .v(1, { boardId: t.string(), name: t.string() })
+  .build({ parent: { field: "boardId", collection: () => boards } });
+```
+
+Edges are metadata, never enforced — in a CRDT store orphans are structurally possible (a peer can create a child while you delete its parent), so cascades are a convenience for the deleting user, not an invariant. Child queries should tolerate missing parents.
+
+### Deleting trees
+
+`deleteTree` (from `betterbase/sync`) deletes a record and everything that references it via declared parent edges — deepest level first, one atomic bulk-delete per collection:
+
+```ts
+const report = await deleteTree(db, boards, board.id);
+// report.deleted: { cards: [...], columns: [...], boards: [board.id] }
+// report.failed:  [] — a failed level aborts shallower levels so the tree
+//                 keeps a live root; re-running retries the remainder.
+```
+
+Child discovery is scoped to the parent's space, so records in other spaces are never swept up. For schemas without declared edges, list children explicitly:
+
+```ts
+await deleteTree(db, {
+  collection: notebooks,
+  id: notebook.id,
+  children: [{ collection: notes, ids: noteIds }],
+});
+```
+
+Deletes propagate to peers as CRDT tombstones — deleting a shared record deletes it for every member.
+
 ## Files
 
 `FileStore` (from `betterbase/sync`) encrypts and syncs binary blobs — photos, attachments — alongside record data, with a local cache and offline upload queue. Request the `files` OAuth scope in addition to `sync`:
@@ -245,9 +278,31 @@ Conflict resolution is per-field, which makes schema shape a collaboration decis
 scope: "openid email sync files"
 ```
 
+Declare which fields hold file IDs so the sync engine evicts cached blobs automatically when records are deleted (locally evicted on your side, and on peers' when the tombstone reaches them):
+
+```ts
+const photos = collection("photos")
+  .v(1, { albumId: t.string(), fileId: t.string(), thumbFileId: t.string() })
+  .build({ parent: { field: "albumId", collection: () => albums },
+           fileFields: ["fileId", "thumbFileId"] });
+```
+
 ## Conflict Resolution
 
-Documents use [json-joy](https://github.com/streamich/json-joy) for automatic conflict-free merging. `t.text()` fields get character-level merge (like collaborative editing), objects use per-key last-writer-wins, and delete conflicts are configurable via `DeleteConflictStrategy`.
+Documents use [json-joy](https://github.com/streamich/json-joy) for automatic conflict-free merging. `t.text()` fields get character-level merge (like collaborative editing), objects use per-key last-writer-wins, and delete conflicts are configurable via `DeleteConflictStrategy` — globally on the sync manager, or per collection at build time:
+
+```ts
+.build({ deleteStrategy: "delete-wins" })
+```
+
+What each strategy actually governs is subtle and worth knowing:
+
+- The strategy only decides conflicts involving **unpushed (dirty) local changes**: your in-flight delete vs. a peer's update (`delete-wins` keeps your delete; `remote-wins`/`update-wins` keep their update; `local-wins` keeps your side for both deletes and updates).
+- **Pushed tombstones are sticky.** Once your delete reaches the server, per-record CAS rejects stale live writes; a record only comes back if a peer's client deliberately merges it back — resurrection always flows through a merge, never around it.
+- A **clean local tombstone** plus a late-arriving live record resurrects under *every* strategy.
+- `local-wins` / `update-wins` can **wedge a record forever**: the conflict keeps it dirty, its push is rejected, and it retries each sync — prefer the default or `delete-wins` unless you understand the trade-off.
+
+The default (unset) is `remote-wins`.
 
 ## Schema Versioning
 

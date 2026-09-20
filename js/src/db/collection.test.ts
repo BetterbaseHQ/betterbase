@@ -214,4 +214,66 @@ describe("collection builder", () => {
       options: { name: "email_idx", unique: true, sparse: true },
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Build options (edges, file fields, delete strategy)
+  // --------------------------------------------------------------------------
+
+  it("attaches declared parent edge, fileFields, and deleteStrategy", () => {
+    const users = collection("users").v(1, { name: t.string() }).build();
+    const posts = collection("posts")
+      .v(1, { userId: t.string(), avatarFileId: t.string() })
+      .build({
+        parent: { field: "userId", collection: () => users },
+        fileFields: ["avatarFileId"],
+        deleteStrategy: "delete-wins",
+      });
+
+    expect(posts.parent?.field).toBe("userId");
+    expect(posts.parent?.collection().name).toBe("users");
+    expect(posts.fileFields).toEqual(["avatarFileId"]);
+    expect(posts.deleteStrategy).toBe("delete-wins");
+  });
+
+  it("omits unset build options", () => {
+    const def = collection("users").v(1, { name: t.string() }).build();
+    expect("parent" in def).toBe(false);
+    expect("fileFields" in def).toBe(false);
+    expect("deleteStrategy" in def).toBe(false);
+  });
+
+  it("rejects a parent edge field missing from the schema", () => {
+    const users = collection("users").v(1, { name: t.string() }).build();
+    expect(() =>
+      collection("posts")
+        .v(1, { title: t.string() })
+        .build({ parent: { field: "userId", collection: () => users } }),
+    ).toThrow(/parent.field "userId" is not a field/);
+  });
+
+  it("rejects a parent.collection that is not a function", () => {
+    expect(() =>
+      collection("posts")
+        .v(1, { userId: t.string() })
+        .build({
+          parent: { field: "userId", collection: "users" as never },
+        }),
+    ).toThrow(/parent.collection must be a function/);
+  });
+
+  it("rejects fileFields entries missing from the schema", () => {
+    expect(() =>
+      collection("photos")
+        .v(1, { caption: t.string() })
+        .build({ fileFields: ["fileId"] }),
+    ).toThrow(/fileFields entry "fileId" is not a field/);
+  });
+
+  it("rejects an invalid deleteStrategy", () => {
+    expect(() =>
+      collection("messages")
+        .v(1, { text: t.string() })
+        .build({ deleteStrategy: "mayhem" as never }),
+    ).toThrow(/invalid deleteStrategy "mayhem"/);
+  });
 });

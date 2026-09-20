@@ -139,3 +139,26 @@ export async function erased(
   expectTypeOf(record.id).toEqualTypeOf<string>();
   expectTypeOf(record.field).toEqualTypeOf<unknown>();
 }
+
+// Declared build options must not disturb write-type inference.
+const owners = collection("owners").v(1, { title: t.string() }).build();
+const pets = collection("owners_pets")
+  .v(1, { ownerId: t.string(), name: t.string() })
+  .build({
+    parent: { field: "ownerId", collection: () => owners },
+    fileFields: ["name"],
+    deleteStrategy: "delete-wins",
+  });
+expectTypeOf(pets.deleteStrategy).toEqualTypeOf<
+  "remote-wins" | "local-wins" | "delete-wins" | "update-wins" | undefined
+>();
+export async function writeWithEdges(
+  db: Database,
+  sync: ReturnType<typeof useSyncDb>,
+) {
+  // @ts-expect-error Build options validate fields — ownerId stays required.
+  await db.put(pets, { name: "Rex" });
+  const pet = await db.put(pets, { ownerId: "o1", name: "Rex" });
+  await sync.put(pets, { ownerId: "o1", name: "Rex" });
+  expectTypeOf(pet.ownerId).toEqualTypeOf<string>();
+}

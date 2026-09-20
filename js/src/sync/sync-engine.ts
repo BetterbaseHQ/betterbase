@@ -222,7 +222,6 @@ export class SyncEngine {
     engine.onConflict = config.onConflict;
     engine.onRemoteDelete = config.onRemoteDelete;
     engine.onEpochAdvanced = config.onEpochAdvanced;
-    engine.fileFields = config.fileFields;
 
     const {
       adapter,
@@ -241,6 +240,17 @@ export class SyncEngine {
       editChainCollections,
       maxCacheBytes,
     } = config;
+
+    // File fields declared on collection definitions are the default map for
+    // auto-evicting cached blobs on remote deletes; explicit config wins
+    // per-collection.
+    const declaredFileFields: Record<string, string[]> = {};
+    for (const def of collections) {
+      if (def.fileFields && def.fileFields.length > 0) {
+        declaredFileFields[def.name] = [...def.fileFields];
+      }
+    }
+    engine.fileFields = { ...declaredFileFields, ...config.fileFields };
 
     const allCollections = [...collections, spaces];
 

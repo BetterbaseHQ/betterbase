@@ -41,13 +41,19 @@ export class Database {
   private changeListeners = new Set<(event: ChangeEvent) => void>();
   private broadcastChannel: BroadcastChannel | null = null;
   private readonly senderId = Math.random().toString(36).slice(2);
+  /**
+   * The collection definitions this database was created with. SDK helpers
+   * (e.g. `deleteTree`) use it to discover declared parent edges.
+   */
+  readonly collections: readonly CollectionDefHandle[];
 
   constructor(
     rpc: RpcClient,
-    _collections: CollectionDefHandle[],
-    closeFn?: () => Promise<void>,
+    collections: CollectionDefHandle[],
+    closeFn?: (() => Promise<void>) | null,
   ) {
     this.rpc = rpc;
+    this.collections = collections;
     this.closeFn = closeFn ?? null;
 
     // Set up cross-tab change notification via BroadcastChannel.

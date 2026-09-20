@@ -94,7 +94,12 @@ export {
 export { initWasm, setWasmForTesting } from "./wasm-init.js";
 
 // Re-export builder option types
-export type { IndexOptions, ComputedOptions } from "./collection.js";
+export type {
+  IndexOptions,
+  ComputedOptions,
+  CollectionBuildOptions,
+} from "./collection.js";
+export type { CollectionParentEdge } from "./types.js";
 
 // OPFS database
 export { Database } from "./opfs/OpfsDb.js";

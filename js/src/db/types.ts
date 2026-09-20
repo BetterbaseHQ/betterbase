@@ -344,8 +344,37 @@ export interface CollectionDefHandle<
   readonly currentVersion: number;
   /** The schema shape, stored for type inference and deserialization. */
   readonly schema: TSchema;
+  /**
+   * Declared parent edge — metadata only, never enforced. SDK helpers derive
+   * cascade deletes (`deleteTree`), move/share FK rewrites, and orphan
+   * diagnostics from it. The thunk allows forward references.
+   */
+  readonly parent?: CollectionParentEdge;
+  /**
+   * Field names on this collection holding file IDs. Declaring them makes the
+   * sync engine evict cached file blobs when a record is tombstoned remotely.
+   */
+  readonly fileFields?: readonly string[];
+  /**
+   * Delete-conflict strategy for this collection, overriding the SyncManager's
+   * global `deleteStrategy`. Governs unpushed (dirty) deletes only — see the
+   * README's delete-semantics section.
+   */
+  readonly deleteStrategy?: DeleteConflictStrategy;
   /** @internal Pure data blueprint — materialized into WASM at db.initialize(). */
   readonly [BLUEPRINT]: CollectionBlueprint;
+}
+
+/**
+ * Declared relationship from a child collection's FK field to its parent
+ * collection. Metadata for SDK helpers (`deleteTree` etc.) — the engine never
+ * enforces referential integrity.
+ */
+export interface CollectionParentEdge {
+  /** The FK field on THIS collection pointing at the parent's record id. */
+  readonly field: string;
+  /** The parent collection. A thunk so children can be declared before parents. */
+  readonly collection: () => CollectionDefHandle;
 }
 
 // ============================================================================

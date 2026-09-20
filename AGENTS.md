@@ -66,7 +66,7 @@ Standalone npm package `betterbase` in `js/` with its own `package.json`, `tscon
 - `betterbase/auth` — `OAuthClient` (redirects, sessionStorage), `AuthSession` (localStorage, timers), `KeyStore` (IndexedDB)
 - `betterbase/auth/react` — `AuthProvider`, `useAuth`, `useAuthSession`, `useSessionToken`
 - `betterbase/discovery` — `fetchServerMetadata()`, `resolveUser()` (fetch + WASM validation)
-- `betterbase/sync` — `SyncTransport`, `SyncEngine`, `SpaceManager`, `InvitationClient`, `PresenceManager`, `EventManager`, `FileStore`, `moveToSpace`/`bulkMoveToSpace`/`spaceOf`/`shareTree`/`isShared`
+- `betterbase/sync` — `SyncTransport`, `SyncEngine`, `SpaceManager`, `InvitationClient`, `PresenceManager`, `EventManager`, `FileStore`, `moveToSpace`/`bulkMoveToSpace`/`spaceOf`/`shareTree`/`isShared`/`deleteTree`
 - `betterbase/sync/react` — `BetterbaseProvider`, `useSpaces`, `useQuery`, `useRecord`, `useFiles`, `usePeers`, `usePresence`, `useEvent`, `useEditChain`, `useConnectionStatus`, `useTyping`
 - `betterbase/db` — `collection`, `t`, `createDatabase`, `SyncManager`, `SyncScheduler`
 - `betterbase/db/react` — `DatabaseProvider`, `useQuery` (alias `useDbQuery`), `useRecord` (alias `useDbRecord`), `useSyncStatus`
