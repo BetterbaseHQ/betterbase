@@ -46,6 +46,17 @@ pub fn verify(public_key_jwk: &Value, message: &[u8], signature_bytes: &[u8]) ->
 
 /// Import a P-256 public key from JWK format.
 pub fn import_public_key_jwk(jwk: &Value) -> Result<VerifyingKey, CryptoError> {
+    // Fail closed on non-P-256 keys: a JWK labeled with another curve (or a
+    // non-EC key type) that happens to carry x/y coordinates must never be
+    // interpreted as if it were P-256.
+    let kty = jwk.get("kty").and_then(|v| v.as_str()).unwrap_or_default();
+    let crv = jwk.get("crv").and_then(|v| v.as_str()).unwrap_or_default();
+    if kty != "EC" || crv != "P-256" {
+        return Err(CryptoError::InvalidJwk(format!(
+            "expected EC/P-256 key, got kty={kty:?} crv={crv:?}"
+        )));
+    }
+
     let x_b64 = jwk
         .get("x")
         .and_then(|v| v.as_str())
@@ -185,5 +196,27 @@ mod tests {
     fn malformed_jwk_returns_false() {
         let bad_jwk = serde_json::json!({"kty": "EC"});
         assert!(!verify(&bad_jwk, b"test", &[0u8; 64]));
+    }
+
+    #[test]
+    fn non_p256_jwk_fails_closed() {
+        let key = generate_p256_keypair();
+        let signature = sign(&key, b"test").unwrap();
+
+        // Valid P-256 coordinates relabeled as another curve / key type
+        // must not verify — the coordinates only mean P-256 under the
+        // EC/P-256 label.
+        let mut wrong_crv = export_public_key_jwk(key.verifying_key());
+        wrong_crv["crv"] = serde_json::json!("Ed25519");
+        assert!(!verify(&wrong_crv, b"test", &signature));
+
+        let mut wrong_kty = export_public_key_jwk(key.verifying_key());
+        wrong_kty["kty"] = serde_json::json!("OKP");
+        assert!(!verify(&wrong_kty, b"test", &signature));
+
+        // Unlabeled JWKs (no kty/crv) fail closed too.
+        let mut unlabeled = export_public_key_jwk(key.verifying_key());
+        unlabeled.as_object_mut().unwrap().remove("crv");
+        assert!(!verify(&unlabeled, b"test", &signature));
     }
 }

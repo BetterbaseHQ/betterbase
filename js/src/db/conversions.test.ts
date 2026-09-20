@@ -137,6 +137,31 @@ describe("deserializeFromRust", () => {
   });
 
   // --------------------------------------------------------------------------
+  // Date corruption
+  // --------------------------------------------------------------------------
+
+  it("throws a descriptive error for a malformed date in a schema field", () => {
+    expect(() =>
+      deserializeFromRust({ id: "1", when: "not-a-date" }, { when: t.date() }),
+    ).toThrowError(/date string "not-a-date" in field "when".*corrupt/);
+  });
+
+  it("throws for malformed createdAt instead of emitting Invalid Date", () => {
+    expect(() =>
+      deserializeFromRust({ id: "1", createdAt: "garbage" }, {}),
+    ).toThrowError(/field "createdAt".*corrupt/);
+  });
+
+  it("reports the path for a malformed date nested in an array", () => {
+    expect(() =>
+      deserializeFromRust(
+        { id: "1", events: ["2024-06-15T12:00:00.000Z", "oops"] },
+        { events: t.array(t.date()) },
+      ),
+    ).toThrowError(/field "events\[1\]".*corrupt/);
+  });
+
+  // --------------------------------------------------------------------------
   // Auto-fields
   // --------------------------------------------------------------------------
 

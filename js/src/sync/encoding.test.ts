@@ -4,6 +4,7 @@ import {
   base64ToBytes,
   bytesToBase64Url,
   base64UrlToBytes,
+  decodeBase64UrlJson,
 } from "./encoding.js";
 
 describe("base64 round-trips", () => {
@@ -59,5 +60,32 @@ describe("base64 round-trips", () => {
 
     const viaBase64Url = base64UrlToBytes(bytesToBase64Url(all));
     expect(viaBase64Url).toEqual(all);
+  });
+});
+
+describe("decodeBase64UrlJson", () => {
+  it("decodes an ASCII JSON payload (JWT-style, unpadded)", () => {
+    const payload = JSON.stringify({ sub: "user-123", exp: 1234567890 });
+    const encoded = bytesToBase64Url(new TextEncoder().encode(payload));
+    expect(decodeBase64UrlJson<{ sub: string; exp: number }>(encoded)).toEqual({
+      sub: "user-123",
+      exp: 1234567890,
+    });
+  });
+
+  it("decodes non-ASCII payload content as UTF-8", () => {
+    const payload = JSON.stringify({ name: "Jürgen Müller", note: "日本語🚀" });
+    const encoded = bytesToBase64Url(new TextEncoder().encode(payload));
+    expect(
+      decodeBase64UrlJson<{ name: string; note: string }>(encoded),
+    ).toEqual({
+      name: "Jürgen Müller",
+      note: "日本語🚀",
+    });
+  });
+
+  it("throws on invalid JSON", () => {
+    const encoded = bytesToBase64Url(new TextEncoder().encode("{not json"));
+    expect(() => decodeBase64UrlJson(encoded)).toThrowError(SyntaxError);
   });
 });

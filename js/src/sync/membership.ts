@@ -8,7 +8,11 @@
 import { SyncCrypto, encodeDIDKeyFromJwk } from "../crypto/index.js";
 import { verify } from "../crypto/internals.js";
 import type { EncryptionContext } from "../crypto/types.js";
-import { bytesToBase64Url, base64UrlToBytes } from "./encoding.js";
+import {
+  bytesToBase64Url,
+  base64UrlToBytes,
+  decodeBase64UrlJson,
+} from "./encoding.js";
 import type { SyncCryptoInterface } from "./types.js";
 import { RPCCallError } from "./rpc-connection.js";
 import type { WSClient } from "./ws-client.js";
@@ -410,9 +414,13 @@ export function parseUCANPayload(ucan: string): ParsedUCAN {
     throw new Error("Invalid UCAN JWT format");
   }
 
-  let base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-  while (base64.length % 4) base64 += "=";
-  const json = JSON.parse(atob(base64));
+  const json = decodeBase64UrlJson<{
+    iss?: string | string[];
+    aud?: string | string[];
+    cmd?: string;
+    with?: string;
+    exp?: number;
+  }>(parts[1]);
 
   const iss = Array.isArray(json.iss) ? json.iss[0] : json.iss;
   const aud = Array.isArray(json.aud) ? json.aud[0] : json.aud;

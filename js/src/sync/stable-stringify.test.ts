@@ -20,6 +20,30 @@ describe("stableStringify", () => {
     expect(stableStringify(-1.5)).toBe("-1.5");
   });
 
+  it("keeps non-finite numbers distinct from null (cache-key collision)", () => {
+    expect(stableStringify(NaN)).toBe('"NaN"');
+    expect(stableStringify(Infinity)).toBe('"Infinity"');
+    expect(stableStringify(-Infinity)).toBe('"-Infinity"');
+    // JSON.stringify would render all three as "null" — the tokens must
+    // not collide with null or each other.
+    expect(stableStringify(null)).toBe("null");
+    expect(
+      new Set([
+        stableStringify(NaN),
+        stableStringify(Infinity),
+        stableStringify(-Infinity),
+        stableStringify(null),
+      ]),
+    ).toHaveLength(4);
+  });
+
+  it("keeps non-finite numbers distinct nested in structures", () => {
+    expect(stableStringify({ a: NaN })).toBe('{"a":"NaN"}');
+    expect(stableStringify({ a: null })).toBe('{"a":null}');
+    expect(stableStringify([NaN])).toBe('["NaN"]');
+    expect(stableStringify([null])).toBe("[null]");
+  });
+
   it("handles booleans", () => {
     expect(stableStringify(true)).toBe("true");
     expect(stableStringify(false)).toBe("false");

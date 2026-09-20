@@ -81,10 +81,10 @@ export function deserializeFromRust(
 
   // Auto-fields: createdAt and updatedAt are always dates
   if (typeof result.createdAt === "string") {
-    result.createdAt = new Date(result.createdAt);
+    result.createdAt = parseStoredDate(result.createdAt, "createdAt");
   }
   if (typeof result.updatedAt === "string") {
-    result.updatedAt = new Date(result.updatedAt);
+    result.updatedAt = parseStoredDate(result.updatedAt, "updatedAt");
   }
 
   // Walk schema to convert date and bytes fields
@@ -97,6 +97,21 @@ export function deserializeFromRust(
   return result;
 }
 
+/**
+ * Parse a stored ISO date string. A malformed string would otherwise
+ * become a silent `Invalid Date` that poisons comparisons downstream —
+ * fail fast with the field named instead.
+ */
+function parseStoredDate(value: string, field: string): Date {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(
+      `Invalid date string "${value}" in field "${field}" — stored record is corrupt`,
+    );
+  }
+  return date;
+}
+
 function deserializeField(
   value: unknown,
   node: SchemaNode,
@@ -106,7 +121,7 @@ function deserializeField(
 
   switch (node.type) {
     case "date":
-      return typeof value === "string" ? new Date(value) : value;
+      return typeof value === "string" ? parseStoredDate(value, path) : value;
 
     case "bytes":
       if (typeof value !== "string") return value;

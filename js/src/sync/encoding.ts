@@ -29,3 +29,15 @@ export function base64UrlToBytes(str: string): Uint8Array {
   while (base64.length % 4) base64 += "=";
   return base64ToBytes(base64);
 }
+
+/**
+ * Decode a base64url-encoded UTF-8 JSON payload (JWT/UCAN body).
+ *
+ * `atob` alone yields a Latin-1 string, so non-ASCII claims (names,
+ * unicode identifiers) would come back as mojibake — decode the bytes
+ * as UTF-8 before parsing.
+ */
+export function decodeBase64UrlJson<T>(segment: string): T {
+  const bytes = base64UrlToBytes(segment);
+  return JSON.parse(new TextDecoder().decode(bytes)) as T;
+}

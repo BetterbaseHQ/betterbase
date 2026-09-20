@@ -1,3 +1,5 @@
+import { decodeBase64UrlJson } from "../sync/encoding.js";
+
 /** Decode a single claim from a JWT payload without verification. */
 export function decodeJwtClaim(
   token: string,
@@ -6,8 +8,7 @@ export function decodeJwtClaim(
   try {
     const payload = token.split(".")[1];
     if (!payload) return undefined;
-    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
-    const claims = JSON.parse(json);
+    const claims = decodeBase64UrlJson<Record<string, unknown>>(payload);
     const value = claims[claim];
     return typeof value === "string" ? value : undefined;
   } catch (err) {

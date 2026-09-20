@@ -222,11 +222,9 @@ describe("SyncManager.push", () => {
       },
       transport: {
         // The reconcile pull delivers the winning remote state
-        pull: vi
-          .fn()
-          .mockResolvedValue({
-            records: [makeRemote({ id: "n1", sequence: 8 })],
-          }),
+        pull: vi.fn().mockResolvedValue({
+          records: [makeRemote({ id: "n1", sequence: 8 })],
+        }),
       },
     });
     const conflict = Object.assign(

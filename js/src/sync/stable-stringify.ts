@@ -12,6 +12,12 @@ export function stableStringify(value: unknown): string {
   if (value === null || value === undefined) return String(value);
   if (value instanceof Date) return `"D:${value.getTime()}"`;
   if (value instanceof RegExp) return `"R:${value.toString()}"`;
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    // JSON.stringify maps all non-finite numbers to "null", which would
+    // collide with real nulls in query cache keys.
+    if (Number.isNaN(value)) return '"NaN"';
+    return value > 0 ? '"Infinity"' : '"-Infinity"';
+  }
   if (typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
   const obj = value as Record<string, unknown>;
