@@ -526,6 +526,13 @@ export interface SyncAdapter {
 // Observe options
 // ============================================================================
 
+/**
+ * Options for reactive subscriptions.
+ *
+ * Errors (worker/subscription failures, corrupt records, enrichment
+ * failures) are routed to `onError` when provided; otherwise they are
+ * reported via `console.error` — never silently swallowed.
+ */
 export interface ObserveOptions {
   onError?: (error: Error) => void;
 }

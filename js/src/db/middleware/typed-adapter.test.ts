@@ -422,7 +422,7 @@ describe("TypedAdapter observe error plumbing", () => {
     expect(cb).not.toHaveBeenCalled();
   });
 
-  it("observe rethrows enrichment failures without onError", () => {
+  it("observe logs enrichment failures without onError", () => {
     const db = makeDb();
     db.observe = vi.fn(
       (_d: unknown, _i: unknown, wrapped: (r: unknown) => void) => {
@@ -435,10 +435,12 @@ describe("TypedAdapter observe error plumbing", () => {
         throw new Error("enrichment boom");
       },
     });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    expect(() => adapter.observe(def, "n1", vi.fn())).toThrow(
-      "enrichment boom",
-    );
+    const cb = vi.fn();
+    expect(() => adapter.observe(def, "n1", cb)).not.toThrow();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(cb).not.toHaveBeenCalled();
   });
 
   it("observeQuery forwards options after query options", () => {

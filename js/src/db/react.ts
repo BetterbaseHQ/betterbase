@@ -18,7 +18,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import type { Database } from "./opfs/OpfsDb.js";
+import { reportObserveError, type Database } from "./opfs/OpfsDb.js";
 import type {
   CollectionDefHandle,
   SchemaShape,
@@ -150,7 +150,7 @@ export function useRecord<S extends SchemaShape>(
             snapshotRef.current = record ?? undefined;
             onStoreChange();
           },
-          { onError: (err) => onErrorRef.current?.(err) },
+          { onError: (err) => reportObserveError(err, onErrorRef.current) },
         );
       };
     }
@@ -216,7 +216,7 @@ export function useQuery<S extends SchemaShape>(
           snapshotRef.current = result;
           onStoreChange();
         },
-        { onError: (err) => onErrorRef.current?.(err) },
+        { onError: (err) => reportObserveError(err, onErrorRef.current) },
       );
     };
   }

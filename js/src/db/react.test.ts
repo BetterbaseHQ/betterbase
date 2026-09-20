@@ -196,6 +196,41 @@ describe("useRecord", () => {
     act(() => db.pushRecord("n1", null)); // tombstone delivery
     expect(result.current).toBeUndefined();
   });
+
+  it("delivers subscription errors via onError and stays subscribed", () => {
+    const db = makeDb();
+    const onError = vi.fn();
+    const { result } = renderHook(() => useRecord(notes, "n1", { onError }), {
+      wrapper: wrapper(db),
+    });
+
+    act(() => db.failRecord("n1", new Error("corrupt record")));
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]![0]).toMatchObject({
+      message: "corrupt record",
+    });
+    expect(result.current).toBeUndefined(); // snapshot untouched
+
+    // The subscription survives the error
+    act(() => db.pushRecord("n1", { id: "n1", ok: true }));
+    expect(result.current).toEqual({ id: "n1", ok: true });
+  });
+
+  it("defaults subscription errors to the console reporter", () => {
+    const db = makeDb();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { result } = renderHook(() => useRecord(notes, "n1"), {
+      wrapper: wrapper(db),
+    });
+
+    act(() => db.failRecord("n1", new Error("corrupt record")));
+    expect(errorSpy).toHaveBeenCalledTimes(1); // never silently swallowed
+    expect(errorSpy.mock.calls[0]![0]).toMatch(/\[betterbase-db\]/);
+
+    // And the subscription still works afterwards
+    act(() => db.pushRecord("n1", { id: "n1" }));
+    expect(result.current).toEqual({ id: "n1" });
+  });
 });
 
 describe("useQuery", () => {

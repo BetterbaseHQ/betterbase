@@ -33,6 +33,7 @@ import type {
   PushSnapshot,
   DirtyRecord,
 } from "../types.js";
+import { reportObserveError } from "../opfs/OpfsDb.js";
 import type {
   Middleware,
   WriteOptions,
@@ -205,15 +206,9 @@ export class TypedAdapter<
             callback(this.enrichRecord(record));
           }
         } catch (err) {
-          // Enrichment failure — surface via onError when provided,
-          // otherwise preserve the historical rethrow
-          if (options?.onError) {
-            options.onError(
-              err instanceof Error ? err : new Error(String(err)),
-            );
-          } else {
-            throw err;
-          }
+          // Enrichment failure — route to onError (or the default
+          // reporter) instead of throwing into the inner subscription
+          reportObserveError(err, options?.onError);
         }
       },
       options,
@@ -253,15 +248,9 @@ export class TypedAdapter<
             deliver(result.records, result.total);
           }
         } catch (err) {
-          // Enrichment failure — surface via onError when provided,
-          // otherwise preserve the historical rethrow
-          if (options?.onError) {
-            options.onError(
-              err instanceof Error ? err : new Error(String(err)),
-            );
-          } else {
-            throw err;
-          }
+          // Enrichment failure — route to onError (or the default
+          // reporter) instead of throwing into the inner subscription
+          reportObserveError(err, options?.onError);
         }
       },
       options,

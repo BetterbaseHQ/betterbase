@@ -35,6 +35,24 @@ import type {
 import { serializeForRust, deserializeFromRust } from "../conversions.js";
 import type { RpcClient } from "./worker-rpc.js";
 
+/**
+ * Route an observe failure to the consumer's onError, or surface it via
+ * console.error when none was provided — subscription errors must never
+ * disappear silently (the worker closing or a corrupt record would
+ * otherwise leave hooks showing stale data forever with no signal).
+ */
+export function reportObserveError(
+  err: unknown,
+  onError?: (error: Error) => void,
+): void {
+  const error = err instanceof Error ? err : new Error(String(err));
+  if (onError) {
+    onError(error);
+  } else {
+    console.error("[betterbase-db] subscription error:", error);
+  }
+}
+
 export class Database {
   private rpc: RpcClient;
   private closeFn: (() => Promise<void>) | null;
@@ -315,11 +333,7 @@ export class Database {
     let cancelled = false;
 
     const reportError = (err: unknown) => {
-      if (options?.onError) {
-        options.onError(err instanceof Error ? err : new Error(String(err)));
-        return true;
-      }
-      return false;
+      reportObserveError(err, options?.onError);
     };
 
     const wrappedCallback = (payload: unknown) => {
@@ -336,9 +350,9 @@ export class Database {
           );
         }
       } catch (err) {
-        // Corrupt record delivered — surface via onError when provided,
-        // otherwise preserve the historical rethrow
-        if (!reportError(err)) throw err;
+        // Corrupt record delivered — route to onError (or the default
+        // reporter) instead of throwing into the rpc dispatcher
+        reportError(err);
       }
     };
 
@@ -352,8 +366,6 @@ export class Database {
         }
       })
       .catch((err) => {
-        // Subscription failed. Without a handler this stays silent (the
-        // worker may have closed); with one, surface it.
         reportError(err);
       });
 
@@ -380,11 +392,7 @@ export class Database {
       : undefined;
 
     const reportError = (err: unknown) => {
-      if (options?.onError) {
-        options.onError(err instanceof Error ? err : new Error(String(err)));
-        return true;
-      }
-      return false;
+      reportObserveError(err, options?.onError);
     };
 
     const wrappedCallback = (payload: unknown) => {
@@ -401,9 +409,9 @@ export class Database {
           total: p.result.total,
         });
       } catch (err) {
-        // A corrupt record in the batch — surface via onError when
-        // provided, otherwise preserve the historical rethrow
-        if (!reportError(err)) throw err;
+        // A corrupt record in the batch — route to onError (or the
+        // default reporter) instead of throwing into the rpc dispatcher
+        reportError(err);
       }
     };
 

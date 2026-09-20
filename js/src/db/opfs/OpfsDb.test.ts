@@ -55,15 +55,15 @@ describe("Database.observe error plumbing", () => {
     });
   });
 
-  it("stays silent on subscription failure without onError", async () => {
+  it("logs subscription failures via console.error without onError", async () => {
     const { db, rpc } = makeDb();
     rpc.subscribe.mockRejectedValue(new Error("worker closed"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    // No onError — the historical silent-ignore must hold (an unhandled
-    // rejection here would fail the test)
+    // No onError — must surface through the default reporter, not vanish
     db.observe(def, "n1", vi.fn());
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(1));
+    expect(errorSpy.mock.calls[0]![0]).toMatch(/\[betterbase-db\]/);
   });
 
   it("reports corrupt record delivery via onError and skips the callback", async () => {
@@ -82,9 +82,10 @@ describe("Database.observe error plumbing", () => {
     expect(cb).not.toHaveBeenCalled();
   });
 
-  it("rethrows corrupt delivery without onError (historical behavior)", async () => {
+  it("logs corrupt delivery without onError instead of throwing", async () => {
     const { db, rpc } = makeDb();
     const getDelivery = captureDelivery(rpc);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const cb = vi.fn();
     db.observe(def, "n1", cb);
@@ -92,7 +93,9 @@ describe("Database.observe error plumbing", () => {
     await vi.waitFor(() => expect(getDelivery()).toBeTypeOf("function"));
     expect(() =>
       getDelivery()({ type: "observe", data: { id: "n1", when: "garbage" } }),
-    ).toThrow(/corrupt/);
+    ).not.toThrow();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(cb).not.toHaveBeenCalled();
   });
 
   it("still delivers healthy records", async () => {
