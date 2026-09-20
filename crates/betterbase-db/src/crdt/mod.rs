@@ -2,7 +2,7 @@ pub mod patch_log;
 pub mod schema_aware;
 
 use json_joy::json_crdt::codec::structural::binary;
-use json_joy::json_crdt::nodes::TsKey;
+use json_joy::json_crdt::nodes::{IndexExt, TsKey};
 use json_joy::json_crdt::Model;
 use json_joy::json_crdt::ModelApi;
 use json_joy::json_crdt_diff::diff_node;
@@ -139,9 +139,9 @@ pub fn model_load(data: &[u8], session_id: u64) -> Result<Model> {
     Ok(model)
 }
 
-/// True when the model's vector clock has already observed the given op id —
-/// meaning the op was integrated (live or tombstoned) and must not be applied
-/// again.
+/// True when the target model has provably already integrated the given op
+/// id — meaning the op's content is live or tombstoned there and must not be
+/// applied again.
 ///
 /// json-joy's insert-path dedup is neighbor-local only (verified against
 /// upstream v17.67 and master: anchor-chunk interior, first-chunk on root
@@ -152,12 +152,27 @@ pub fn model_load(data: &[u8], session_id: u64) -> Result<Model> {
 /// duplicate ids away from `node.ins()` entirely, which also avoids the
 /// orphan-chunk residue and mid-chunk live-duplicate wiring the neighbor-local
 /// dedup permits. See BetterbaseHQ/json-joy-rs#1.
+///
+/// The two branches need different oracles:
+///
+/// - **Peer sids**: `clock.peers[sid]` is only ever written by observing that
+///   sid's ops, and our transport ships whole-model binaries, so an observed
+///   edge ≥ T implies every op the session allocated ≤ T is integrated.
+/// - **The model's own sid**: `clock.time` is a global high-water mark — ANY
+///   sid's observation bumps it — so it cannot prove integration of a
+///   specific own-sid op (merged models inherit the originating session's id
+///   with a peer-inflated time; a pending own-sid op would be falsely
+///   "seen"). The node index is exact instead: a creation op present in the
+///   index was integrated, and absence is proof it was not. InsStr chunk ids
+///   are not index keys, so own-sid string inserts are never skipped — a
+///   missed dedup here only leaves json-joy's native (mostly benign) residue,
+///   which is strictly safer than silently dropping an edit.
 fn clock_seen(model: &Model, id: &Ts) -> bool {
-    let clock = &model.clock;
-    if id.sid == clock.sid {
-        clock.time > id.time
+    if id.sid == model.clock.sid {
+        model.index.contains_ts(id)
     } else {
-        clock
+        model
+            .clock
             .peers
             .get(&id.sid)
             .is_some_and(|edge| edge.time >= id.time)

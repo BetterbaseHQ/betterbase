@@ -1258,6 +1258,71 @@ mod tests {
         assert_no_duplicate_chunk_ids(&remote_model);
     }
 
+    /// Regression: a merged model inherits the originating session's id with
+    /// a peer-inflated clock time. A device's own pending op must NOT be
+    /// treated as already-integrated just because that inflated time exceeds
+    /// the op's own-sid time (the ordinary push → edit → pull sync loop).
+    #[test]
+    fn replay_keeps_own_pending_ops_against_faster_merged_clock() {
+        let sid_a = 1_000;
+        let sid_b = 2_000;
+        let body_schema = || {
+            let mut s = std::collections::BTreeMap::new();
+            s.insert("body".to_string(), SchemaNode::Text);
+            s
+        };
+
+        // A seeds and pushes v1 with a minor edit
+        let seed =
+            create_model_with_schema(&json!({"body": "hello"}), sid_a, &body_schema()).unwrap();
+        let seed_bin = crate::crdt::model_to_binary(&seed);
+        let mut a_v1 = crate::crdt::model_load(&seed_bin, sid_a).unwrap();
+        let p1 = diff_model_with_schema(&a_v1, &json!({"body": "hello."}), &body_schema())
+            .expect("v1 diff");
+        crate::crdt::apply_patch(&mut a_v1, &p1);
+        let v1_bin = crate::crdt::model_to_binary(&a_v1);
+
+        // A edits again — pending, not pushed
+        let mut a_local = crate::crdt::model_load(&v1_bin, sid_a).unwrap();
+        let p_pending =
+            diff_model_with_schema(&a_local, &json!({"body": "hello. A-edit"}), &body_schema())
+                .expect("pending diff");
+        crate::crdt::apply_patch(&mut a_local, &p_pending);
+
+        // B pulls v1 and merges with heavy edits — merge_records loads the
+        // remote WITHOUT forking the session, so the merged binary keeps
+        // sid_a with a time inflated by B's own ops
+        let mut b_local = crate::crdt::model_load(&v1_bin, sid_b).unwrap();
+        let p_b = diff_model_with_schema(
+            &b_local,
+            &json!({"body": "hello. b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 b16 b17 b18 b19 b20"}),
+            &body_schema(),
+        )
+        .expect("b diff");
+        crate::crdt::apply_patch(&mut b_local, &p_b);
+        let mut b_merged = crate::crdt::model_from_binary(&v1_bin).unwrap();
+        crate::crdt::merge_with_pending_patches(&mut b_merged, &[p_b]);
+        let merged_bin = crate::crdt::model_to_binary(&b_merged);
+        assert_eq!(
+            b_merged.clock.sid, sid_a,
+            "merged binary must inherit the originating sid for this regression"
+        );
+
+        // A pulls B's merged blob while its own edit is pending — the gate
+        // must not drop A's op on the own-sid clock comparison
+        let mut a_pull = crate::crdt::model_from_binary(&merged_bin).unwrap();
+        assert!(a_pull.clock.time > p_pending.ops[0].id().time);
+        crate::crdt::merge_with_pending_patches(&mut a_pull, &[p_pending]);
+        let view = deserialize_from_crdt(&body_schema(), &crate::crdt::view_model(&a_pull));
+        let body = view["body"].as_str().unwrap();
+        assert!(
+            body.contains("A-edit"),
+            "A's pending edit was dropped: {body}"
+        );
+        assert!(body.contains("b20"), "B's edits missing: {body}");
+        assert_no_duplicate_chunk_ids(&a_pull);
+    }
+
     /// No str node in the model may contain two chunks whose id spans cover
     /// the same (sid, time) — the invariant duplicate-id replay violates.
     fn assert_no_duplicate_chunk_ids(model: &json_joy::json_crdt::Model) {

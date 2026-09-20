@@ -735,17 +735,30 @@ fn parse_patch_options(js: JsValue) -> Result<PatchOptions, JsValue> {
     if js.is_null() || js.is_undefined() {
         return Ok(PatchOptions::default());
     }
-    // `base` is an opaque CRDT snapshot (Uint8Array); extract it and strip
-    // it from the object before the JSON conversion below.
-    let base = js_sys::Reflect::get(&js, &JsValue::from_str("base"))
-        .ok()
-        .filter(|v| v.is_instance_of::<js_sys::Uint8Array>())
-        .map(|v| v.unchecked_into::<js_sys::Uint8Array>().to_vec());
+    // `base` is an opaque CRDT snapshot (Uint8Array). Extract it before the
+    // JSON conversion below, which cannot represent byte arrays. A present
+    // but wrongly-typed base is an error — silently dropping it would
+    // downgrade the write to LWW tombstoning.
+    let base = match js_sys::Reflect::get(&js, &JsValue::from_str("base")) {
+        Ok(v) if v.is_undefined() || v.is_null() => None,
+        Ok(v) if v.is_instance_of::<js_sys::Uint8Array>() => {
+            Some(v.unchecked_into::<js_sys::Uint8Array>().to_vec())
+        }
+        Ok(_) => {
+            return Err(JsValue::from_str(
+                "patch options: `base` must be a Uint8Array from snapshotBase()",
+            ))
+        }
+        Err(_) => None,
+    };
+    // Convert a base-less copy so the JSON conversion never sees the bytes
+    // (and the incoming message object is not mutated).
+    let stripped = js_sys::Object::new();
+    js_sys::Object::assign(&stripped, &js_sys::Object::from(js.clone()));
     if base.is_some() {
-        let obj = js_sys::Object::from(js.clone());
-        let _ = js_sys::Reflect::delete_property(&obj, &JsValue::from_str("base"));
+        let _ = js_sys::Reflect::delete_property(&stripped, &JsValue::from_str("base"));
     }
-    let val = js_to_value(js)?;
+    let val = js_to_value(stripped.into())?;
     let id = val
         .get("id")
         .and_then(|v| v.as_str())

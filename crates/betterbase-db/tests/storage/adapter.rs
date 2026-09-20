@@ -1763,3 +1763,170 @@ fn patch_without_base_keeps_lww_semantics() {
         "no base: full value is authoritative (documented LWW)"
     );
 }
+
+/// Profiles collection nesting collaborative text inside an object.
+fn profiles_def() -> CollectionDef {
+    collection("profiles")
+        .v(1, {
+            let mut profile = BTreeMap::new();
+            profile.insert("bio".to_string(), t::text());
+            let mut s = BTreeMap::new();
+            s.insert("title".to_string(), t::string());
+            s.insert("profile".to_string(), t::object(profile));
+            s
+        })
+        .build()
+}
+
+/// Peer text nested inside an object field must not be duplicated (or
+/// re-emitted under fresh ids) when a base-aware patch touches a sibling
+/// LWW field.
+#[test]
+fn patch_with_base_preserves_unseen_peer_text_nested_in_object() {
+    use betterbase_db::crdt::schema_aware::diff_model_with_schema;
+    use betterbase_db::crdt::{apply_patch, model_load, model_to_binary};
+
+    let def = Arc::new(profiles_def());
+    let adapter = make_adapter_arc(def.clone());
+    let sid_local = SID;
+    let sid_peer = SID + 7;
+
+    let rec = adapter
+        .put(
+            &def,
+            json!({"title": "Original", "profile": {"bio": "hello"}}),
+            &PutOptions {
+                session_id: Some(sid_local),
+                ..Default::default()
+            },
+        )
+        .expect("seed put");
+    let base = adapter
+        .get(&def, &rec.id, &GetOptions::default())
+        .expect("get")
+        .unwrap()
+        .crdt;
+
+    // Peer appends to the nested bio
+    let mut peer_dst = rec.data.clone();
+    peer_dst["profile"]["bio"] = json!("hello world");
+    let mut peer = model_load(&base, sid_peer).expect("peer model");
+    let peer_patch =
+        diff_model_with_schema(&peer, &peer_dst, &def.current_schema).expect("peer diff");
+    apply_patch(&mut peer, &peer_patch);
+
+    adapter
+        .apply_remote_changes(
+            &def,
+            &[RemoteRecord {
+                id: rec.id.clone(),
+                version: 1,
+                crdt: Some(model_to_binary(&peer)),
+                deleted: false,
+                sequence: 2,
+                meta: None,
+            }],
+            &ApplyRemoteOptions::default(),
+        )
+        .expect("apply remote");
+
+    // Local patches ONLY the sibling title, supplying the rendered base
+    let result = adapter
+        .patch(
+            &def,
+            json!({"id": rec.id.clone(), "title": "Renamed"}),
+            &PatchOptions {
+                id: rec.id.clone(),
+                session_id: Some(sid_local),
+                base: Some(base),
+                ..Default::default()
+            },
+        )
+        .expect("patch with base");
+
+    assert_eq!(result.data["title"], json!("Renamed"));
+    assert_eq!(
+        result.data["profile"]["bio"],
+        json!("hello world"),
+        "nested peer text must not be duplicated or lost"
+    );
+}
+
+/// Optional text fields take the same base-aware path.
+#[test]
+fn patch_with_base_covers_optional_text() {
+    use betterbase_db::crdt::schema_aware::diff_model_with_schema;
+    use betterbase_db::crdt::{apply_patch, model_load, model_to_binary};
+
+    let def = Arc::new(
+        collection("optnotes")
+            .v(1, {
+                let mut s = BTreeMap::new();
+                s.insert("body".to_string(), t::optional(t::text()));
+                s.insert("label".to_string(), t::string());
+                s
+            })
+            .build(),
+    );
+    let adapter = make_adapter_arc(def.clone());
+    let sid_local = SID;
+    let sid_peer = SID + 7;
+
+    let rec = adapter
+        .put(
+            &def,
+            json!({"body": "seed text", "label": "l"}),
+            &PutOptions {
+                session_id: Some(sid_local),
+                ..Default::default()
+            },
+        )
+        .expect("seed put");
+    let base = adapter
+        .get(&def, &rec.id, &GetOptions::default())
+        .expect("get")
+        .unwrap()
+        .crdt;
+
+    let mut peer_dst = rec.data.clone();
+    peer_dst["body"] = json!("seed text — B was here.");
+    let mut peer = model_load(&base, sid_peer).expect("peer model");
+    let peer_patch =
+        diff_model_with_schema(&peer, &peer_dst, &def.current_schema).expect("peer diff");
+    apply_patch(&mut peer, &peer_patch);
+
+    adapter
+        .apply_remote_changes(
+            &def,
+            &[RemoteRecord {
+                id: rec.id.clone(),
+                version: 1,
+                crdt: Some(model_to_binary(&peer)),
+                deleted: false,
+                sequence: 2,
+                meta: None,
+            }],
+            &ApplyRemoteOptions::default(),
+        )
+        .expect("apply remote");
+
+    let result = adapter
+        .patch(
+            &def,
+            json!({"id": rec.id.clone(), "label": "renamed"}),
+            &PatchOptions {
+                id: rec.id.clone(),
+                session_id: Some(sid_local),
+                base: Some(base),
+                ..Default::default()
+            },
+        )
+        .expect("patch with base");
+
+    assert_eq!(
+        result.data["body"],
+        json!("seed text — B was here."),
+        "optional text: peer edit must survive"
+    );
+    assert_eq!(result.data["label"], json!("renamed"));
+}
