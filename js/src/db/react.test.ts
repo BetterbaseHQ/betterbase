@@ -31,7 +31,7 @@ function makeDb() {
       (def: { name: string }, id: string, cb: (r: unknown) => void) => {
         const key = `${def.name}:${id}`;
         recordCbs.set(key, cb);
-        return () => recordCbs.delete(key);
+        return vi.fn(() => recordCbs.delete(key)); // spy-wrapped unsubscribe
       },
     ),
     observeQuery: vi.fn(
@@ -152,11 +152,23 @@ describe("useRecord", () => {
       wrapper: wrapper(db),
     });
     expect(db.observe).toHaveBeenCalledTimes(1);
+    const unsub = db.observe.mock.results[0]!.value as ReturnType<typeof vi.fn>;
 
     unmount();
-    // Delivery after unsubscribe must not throw (callback removed)
-    expect(() => db.pushRecord("n1", { id: "n1" })).not.toThrow();
-    expect(db.observe.mock.results[0]!.value).toBeTypeOf("function"); // unsub fn
+    expect(unsub).toHaveBeenCalledTimes(1); // real unsubscribe, not bookkeeping
+  });
+
+  it("resets to undefined when the record is deleted (null delivery)", () => {
+    const db = makeDb();
+    const { result } = renderHook(() => useRecord(notes, "n1"), {
+      wrapper: wrapper(db),
+    });
+
+    act(() => db.pushRecord("n1", { id: "n1" }));
+    expect(result.current).toEqual({ id: "n1" });
+
+    act(() => db.pushRecord("n1", null)); // tombstone delivery
+    expect(result.current).toBeUndefined();
   });
 });
 
@@ -183,6 +195,20 @@ describe("useQuery", () => {
 
     rerender({ q: { filter: { done: true } } }); // new object, same JSON
     rerender({ q: { filter: { done: true } } });
+    expect(db.observeQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("stabilizes queries regardless of key order", () => {
+    const db = makeDb();
+    const { rerender } = renderHook(({ q }) => useQuery(notes, q), {
+      initialProps: { q: { filter: { done: true, archived: false } } },
+      wrapper: wrapper(db),
+    });
+
+    // Same query, different property order — JSON differs, stableStringify
+    // sorts keys, so the subscription must not churn
+    rerender({ q: { filter: { archived: false, done: true } } });
+    rerender({ q: { filter: { done: true, archived: false } } });
     expect(db.observeQuery).toHaveBeenCalledTimes(1);
   });
 

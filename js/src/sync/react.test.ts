@@ -52,6 +52,7 @@ import { spaces } from "./spaces-collection.js";
 import { SyncEngine } from "./sync-engine.js";
 import { fetchServerMetadata } from "../discovery/index.js";
 import * as fileStoreModule from "./file-store.js";
+import type { UploadQueueEntry } from "./file-store.js";
 
 vi.mock("./sync-engine.js", () => ({
   SyncEngine: { create: vi.fn() },
@@ -191,7 +192,7 @@ function makeEvents() {
 function makeFileStoreDouble() {
   const listeners = new Set<() => void>();
   let version = 0;
-  const entries: { status: string }[] = [];
+  let entries: { status: UploadQueueEntry["status"] }[] = [];
   return {
     subscribe: (cb: () => void) => {
       listeners.add(cb);
@@ -203,9 +204,8 @@ function makeFileStoreDouble() {
       for (const l of listeners) l();
     },
     getQueueSnapshot: () => entries,
-    setEntries(list: { status: string }[]) {
-      entries.length = 0;
-      entries.push(...list);
+    setEntries(list: { status: UploadQueueEntry["status"] }[]) {
+      entries = list; // rebuilt snapshot, like the real store
     },
     getCacheStats: vi.fn(async () => ({ totalBytes: 42 }) as never),
     getUrl: vi.fn(async () => "blob:x" as string | null),
@@ -235,6 +235,10 @@ let pm: ReturnType<typeof makePresence>;
 let em: ReturnType<typeof makeEvents>;
 let mgr: ReturnType<typeof makeSpaceManager>;
 let files: ReturnType<typeof makeFileStoreDouble>;
+let filesClient: {
+  download: ReturnType<typeof vi.fn>;
+  upload: ReturnType<typeof vi.fn>;
+};
 let engine: {
   db: unknown;
   files: unknown;
@@ -258,6 +262,7 @@ beforeEach(() => {
   em = makeEvents();
   mgr = makeSpaceManager();
   files = makeFileStoreDouble();
+  filesClient = { download: vi.fn(), upload: vi.fn() };
 
   const listeners = new Set<() => void>();
   let state = {
@@ -267,7 +272,7 @@ beforeEach(() => {
   };
   engine = {
     db: adapter,
-    files,
+    files: filesClient,
     spaceManager: mgr,
     presenceManager: pm,
     eventManager: em,
@@ -412,6 +417,44 @@ describe("BetterbaseProvider", () => {
     expect(engine.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("disposes a late-resolving engine when unmounted mid-creation", async () => {
+    let resolveEngine!: (e: unknown) => void;
+    vi.mocked(SyncEngine.create).mockImplementation(
+      () => new Promise((r) => (resolveEngine = r)) as never,
+    );
+    const { unmount } = mountHook(() => useSyncReady());
+    await act(async () => {}); // effect fired, create pending
+
+    unmount();
+    await act(async () => {
+      resolveEngine(engine); // arrives after the effect was cancelled
+    });
+    expect(engine.dispose).toHaveBeenCalledTimes(1); // not leaked
+  });
+
+  it("recreates the engine when identity-bearing fields change", async () => {
+    const propsStore = {
+      current: { ...baseProps() } as Record<string, unknown>,
+    };
+    const { rerender } = renderHook(() => useSyncReady(), {
+      wrapper: ({ children }) =>
+        createElement(
+          BetterbaseProvider,
+          propsStore.current as never,
+          children as never,
+        ),
+    });
+    await ready();
+    expect(engine.dispose).not.toHaveBeenCalled();
+
+    propsStore.current = { ...baseProps(), personalSpaceId: "s-other" };
+    rerender();
+    await waitFor(() =>
+      expect(vi.mocked(SyncEngine.create).mock.calls.length).toBe(2),
+    );
+    expect(engine.dispose).toHaveBeenCalledTimes(1); // old engine torn down
+  });
+
   it("passes resolved config to SyncEngine.create", async () => {
     mountHook(() => useSyncReady());
     await ready();
@@ -547,6 +590,28 @@ describe("session-derived config", () => {
     );
   });
 
+  it("re-resolves session keys when the epoch advances", async () => {
+    const epochState = { epoch: 7 };
+    const session = makeSession({
+      getEpoch: () => epochState.epoch,
+    });
+    const { rerender } = renderHook(() => useSyncReady(), {
+      wrapper: ({ children }) =>
+        createElement(
+          BetterbaseProvider,
+          sessionProps(session) as never,
+          children as never,
+        ),
+    });
+    await ready();
+    expect(session.getEpochKey).toHaveBeenCalledTimes(1);
+
+    // updateEpoch bumps the epoch — the effect must re-run and re-read keys
+    epochState.epoch = 8;
+    rerender();
+    await waitFor(() => expect(session.getEpochKey).toHaveBeenCalledTimes(2));
+  });
+
   it("throws via error boundary when session fields fail to resolve", async () => {
     const session = makeSession({
       getAppKeypair: vi.fn(() => Promise.reject(new Error("keychain gone"))),
@@ -647,7 +712,7 @@ describe("context accessors", () => {
 
     expect(db.value).toBe(adapter);
     expect(sm.value).toBe(mgr);
-    expect(fl.value).toBe(files);
+    expect(fl.value).toBe(filesClient); // FilesClient, distinct from FileStore
     expect(pv.value).toBe(pm);
     expect(ev.value).toBe(em);
   });
@@ -780,7 +845,12 @@ describe("space-aware useQuery / useRecord", () => {
   it("useQuery starts empty (never undefined) and delivers enriched results", async () => {
     const h = await mountReady(() => useQuery(notes));
 
-    expect(h.value).toMatchObject({ records: [], total: 0 }); // EMPTY default
+    // EMPTY default is a module-level frozen singleton — referential
+    // stability across renders is the point (no new-object churn)
+    const empty = h.value;
+    h.rerender();
+    expect(h.value).toBe(empty);
+    expect(h.value).toMatchObject({ records: [], total: 0 });
 
     act(() =>
       adapter.emitQuery(notes, {}, undefined, {
@@ -927,6 +997,21 @@ describe("usePresence", () => {
     expect(pm.clearPresence).toHaveBeenCalledWith("s1");
   });
 
+  it("re-sets presence when the broadcast data changes", async () => {
+    const args = { data: { x: 1 } };
+    const h = await mountReady(() => usePresence("s1", args.data));
+    act(() => engine.setState({ phase: "ready" }));
+    await waitFor(() =>
+      expect(pm.setPresence).toHaveBeenCalledWith("s1", { x: 1 }),
+    );
+
+    args.data = { x: 2 };
+    h.rerender();
+    await waitFor(() =>
+      expect(pm.setPresence).toHaveBeenLastCalledWith("s1", { x: 2 }),
+    );
+  });
+
   it("never broadcasts for undefined data", async () => {
     const h = await mountReady(() => usePresence<{ x: number }>("s1"));
     act(() => engine.setState({ phase: "ready" }));
@@ -959,10 +1044,19 @@ describe("useEvent / useSendEvent", () => {
     expect(handler2).toHaveBeenCalledWith({ x: 6 }, "peer-1");
   });
 
-  it("events from another space or name are not delivered", async () => {
+  it("registers for the requested space and event name", async () => {
     const handler = vi.fn();
     await mountReady(() => useEvent("s1", "cursor", handler));
 
+    // The hook must hand the exact space+name to the EventManager —
+    // routing itself lives there (not in the hook)
+    expect(em.onEvent).toHaveBeenCalledWith(
+      "s1",
+      "cursor",
+      expect.any(Function),
+    );
+
+    // Mock sanity: emissions keyed to other spaces/names stay undelivered
     act(() => em.emit("s2", "cursor", {}, "peer-1"));
     act(() => em.emit("s1", "typing", {}, "peer-1"));
     expect(handler).not.toHaveBeenCalled();
@@ -1173,19 +1267,35 @@ describe("useFileUploadQueue", () => {
       { status: "pending" },
       { status: "uploading" },
       { status: "error" },
-      { status: "ready" },
     ]);
     const { result } = mountHook(() => useFileUploadQueue());
     await ready();
 
     expect(result.current.pending).toBe(2);
     expect(result.current.errored).toBe(1);
-    expect(result.current.entries).toHaveLength(4);
+    expect(result.current.entries).toHaveLength(3);
 
     await act(async () => {
       await result.current.retry();
     });
     expect(files.processQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates counts when the queue changes", async () => {
+    files.setEntries([{ status: "pending" }]);
+    const { result } = mountHook(() => useFileUploadQueue());
+    await ready();
+    expect(result.current.pending).toBe(1);
+    expect(result.current.errored).toBe(0);
+
+    files.setEntries([
+      { status: "pending" },
+      { status: "error" },
+      { status: "error" },
+    ]);
+    act(() => files.bump()); // store notifies on queue mutation
+    expect(result.current.pending).toBe(1);
+    expect(result.current.errored).toBe(2);
   });
 
   it("returns safe defaults outside the provider", () => {
