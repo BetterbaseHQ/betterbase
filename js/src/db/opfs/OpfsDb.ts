@@ -50,17 +50,22 @@ export class Database {
   constructor(
     rpc: RpcClient,
     collections: CollectionDefHandle[],
+    dbName: string,
     closeFn?: (() => Promise<void>) | null,
   ) {
     this.rpc = rpc;
     this.collections = collections;
     this.closeFn = closeFn ?? null;
 
-    // Set up cross-tab change notification via BroadcastChannel.
+    // Set up cross-tab change notification via BroadcastChannel. The channel
+    // is namespaced per database so two differently-named databases open in
+    // the same origin never cross-deliver change events.
     // Writes emit events locally and broadcast to other tabs so that
     // onChange listeners fire without a Worker RPC round-trip.
     if (typeof BroadcastChannel !== "undefined") {
-      this.broadcastChannel = new BroadcastChannel("betterbase-db");
+      this.broadcastChannel = new BroadcastChannel(
+        `betterbase-db:${dbName}:changes`,
+      );
       this.broadcastChannel.onmessage = (e) => {
         if (e.data?.sender !== this.senderId) {
           this.emitChange(e.data.event);

@@ -90,14 +90,18 @@ export function deserializeFromRust(
   // Walk schema to convert date and bytes fields
   for (const [key, node] of Object.entries(schema)) {
     if (key in result) {
-      result[key] = deserializeField(result[key], node);
+      result[key] = deserializeField(result[key], node, key);
     }
   }
 
   return result;
 }
 
-function deserializeField(value: unknown, node: SchemaNode): unknown {
+function deserializeField(
+  value: unknown,
+  node: SchemaNode,
+  path: string,
+): unknown {
   if (value === null || value === undefined) return value;
 
   switch (node.type) {
@@ -105,21 +109,32 @@ function deserializeField(value: unknown, node: SchemaNode): unknown {
       return typeof value === "string" ? new Date(value) : value;
 
     case "bytes":
-      return typeof value === "string" ? base64ToUint8Array(value) : value;
+      if (typeof value !== "string") return value;
+      try {
+        return base64ToUint8Array(value);
+      } catch {
+        // Corrupt payload crossing the Rust wire: fail fast with the field
+        // named, rather than an opaque atob error with no context.
+        throw new Error(
+          `Invalid base64 in bytes field "${path}" — stored record is corrupt`,
+        );
+      }
 
     case "optional":
-      return deserializeField(value, node.inner);
+      return deserializeField(value, node.inner, path);
 
     case "array":
       return Array.isArray(value)
-        ? value.map((item) => deserializeField(item, node.items))
+        ? value.map((item, i) =>
+            deserializeField(item, node.items, `${path}[${i}]`),
+          )
         : value;
 
     case "record":
       if (typeof value === "object" && value !== null) {
         const result: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-          result[k] = deserializeField(v, node.values);
+          result[k] = deserializeField(v, node.values, `${path}.${k}`);
         }
         return result;
       }
@@ -132,7 +147,7 @@ function deserializeField(value: unknown, node: SchemaNode): unknown {
         };
         for (const [k, innerNode] of Object.entries(node.properties)) {
           if (k in result) {
-            result[k] = deserializeField(result[k], innerNode);
+            result[k] = deserializeField(result[k], innerNode, `${path}.${k}`);
           }
         }
         return result;

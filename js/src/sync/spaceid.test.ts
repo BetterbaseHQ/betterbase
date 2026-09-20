@@ -71,4 +71,12 @@ describe("personalSpaceId", () => {
     const id2 = await personalSpaceId("issuer", "Auser", "client");
     expect(id1).not.toBe(id2);
   });
+
+  it("rejects NUL bytes in any component (separator injection)", async () => {
+    // Without this guard, ("a\0b", "c", …) and ("a", "b\0c", …) produce the
+    // same name string — and thus the same personal-space identity.
+    await expect(personalSpaceId("a\0b", "c", "d")).rejects.toThrow(/NUL/);
+    await expect(personalSpaceId("a", "b\0c", "d")).rejects.toThrow(/NUL/);
+    await expect(personalSpaceId("a", "b", "c\0d")).rejects.toThrow(/NUL/);
+  });
 });

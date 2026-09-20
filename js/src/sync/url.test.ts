@@ -21,4 +21,18 @@ describe("buildWsUrl", () => {
     const result = buildWsUrl("https://sync.example.com/api/v1/");
     expect(result).toBe("wss://sync.example.com/api/v1/ws");
   });
+
+  it("preserves wss (never downgrades to plaintext)", () => {
+    const result = buildWsUrl("wss://sync.example.com/api/v1");
+    expect(result).toBe("wss://sync.example.com/api/v1/ws");
+  });
+
+  it("preserves ws", () => {
+    const result = buildWsUrl("ws://localhost:5379/api/v1");
+    expect(result).toBe("ws://localhost:5379/api/v1/ws");
+  });
+
+  it("throws on an empty base URL", () => {
+    expect(() => buildWsUrl("")).toThrow();
+  });
 });

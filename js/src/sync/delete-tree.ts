@@ -212,6 +212,15 @@ export async function deleteTree(
     }
     frontier = next;
   }
+  if (frontier.length > 0) {
+    // Depth cap reached with undiscovered levels remaining — almost always a
+    // reference cycle among self-referential edges (a→b→a). Deleting anyway
+    // would silently orphan everything past the cap, so fail with the root
+    // intact instead.
+    throw new Error(
+      `deleteTree: exceeded max depth (${MAX_LEVELS}) planning ${collection.name}/${parentId} — likely a cycle in declared parent edges`,
+    );
+  }
 
   // Deepest first; the parent itself is always the final unit.
   const order = [...levels].reverse();
@@ -270,7 +279,7 @@ function normalizeParams(
     return { collection: collectionOrOptions as CollectionDefHandle, id };
   }
   const opts = collectionOrOptions as DeleteTreeOptions;
-  if (!opts || typeof opts.id !== "string") {
+  if (!opts || typeof opts.id !== "string" || !opts.collection) {
     throw new Error(
       "deleteTree: expected (db, collection, id) or (db, { collection, id })",
     );

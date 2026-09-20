@@ -328,4 +328,61 @@ describe("deleteTree", () => {
     ]);
     expect(report.deleted).toEqual({ folders: ["f-3", "f-2", "f-1"] });
   });
+
+  it("fails closed on reference cycles among self-referential edges", async () => {
+    const folders = {
+      name: "folders",
+      parent: { field: "parentId", collection: () => folders },
+    } as never;
+    const db = makeDb(undefined, [folders]);
+    db.get.mockResolvedValue({ id: "f-1", _spaceId: undefined });
+    // f-1 → f-2 → f-1 → f-2 → … the planned-set guard cannot see cycles
+    // within a single collection; only the depth cap ends planning.
+    db.query.mockResolvedValue({ records: [{ id: "f-2" }] });
+
+    await expect(call(db, folders, "f-1")).rejects.toThrow(/max depth.*cycle/);
+    // Fail-closed: nothing deleted, root intact.
+    expect(db.bulkDelete).not.toHaveBeenCalled();
+  });
+
+  it("handles partial in-band failure within a single level", async () => {
+    const db = makeDb();
+    db.query.mockResolvedValueOnce({
+      records: [{ id: "col-1" }, { id: "col-2" }],
+    });
+    db.bulkDelete.mockImplementation(async (_def: unknown, ids: string[]) =>
+      ids.includes("col-1")
+        ? {
+            deleted_ids: ["col-2"],
+            errors: [{ id: "col-1", error: "boom" }],
+          }
+        : { deleted_ids: [...ids], errors: [] },
+    );
+
+    let caught: unknown;
+    try {
+      await call(db, boards, "board-1");
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(DeleteTreeError);
+    const report = (caught as DeleteTreeError).report;
+    // The same collection appears in both deleted and failed — only the
+    // records that actually deleted are claimed as deleted.
+    expect(report.deleted).toEqual({ columns: ["col-2"] });
+    expect(report.failed).toEqual([
+      { collection: "columns", ids: ["col-1"], error: expect.any(Error) },
+    ]);
+  });
+
+  it("rejects invalid invocation shapes", async () => {
+    const db = makeDb();
+    const raw = deleteTree as unknown as (
+      d: FakeDb,
+      opts: unknown,
+    ) => Promise<unknown>;
+    await expect(raw(db, { id: "board-1" })).rejects.toThrow(
+      /expected \(db, collection, id\)/,
+    );
+  });
 });

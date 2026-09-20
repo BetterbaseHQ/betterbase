@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { serializeForRust, deserializeFromRust } from "./conversions.js";
+import {
+  serializeForRust,
+  deserializeFromRust,
+  META_KEY,
+} from "./conversions.js";
 import { t } from "./schema.js";
 import type { SchemaShape } from "./types.js";
 
@@ -82,6 +86,56 @@ describe("serializeForRust", () => {
 // ============================================================================
 
 describe("deserializeFromRust", () => {
+  // --------------------------------------------------------------------------
+  // Internal metadata (__betterbase_meta → META_KEY symbol)
+  // --------------------------------------------------------------------------
+
+  it("extracts __betterbase_meta into a non-enumerable META_KEY symbol", () => {
+    const meta = { spaceId: "space-1", deleted: false };
+    const result = deserializeFromRust(
+      { id: "1", __betterbase_meta: meta, name: "Alice" },
+      { name: t.string() },
+    );
+
+    expect("__betterbase_meta" in result).toBe(false);
+    expect(Object.getOwnPropertySymbols(result)).toContain(META_KEY);
+    expect((result as Record<symbol, unknown>)[META_KEY]).toEqual(meta);
+    // Non-enumerable: spread/JSON.stringify must not leak it
+    expect(JSON.parse(JSON.stringify(result))).toEqual({
+      id: "1",
+      name: "Alice",
+    });
+  });
+
+  it("adds no META_KEY when meta is null or absent", () => {
+    for (const data of [{ id: "1" }, { id: "1", __betterbase_meta: null }]) {
+      const result = deserializeFromRust(data, {});
+      expect(Object.getOwnPropertySymbols(result)).not.toContain(META_KEY);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Bytes corruption
+  // --------------------------------------------------------------------------
+
+  it("throws a descriptive error for invalid base64 in a bytes field", () => {
+    expect(() =>
+      deserializeFromRust(
+        { id: "1", blob: "!!!not-base64!!!" },
+        { blob: t.bytes() },
+      ),
+    ).toThrowError(/bytes field "blob".*corrupt/);
+  });
+
+  it("reports the field path for corrupt bytes nested in a record", () => {
+    expect(() =>
+      deserializeFromRust(
+        { id: "1", files: { a: "@@@" } },
+        { files: t.record(t.bytes()) },
+      ),
+    ).toThrowError(/bytes field "files.a".*corrupt/);
+  });
+
   // --------------------------------------------------------------------------
   // Auto-fields
   // --------------------------------------------------------------------------

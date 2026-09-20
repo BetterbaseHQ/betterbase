@@ -331,6 +331,27 @@ describe("multi-tab", () => {
   // Concurrent writes
   // ==========================================================================
 
+  describe("cross-database isolation", () => {
+    it("change events do not leak between differently-named databases", async () => {
+      // Regression: the change BroadcastChannel was a single global name, so
+      // two databases in the same origin cross-delivered onChange events.
+      const dbA = await openTab(uniqueOpfsDbName("iso-a"));
+      const dbB = await openTab(uniqueOpfsDbName("iso-b"));
+
+      const eventsA: ChangeEvent[] = [];
+      const eventsB: ChangeEvent[] = [];
+      dbA.onChange((e) => eventsA.push(e));
+      dbB.onChange((e) => eventsB.push(e));
+
+      await dbA.put(users, { name: "Alice", email: "a@test.com", age: 30 });
+
+      // dbA sees its own event; dbB must stay silent.
+      await waitFor(() => eventsA.length >= 1);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(eventsB.length).toBe(0);
+    });
+  });
+
   describe("concurrent access", () => {
     it("interleaved writes from leader and follower", async () => {
       const dbName = uniqueOpfsDbName("multi-interleave");

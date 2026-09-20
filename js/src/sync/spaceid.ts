@@ -34,6 +34,19 @@ export async function personalSpaceId(
   userId: string,
   clientId: string,
 ): Promise<string> {
+  // The components are joined with NUL separators; embedded NULs would let
+  // two different identities produce the same name (and thus the same UUID).
+  for (const [label, part] of [
+    ["issuer", issuer],
+    ["userId", userId],
+    ["clientId", clientId],
+  ] as const) {
+    if (part.includes("\0")) {
+      throw new Error(
+        `personalSpaceId: ${label} must not contain NUL bytes (U+0000)`,
+      );
+    }
+  }
   const name = `${issuer}\0${userId}\0${clientId}`;
   return uuid5(BETTERBASE_NAMESPACE, new TextEncoder().encode(name));
 }

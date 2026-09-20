@@ -64,10 +64,10 @@ export async function createDatabase(
     // Direct mode — single-tab, no coordination
     const rpc = new WorkerRpc(options.worker);
     await rpc.call("open", [dbName], 60_000);
-    return new Database(rpc, collections);
+    return new Database(rpc, collections, dbName);
   }
 
   // Multi-tab mode — leader election + query proxying
   const { rpc, close } = await TabCoordinator.create(dbName, options.worker);
-  return new Database(rpc, collections, close);
+  return new Database(rpc, collections, dbName, close);
 }
