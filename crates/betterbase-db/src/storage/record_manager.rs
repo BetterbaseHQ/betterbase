@@ -317,20 +317,111 @@ pub fn prepare_update(
     let validated = validate(&full_schema, &to_validate)
         .map_err(|e| LessDbError::Schema(crate::error::SchemaError::Validation(e)))?;
 
-    let computed = compute_index_values(&validated, &def.indexes);
-
     // Update CRDT model: load with session_id and diff against new data
     let mut model = crdt::model_load(&existing.crdt, session_id)?;
-    let patch = diff_model_with_schema(&model, &validated, &def.current_schema);
 
-    let (crdt_binary, pending_patches) = if let Some(p) = patch {
+    // RGA-backed fields (text, arrays) merge concurrent edits at the CRDT
+    // level. A full-value write derived from a stale view would tombstone
+    // peer edits the writer never saw — so when the caller supplies a base
+    // (the record snapshot it actually rendered), those fields are diffed
+    // against the base instead of the current view; everything else
+    // (LWW con fields, structure) keeps the current-view diff. Ops anchor on
+    // immutable ids that the current model still contains (chunks are
+    // additive), so replaying them onto current state merges rather than
+    // replaces.
+    let (patch, base_used) = match opts.base.as_deref().map(crdt::model_from_binary) {
+        Some(Ok(mut base_model)) => {
+            let base_view =
+                deserialize_from_crdt(&def.current_schema, &crdt::view_model(&base_model));
+            let base_field = |field: &str| {
+                base_view
+                    .get(field)
+                    .cloned()
+                    // Field created after the base was captured: fall back
+                    // to current (legacy behavior for that field)
+                    .or_else(|| existing.data.get(field).cloned())
+            };
+
+            // Pass 1 destination: RGA fields hold base values, all other
+            // fields hold target values → emits only non-RGA ops.
+            let mut dst1 = validated.clone();
+            for (field, node) in def.current_schema.iter() {
+                if is_rga_backed(node) {
+                    set_or_remove(&mut dst1, field, base_field(field));
+                }
+            }
+            // Seed the diff builder's clock from the CURRENT model so new op
+            // ids allocate above everything the record has integrated.
+            base_model.clock = model.clock.clone_same();
+            let ops1 = diff_model_with_schema(&base_model, &dst1, &def.current_schema);
+            if let Some(ref p1) = ops1 {
+                crdt::apply_patch(&mut base_model, p1);
+            }
+
+            // Pass 2 destination: RGA fields the user actually changed hold
+            // target values; unchanged RGA fields keep base values → emits
+            // only the user's edits, anchored in the base RGA structure.
+            let mut dst2 = validated.clone();
+            for (field, node) in def.current_schema.iter() {
+                if is_rga_backed(node) && !changed_fields.contains(field) {
+                    set_or_remove(&mut dst2, field, base_field(field));
+                }
+            }
+            let ops2 = diff_model_with_schema(&base_model, &dst2, &def.current_schema);
+
+            let full = match (ops1, ops2) {
+                (None, None) => None,
+                (Some(p), None) | (None, Some(p)) => Some(p),
+                (Some(mut p1), Some(p2)) => {
+                    p1.ops.extend(p2.ops);
+                    Some(p1)
+                }
+            };
+            (full, true)
+        }
+        _ => (
+            diff_model_with_schema(&model, &validated, &def.current_schema),
+            false,
+        ),
+    };
+
+    // In the base-aware path the stored `data` must be re-materialized from
+    // the merged model view — storing the un-merged full value would make
+    // the NEXT no-base write re-diff against it and re-emit the tombstones.
+    let (crdt_binary, pending_patches, final_data) = if let Some(p) = patch {
         crdt::apply_patch(&mut model, &p);
         let crdt_bin = crdt::model_to_binary(&model);
         let pending = append_patch(&existing.pending_patches, &p);
-        (crdt_bin, pending)
+        if base_used {
+            let merged = deserialize_from_crdt(&def.current_schema, &crdt::view_model(&model));
+            (crdt_bin, pending, merged)
+        } else {
+            (crdt_bin, pending, validated)
+        }
+    } else if base_used {
+        // No ops: user's write equals the base — leave current (peer) state
+        // intact rather than storing the stale full value.
+        let view = deserialize_from_crdt(&def.current_schema, &crdt::view_model(&model));
+        (
+            existing.crdt.clone(),
+            existing.pending_patches.clone(),
+            view,
+        )
     } else {
-        (existing.crdt.clone(), existing.pending_patches.clone())
+        (
+            existing.crdt.clone(),
+            existing.pending_patches.clone(),
+            validated,
+        )
     };
+
+    let final_validated = if base_used {
+        validate(&full_schema, &final_data)
+            .map_err(|e| LessDbError::Schema(crate::error::SchemaError::Validation(e)))?
+    } else {
+        final_data
+    };
+    let computed = compute_index_values(&final_validated, &def.indexes);
 
     let mut sequence = existing.sequence;
     let mut final_pending = pending_patches;
@@ -352,7 +443,7 @@ pub fn prepare_update(
         id: existing.id.clone(),
         collection: def.name.clone(),
         version: def.current_version,
-        data: validated,
+        data: final_validated,
         crdt: crdt_binary,
         pending_patches: final_pending,
         sequence,
@@ -1018,6 +1109,29 @@ fn check_immutable_fields(
 
 /// Diff two values and return only user-controlled top-level changed fields
 /// (excludes updatedAt since it's auto-managed).
+/// Fields whose CRDT nodes are RGAs (concurrent edits merge) rather than
+/// LWW containers (full-value writes win). Base-aware patching only applies
+/// to these: LWW fields have no "unseen edit" to preserve.
+fn is_rga_backed(node: &SchemaNode) -> bool {
+    matches!(node, SchemaNode::Text | SchemaNode::Array(_))
+}
+
+/// Replace `obj[field]` with `value`, removing the key when `value` is None.
+fn set_or_remove(obj: &mut Value, field: &str, value: Option<Value>) {
+    let map = match obj.as_object_mut() {
+        Some(m) => m,
+        None => return,
+    };
+    match value {
+        Some(v) => {
+            map.insert(field.to_string(), v);
+        }
+        None => {
+            map.remove(field);
+        }
+    }
+}
+
 fn diff_user_fields(
     schema: &std::collections::BTreeMap<String, SchemaNode>,
     old_value: &Value,

@@ -130,6 +130,7 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
             session_id: base.and_then(|b| b.session_id),
             skip_unique_check: base.is_some_and(|b| b.skip_unique_check),
             meta,
+            base: base.and_then(|b| b.base.clone()),
             should_reset_sync_state: Some(Arc::new(move |old, new| {
                 mw.should_reset_sync_state(old, new)
             })),

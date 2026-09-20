@@ -216,6 +216,11 @@ export interface PatchOptions {
   sessionId?: number;
   skipUniqueCheck?: boolean;
   meta?: unknown;
+  /** Opaque CRDT snapshot of the record as rendered when editing started
+   *  (from `Database.snapshotBase`). With `base`, text and array fields are
+   *  diffed against that snapshot instead of the current view, preserving
+   *  concurrent peer edits the writer never saw. */
+  base?: Uint8Array;
 }
 
 export interface DeleteOptions {

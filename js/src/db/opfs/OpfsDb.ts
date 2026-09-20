@@ -15,6 +15,7 @@ import type {
   QueryOptions,
   QueryResult,
   ObserveOptions,
+  PatchOptions,
   PutOptions,
   GetOptions,
   DeleteOptions,
@@ -171,10 +172,29 @@ export class Database {
     ) as CollectionRead<S>;
   }
 
+  /**
+   * Opaque CRDT snapshot of a record, for base-aware patching.
+   *
+   * Capture at the moment a record is rendered for editing and pass back as
+   * `patch(def, data, { base })` — text and array fields then diff against
+   * this snapshot instead of the current view, preserving concurrent peer
+   * edits the writer never saw.
+   */
+  async snapshotBase(
+    def: CollectionDefHandle<string, SchemaShape>,
+    id: string,
+  ): Promise<Uint8Array | null> {
+    const result = (await this.rpc.call("getRecordBase", [
+      def.name,
+      id,
+    ])) as Uint8Array | null;
+    return result ?? null;
+  }
+
   async patch<S extends SchemaShape>(
     def: CollectionDefHandle<string, S>,
     data: CollectionPatch<S>,
-    options?: Omit<PutOptions, "id">,
+    options?: Omit<PatchOptions, "id">,
   ): Promise<CollectionRead<S>> {
     const { id, ...fields } = data as Record<string, unknown> & { id: string };
     const serialized = serializeForRust(fields);

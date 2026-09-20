@@ -20,6 +20,7 @@ import type {
   QueryOptions,
   QueryResult,
   ObserveOptions,
+  PatchOptions,
   PutOptions,
   GetOptions,
   DeleteOptions,
@@ -149,11 +150,19 @@ export class TypedAdapter<
   async patch<S extends SchemaShape>(
     def: CollectionDefHandle<string, S>,
     data: CollectionPatch<S>,
-    options?: Omit<PutOptions, "id"> & TWriteOpts,
+    options?: Omit<PatchOptions, "id"> & TWriteOpts,
   ): Promise<CollectionRead<S> & TExtra> {
-    const patchOpts = this.resolveWriteOptions(options);
+    const patchOpts = this.resolvePatchOptions(options);
     const record = await this.inner.patch(def, data, patchOpts);
     return this.enrichData(record, patchOpts.meta);
+  }
+
+  /** Opaque CRDT snapshot for base-aware patching — see Database.snapshotBase. */
+  async snapshotBase(
+    def: CollectionDefHandle<string, SchemaShape>,
+    id: string,
+  ): Promise<Uint8Array | null> {
+    return this.inner.snapshotBase(def, id);
   }
 
   async delete<S extends SchemaShape>(
@@ -336,6 +345,15 @@ export class TypedAdapter<
     return {
       ...(options as PutOptions | undefined),
       meta: Object.keys(meta).length > 0 ? meta : (callerMeta ?? {}),
+    };
+  }
+
+  /** Like resolveWriteOptions, but typed for patch (no caller `id`). */
+  private resolvePatchOptions(
+    options?: TWriteOpts,
+  ): PatchOptions & { meta: Record<string, unknown> } {
+    return this.resolveWriteOptions(options) as PatchOptions & {
+      meta: Record<string, unknown>;
     };
   }
 

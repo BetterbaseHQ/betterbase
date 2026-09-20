@@ -257,6 +257,12 @@ pub struct PatchOptions {
     pub session_id: Option<u64>,
     pub skip_unique_check: bool,
     pub meta: Option<Value>,
+    /// CRDT snapshot of the record as the caller last rendered it (see
+    /// `Database::snapshot_base`). When provided, RGA-backed fields (text,
+    /// arrays) are diffed against this base instead of the current model
+    /// view, so concurrent peer edits the writer never saw survive the
+    /// write instead of being tombstoned by the view diff.
+    pub base: Option<Vec<u8>>,
     /// Middleware hook: returns true → sequence resets to 0, pending_patches cleared.
     pub should_reset_sync_state: Option<Arc<ShouldResetSyncStateFn>>,
 }
@@ -268,6 +274,10 @@ impl std::fmt::Debug for PatchOptions {
             .field("session_id", &self.session_id)
             .field("skip_unique_check", &self.skip_unique_check)
             .field("meta", &self.meta)
+            .field(
+                "base",
+                &self.base.as_ref().map(|b| format!("<{} bytes>", b.len())),
+            )
             .field(
                 "should_reset_sync_state",
                 &self.should_reset_sync_state.as_ref().map(|_| "..."),
@@ -283,6 +293,7 @@ impl Clone for PatchOptions {
             session_id: self.session_id,
             skip_unique_check: self.skip_unique_check,
             meta: self.meta.clone(),
+            base: self.base.clone(),
             should_reset_sync_state: self.should_reset_sync_state.clone(),
         }
     }

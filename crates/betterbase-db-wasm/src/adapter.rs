@@ -254,6 +254,24 @@ impl WasmDb {
         }
     }
 
+    /// Opaque CRDT snapshot of a record, for base-aware patching.
+    ///
+    /// Capture this at the moment a record is rendered for editing and pass
+    /// it back as `patch({ base })` — the patch then diffs text/array fields
+    /// against this snapshot instead of the current view, preserving
+    /// concurrent peer edits the writer never saw.
+    pub fn record_base(&self, collection: &str, id: &str) -> Result<JsValue, JsValue> {
+        let def = self.get_def(collection)?;
+        let result = self
+            .adapter
+            .get(&def, id, &GetOptions::default())
+            .into_js()?;
+        match result {
+            Some(record) => Ok(js_sys::Uint8Array::from(&record.crdt[..]).into()),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
     /// Patch (partial update) a record.
     pub fn patch(
         &self,
@@ -752,6 +770,16 @@ fn parse_patch_options(js: JsValue) -> Result<PatchOptions, JsValue> {
     if js.is_null() || js.is_undefined() {
         return Ok(PatchOptions::default());
     }
+    // `base` is an opaque CRDT snapshot (Uint8Array); extract it and strip
+    // it from the object before the JSON conversion below.
+    let base = js_sys::Reflect::get(&js, &JsValue::from_str("base"))
+        .ok()
+        .filter(|v| v.is_instance_of::<js_sys::Uint8Array>())
+        .map(|v| v.unchecked_into::<js_sys::Uint8Array>().to_vec());
+    if base.is_some() {
+        let obj = js_sys::Object::from(js.clone());
+        let _ = js_sys::Reflect::delete_property(&obj, &JsValue::from_str("base"));
+    }
     let val = js_to_value(js)?;
     let id = val
         .get("id")
@@ -769,6 +797,7 @@ fn parse_patch_options(js: JsValue) -> Result<PatchOptions, JsValue> {
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         meta: val.get("meta").cloned(),
+        base,
         should_reset_sync_state: None,
     })
 }

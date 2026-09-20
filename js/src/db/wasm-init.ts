@@ -22,6 +22,7 @@ export interface WasmDbInstance {
   deleteDatabase(): Promise<void>;
   put(collection: string, data: unknown, options: unknown): unknown;
   get(collection: string, id: string, options: unknown): unknown;
+  record_base(collection: string, id: string): unknown;
   patch(collection: string, data: unknown, options: unknown): unknown;
   delete(collection: string, id: string, options: unknown): boolean;
   query(

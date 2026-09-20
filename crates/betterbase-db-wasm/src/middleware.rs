@@ -735,6 +735,16 @@ fn parse_patch_options(js: JsValue) -> Result<PatchOptions, JsValue> {
     if js.is_null() || js.is_undefined() {
         return Ok(PatchOptions::default());
     }
+    // `base` is an opaque CRDT snapshot (Uint8Array); extract it and strip
+    // it from the object before the JSON conversion below.
+    let base = js_sys::Reflect::get(&js, &JsValue::from_str("base"))
+        .ok()
+        .filter(|v| v.is_instance_of::<js_sys::Uint8Array>())
+        .map(|v| v.unchecked_into::<js_sys::Uint8Array>().to_vec());
+    if base.is_some() {
+        let obj = js_sys::Object::from(js.clone());
+        let _ = js_sys::Reflect::delete_property(&obj, &JsValue::from_str("base"));
+    }
     let val = js_to_value(js)?;
     let id = val
         .get("id")
@@ -752,6 +762,7 @@ fn parse_patch_options(js: JsValue) -> Result<PatchOptions, JsValue> {
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         meta: None,
+        base,
         should_reset_sync_state: None,
     })
 }

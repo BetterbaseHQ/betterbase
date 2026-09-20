@@ -101,3 +101,78 @@ describe("CRDT convergence across two device forks (transport simulation)", () =
     }
   });
 });
+
+describe("Base-aware patching (online stale write)", () => {
+  it("patch with a rendered base preserves peer text the writer never saw", async () => {
+    const BASE = "The quick brown fox jumps over the lazy dog";
+    const { db: dbA } = await openFreshOpfsDb([notes], "opfs-baseaware-a");
+    const { db: dbB } = await openFreshOpfsDb([notes], "opfs-baseaware-b");
+    try {
+      // Seed on A; the app captures the base snapshot when rendering
+      const created = await dbA.put(notes, { body: BASE, pinned: false });
+      const seed = await outbound(dbA, created.id);
+      const base = await dbA.snapshotBase(notes, created.id);
+      expect(base).toBeInstanceOf(Uint8Array);
+      await dbA.markSynced(notes, created.id, 1);
+
+      // Peer B pulls the seed and appends offline
+      await apply(dbB, seed, 1);
+      await dbB.patch(notes, { id: created.id, body: `${BASE} — B was here.` });
+
+      // B's blob lands on A BEFORE A's user writes (auto-sync race)
+      const forkB = await outbound(dbB, created.id);
+      await apply(dbA, forkB, 2);
+      const aViewBefore = (await dbA.get(notes, created.id))!.body;
+      expect(aViewBefore).toContain("— B was here.");
+
+      // A's app — still rendering the stale view — writes a full value
+      // derived from BASE, but supplies the base it rendered.
+      await dbA.patch(
+        notes,
+        { id: created.id, body: `A was here — ${BASE}` },
+        { base: base ?? undefined },
+      );
+
+      // The peer's append survives alongside the local edit
+      const bodyA = (await dbA.get(notes, created.id))!.body;
+      expect(bodyA, `A after base-aware patch: ${bodyA}`).toBe(
+        `A was here — ${BASE} — B was here.`,
+      );
+
+      // The pushed state carries the merge to the peer — both converge
+      const merged = await outbound(dbA, created.id);
+      await apply(dbB, merged, 3);
+      const bodyB = (await dbB.get(notes, created.id))!.body;
+      expect(bodyB, `B after merge: ${bodyB}`).toBe(
+        `A was here — ${BASE} — B was here.`,
+      );
+    } finally {
+      await cleanupOpfsDb(dbA);
+      await cleanupOpfsDb(dbB);
+    }
+  });
+
+  it("patch without a base keeps LWW semantics (full value wins)", async () => {
+    const BASE = "The quick brown fox jumps over the lazy dog";
+    const { db: dbA } = await openFreshOpfsDb([notes], "opfs-baseaware-a");
+    const { db: dbB } = await openFreshOpfsDb([notes], "opfs-baseaware-b");
+    try {
+      const created = await dbA.put(notes, { body: BASE, pinned: false });
+      const seed = await outbound(dbA, created.id);
+      await dbA.markSynced(notes, created.id, 1);
+
+      await apply(dbB, seed, 1);
+      await dbB.patch(notes, { id: created.id, body: `${BASE} — B was here.` });
+      const forkB = await outbound(dbB, created.id);
+      await apply(dbA, forkB, 2);
+
+      // No base: the full value is authoritative for the field
+      await dbA.patch(notes, { id: created.id, body: `A was here — ${BASE}` });
+      const bodyA = (await dbA.get(notes, created.id))!.body;
+      expect(bodyA).toBe(`A was here — ${BASE}`);
+    } finally {
+      await cleanupOpfsDb(dbA);
+      await cleanupOpfsDb(dbB);
+    }
+  });
+});

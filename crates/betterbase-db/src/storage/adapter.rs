@@ -590,6 +590,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
                 session_id: opts.session_id,
                 skip_unique_check: opts.skip_unique_check,
                 meta: opts.meta.clone(),
+                base: None,
                 should_reset_sync_state: opts.should_reset_sync_state.clone(),
             };
             let result = prepare_update(def, existing, merged_data, session_id, &patch_opts)?;
@@ -809,6 +810,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
                     session_id: opts.session_id,
                     skip_unique_check: opts.skip_unique_check,
                     meta: opts.meta.clone(),
+                    base: None,
                     should_reset_sync_state: opts.should_reset_sync_state.clone(),
                 };
 
@@ -896,6 +898,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
                     session_id: opts.session_id,
                     skip_unique_check: opts.skip_unique_check,
                     meta: opts.meta.clone(),
+                    base: None,
                     should_reset_sync_state: opts.should_reset_sync_state.clone(),
                 };
 

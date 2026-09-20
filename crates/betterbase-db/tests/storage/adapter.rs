@@ -75,6 +75,18 @@ fn make_adapter_arc(def: Arc<CollectionDef>) -> Adapter<SqliteBackend> {
     adapter
 }
 
+/// Notes collection with a collaborative text field.
+fn notes_def() -> CollectionDef {
+    collection("notes")
+        .v(1, {
+            let mut s = BTreeMap::new();
+            s.insert("body".to_string(), t::text());
+            s.insert("pinned".to_string(), t::boolean());
+            s
+        })
+        .build()
+}
+
 /// Standard put options with a fixed session ID for reproducibility.
 fn put_opts() -> PutOptions {
     PutOptions {
@@ -1590,4 +1602,164 @@ fn mark_synced_with_snapshot_patches_grew_stays_dirty() {
         "record should stay dirty when patches grew after snapshot"
     );
     assert_eq!(fetched.sequence, 50, "sequence should still be updated");
+}
+
+// ============================================================================
+// Base-aware patching
+// ============================================================================
+
+const RECON_BASE: &str = "The quick brown fox jumps over the lazy dog";
+
+/// A full-value write derived from a stale view must not tombstone peer text
+/// the writer never saw, when the caller supplies the snapshot it rendered.
+#[test]
+fn patch_with_base_preserves_unseen_peer_text() {
+    use betterbase_db::crdt::schema_aware::{deserialize_from_crdt, diff_model_with_schema};
+    use betterbase_db::crdt::{apply_patch, model_load, model_to_binary};
+
+    let def = Arc::new(notes_def());
+    let adapter = make_adapter_arc(def.clone());
+    let sid_local = SID;
+    let sid_peer = SID + 7;
+
+    // Seed the record; `base` is the snapshot the app rendered
+    let rec = adapter
+        .put(
+            &def,
+            json!({"body": RECON_BASE, "pinned": false}),
+            &PutOptions {
+                session_id: Some(sid_local),
+                ..Default::default()
+            },
+        )
+        .expect("seed put");
+    let base = adapter
+        .get(&def, &rec.id, &GetOptions::default())
+        .expect("get")
+        .unwrap()
+        .crdt;
+
+    // A peer concurrently appends to the same field (forked from the seed)
+    let mut peer_dst = rec.data.clone();
+    peer_dst["body"] = json!(format!("{RECON_BASE} — B was here."));
+    let mut peer = model_load(&base, sid_peer).expect("peer model");
+    let peer_patch =
+        diff_model_with_schema(&peer, &peer_dst, &def.current_schema).expect("peer diff");
+    apply_patch(&mut peer, &peer_patch);
+    let peer_bin = model_to_binary(&peer);
+
+    // The peer's blob lands on this device before the local write
+    adapter
+        .apply_remote_changes(
+            &def,
+            &[RemoteRecord {
+                id: rec.id.clone(),
+                version: 1,
+                crdt: Some(peer_bin),
+                deleted: false,
+                sequence: 2,
+                meta: None,
+            }],
+            &ApplyRemoteOptions::default(),
+        )
+        .expect("apply remote");
+
+    // The local app patches from a value derived from the stale view
+    let result = adapter
+        .patch(
+            &def,
+            json!({"id": rec.id.clone(), "body": format!("A was here — {RECON_BASE}")}),
+            &PatchOptions {
+                id: rec.id.clone(),
+                session_id: Some(sid_local),
+                base: Some(base),
+                ..Default::default()
+            },
+        )
+        .expect("patch with base");
+
+    // The peer's append survives alongside the local edit
+    assert_eq!(
+        result.data["body"],
+        json!(format!("A was here — {RECON_BASE} — B was here.")),
+        "peer text must survive a base-aware stale write"
+    );
+
+    // The stored data matches the merged model view (re-materialized)
+    let mut model = betterbase_db::crdt::model_from_binary(&result.crdt).unwrap();
+    let _ = &mut model;
+    let view = deserialize_from_crdt(
+        &def.current_schema,
+        &betterbase_db::crdt::view_model(&model),
+    );
+    assert_eq!(view["body"], result.data["body"]);
+}
+
+/// Without a base the write keeps its documented LWW semantics: the full
+/// value is authoritative for the field (peer text is replaced).
+#[test]
+fn patch_without_base_keeps_lww_semantics() {
+    use betterbase_db::crdt::schema_aware::diff_model_with_schema;
+    use betterbase_db::crdt::{apply_patch, model_load, model_to_binary};
+
+    let def = Arc::new(notes_def());
+    let adapter = make_adapter_arc(def.clone());
+    let sid_local = SID;
+    let sid_peer = SID + 7;
+
+    let rec = adapter
+        .put(
+            &def,
+            json!({"body": RECON_BASE, "pinned": false}),
+            &PutOptions {
+                session_id: Some(sid_local),
+                ..Default::default()
+            },
+        )
+        .expect("seed put");
+    let seed_crdt = adapter
+        .get(&def, &rec.id, &GetOptions::default())
+        .expect("get")
+        .unwrap()
+        .crdt;
+
+    let mut peer_dst = rec.data.clone();
+    peer_dst["body"] = json!(format!("{RECON_BASE} — B was here."));
+    let mut peer = model_load(&seed_crdt, sid_peer).expect("peer model");
+    let peer_patch =
+        diff_model_with_schema(&peer, &peer_dst, &def.current_schema).expect("peer diff");
+    apply_patch(&mut peer, &peer_patch);
+
+    adapter
+        .apply_remote_changes(
+            &def,
+            &[RemoteRecord {
+                id: rec.id.clone(),
+                version: 1,
+                crdt: Some(model_to_binary(&peer)),
+                deleted: false,
+                sequence: 2,
+                meta: None,
+            }],
+            &ApplyRemoteOptions::default(),
+        )
+        .expect("apply remote");
+
+    let result = adapter
+        .patch(
+            &def,
+            json!({"id": rec.id.clone(), "body": format!("A was here — {RECON_BASE}")}),
+            &PatchOptions {
+                id: rec.id.clone(),
+                session_id: Some(sid_local),
+                ..Default::default()
+            },
+        )
+        .expect("patch without base");
+
+    assert_eq!(
+        result.data["body"],
+        json!(format!("A was here — {RECON_BASE}")),
+        "no base: full value is authoritative (documented LWW)"
+    );
 }
