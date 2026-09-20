@@ -35,6 +35,17 @@ fn todos_def() -> CollectionDef {
         .build()
 }
 
+/// Notes with a text (RGA-backed) body for peer-edit diagnostics.
+fn notes_text_def() -> CollectionDef {
+    collection("notes")
+        .v(1, {
+            let mut s = BTreeMap::new();
+            s.insert("body".to_string(), t::text());
+            s
+        })
+        .build()
+}
+
 // ============================================================================
 // Test middleware: adds _spaceId to every record
 // ============================================================================
@@ -1520,4 +1531,165 @@ fn same_space_does_not_reset_sync_state() {
         .expect("found");
     assert_eq!(stored.meta, Some(json!({"spaceId": "space-1"})));
     assert_eq!(stored.sequence, 5, "sequence should be preserved");
+}
+
+// ============================================================================
+// Peer-span deletion diagnostic
+// ============================================================================
+
+/// A base-less full-value text write computed from a stale view emits Del
+/// ops for peer-authored spans — the tombstone signature. The diagnostic
+/// must flag it so the wasm layer can warn.
+#[test]
+fn patch_diagnostic_flags_stale_view_tombstoning() {
+    use betterbase_db::crdt::schema_aware::diff_model_with_schema;
+    use betterbase_db::crdt::{apply_patch, model_load, model_to_binary};
+    use betterbase_db::storage::traits::StorageSync as _;
+    use betterbase_db::types::{ApplyRemoteOptions, RemoteRecord};
+
+    let def = notes_text_def();
+    let typed = make_typed(&def);
+    let sid_local = put_opts().session_id.unwrap();
+    let sid_peer = sid_local + 11;
+
+    // Seed a note, sync it, then let a peer append to the text field.
+    let record = typed
+        .put(&def, json!({"body": "abc"}), None, Some(&put_opts()))
+        .expect("put");
+    let id = get_id(&record);
+    typed
+        .inner()
+        .mark_synced(&def, id, 1, None)
+        .expect("mark synced");
+
+    let stored = typed
+        .inner()
+        .get(&def, id, &GetOptions::default())
+        .unwrap()
+        .unwrap();
+    let mut peer_dst = stored.data.clone();
+    peer_dst["body"] = json!("abc-peer-tail");
+    let mut peer = model_load(&stored.crdt, sid_peer).unwrap();
+    let p = diff_model_with_schema(&peer, &peer_dst, &def.current_schema).unwrap();
+    apply_patch(&mut peer, &p);
+    typed
+        .inner()
+        .apply_remote_changes(
+            &def,
+            &[RemoteRecord {
+                id: id.to_string(),
+                version: 1,
+                crdt: Some(model_to_binary(&peer)),
+                deleted: false,
+                sequence: 2,
+                meta: None,
+            }],
+            &ApplyRemoteOptions::default(),
+        )
+        .expect("apply remote");
+
+    // Full-value write from the stale pre-peer view ("abc" → "xyz").
+    let (_data, flagged) = typed
+        .patch_with_diagnostic(&def, json!({"id": id, "body": "xyz"}), None, None)
+        .expect("patch");
+    assert!(flagged, "stale-view overwrite of peer text must be flagged");
+}
+
+/// Deleting only the writer's own content is ordinary editing — no flag.
+#[test]
+fn patch_diagnostic_ignores_own_span_deletions() {
+    let def = notes_text_def();
+    let typed = make_typed(&def);
+
+    let record = typed
+        .put(
+            &def,
+            json!({"body": "hello world"}),
+            None,
+            Some(&put_opts()),
+        )
+        .expect("put");
+    let id = get_id(&record);
+
+    // Same session as the put — the deleted chars are the writer's own.
+    let (_data, flagged) = typed
+        .patch_with_diagnostic(
+            &def,
+            json!({"id": id, "body": "hello"}),
+            None,
+            Some(&betterbase_db::types::PatchOptions {
+                id: id.to_string(),
+                session_id: put_opts().session_id,
+                ..Default::default()
+            }),
+        )
+        .expect("patch");
+    assert!(!flagged, "deleting own content is not tombstoning");
+}
+
+/// With a base snapshot the patch is anchored to what the user last saw —
+/// deletions of base-era peer content are deliberate edits, not tombstones.
+#[test]
+fn patch_diagnostic_silent_when_base_provided() {
+    use betterbase_db::crdt::schema_aware::diff_model_with_schema;
+    use betterbase_db::crdt::{apply_patch, model_load, model_to_binary};
+    use betterbase_db::storage::traits::StorageSync as _;
+    use betterbase_db::types::{ApplyRemoteOptions, RemoteRecord};
+
+    let def = notes_text_def();
+    let typed = make_typed(&def);
+    let sid = put_opts().session_id.unwrap();
+    let sid_peer = sid + 12;
+
+    let record = typed
+        .put(&def, json!({"body": "abc"}), None, Some(&put_opts()))
+        .expect("put");
+    let id = get_id(&record);
+
+    // Peer appends; the writer saw the appended view and captured a base.
+    let stored = typed
+        .inner()
+        .get(&def, id, &GetOptions::default())
+        .unwrap()
+        .unwrap();
+    let mut peer_dst = stored.data.clone();
+    peer_dst["body"] = json!("abc-peer");
+    let mut peer = model_load(&stored.crdt, sid_peer).unwrap();
+    let p = diff_model_with_schema(&peer, &peer_dst, &def.current_schema).unwrap();
+    apply_patch(&mut peer, &p);
+    typed
+        .inner()
+        .apply_remote_changes(
+            &def,
+            &[RemoteRecord {
+                id: id.to_string(),
+                version: 1,
+                crdt: Some(model_to_binary(&peer)),
+                deleted: false,
+                sequence: 2,
+                meta: None,
+            }],
+            &ApplyRemoteOptions::default(),
+        )
+        .expect("apply remote");
+
+    let after = typed
+        .inner()
+        .get(&def, id, &GetOptions::default())
+        .unwrap()
+        .unwrap();
+    let (_data, flagged) = typed
+        .patch_with_diagnostic(
+            &def,
+            json!({"id": id, "body": "abc"}),
+            None,
+            Some(&betterbase_db::types::PatchOptions {
+                id: id.to_string(),
+                session_id: Some(sid),
+                base: Some(after.crdt.clone()),
+                ..Default::default()
+            }),
+        )
+        .expect("patch");
+    assert!(!flagged, "base-anchored deletions are deliberate edits");
 }

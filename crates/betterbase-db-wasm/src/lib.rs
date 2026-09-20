@@ -10,6 +10,7 @@
 pub mod adapter;
 pub mod collection;
 pub mod conversions;
+pub mod diagnostics;
 pub mod error;
 pub mod middleware;
 pub mod sync;

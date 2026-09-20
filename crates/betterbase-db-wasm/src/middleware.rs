@@ -334,10 +334,13 @@ impl WasmTypedDb {
         let data_val = js_to_value(data)?;
         let w_opts = parse_opaque_opts(write_opts)?;
         let patch_opts = parse_patch_options(options)?;
-        let result = self
+        let (result, deleted_peer_spans) = self
             .typed()?
-            .patch(&def, data_val, w_opts.as_ref(), Some(&patch_opts))
+            .patch_with_diagnostic(&def, data_val, w_opts.as_ref(), Some(&patch_opts))
             .into_js()?;
+        if deleted_peer_spans {
+            crate::diagnostics::warn_peer_span_deletion(collection, &patch_opts.id);
+        }
         value_to_js(&result)
     }
 

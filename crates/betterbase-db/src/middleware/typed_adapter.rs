@@ -290,6 +290,21 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
         write_opts: Option<&Value>,
         patch_opts: Option<&PatchOptions>,
     ) -> Result<Value> {
+        self.patch_with_diagnostic(def, data, write_opts, patch_opts)
+            .map(|(data, _)| data)
+    }
+
+    /// Patch, additionally reporting whether this base-less write deleted
+    /// spans authored by another session — the signature of a full-value
+    /// write from a stale view tombstoning unseen peer edits. The wasm layer
+    /// surfaces it as a dev warning.
+    pub fn patch_with_diagnostic(
+        &self,
+        def: &CollectionDef,
+        data: Value,
+        write_opts: Option<&Value>,
+        patch_opts: Option<&PatchOptions>,
+    ) -> Result<(Value, bool)> {
         // Extract ID from data or patch_opts
         let id = data
             .as_object()
@@ -299,10 +314,15 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
             .unwrap_or_else(|| patch_opts.map_or_else(String::new, |o| o.id.clone()));
 
         let opts = self.resolve_patch_options(&id, write_opts, patch_opts);
+        let baseless = opts.base.is_none();
         let record = self.inner.patch(def, data, &opts)?;
+        let deleted_peer_spans = baseless
+            && crate::storage::record_manager::last_patch_deletes_peer_spans(
+                &record.pending_patches,
+            )?;
         let empty = Value::Object(Default::default());
         let meta = record.meta.as_ref().unwrap_or(&empty);
-        Ok(self.enrich_data(record.data, meta))
+        Ok((self.enrich_data(record.data, meta), deleted_peer_spans))
     }
 
     /// Delete a record.

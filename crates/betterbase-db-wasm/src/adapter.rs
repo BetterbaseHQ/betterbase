@@ -283,6 +283,14 @@ impl WasmDb {
         let data_val = js_to_value(data)?;
         let opts = parse_patch_options(options)?;
         let result = self.adapter.patch(&def, data_val, &opts).into_js()?;
+        if opts.base.is_none()
+            && betterbase_db::storage::record_manager::last_patch_deletes_peer_spans(
+                &result.pending_patches,
+            )
+            .unwrap_or(false)
+        {
+            crate::diagnostics::warn_peer_span_deletion(collection, &result.id);
+        }
         record_to_js_data(result)
     }
 

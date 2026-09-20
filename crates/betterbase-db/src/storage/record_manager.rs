@@ -770,6 +770,37 @@ pub fn normalize_index_value(value: &Value) -> Value {
 ///
 /// Replays local pending patches onto the remote Model (idempotent — operations
 /// already seen by the remote clock are safely skipped).
+/// Dev diagnostic for the wasm layer: did the most recent pending-patch
+/// entry delete spans authored by a session other than the op author?
+///
+/// This is expected when a user deliberately deletes peer-authored content,
+/// but it is also the exact signature of a full-value write computed from a
+/// stale view tombstoning peer edits the writer never saw. Callers surface
+/// it as a dev warning nudging toward base-aware patching
+/// (`patch(def, data, { base })` from `snapshotBase()`).
+///
+/// Note: a patch without an explicit session id is stamped with a fresh
+/// random sid, so deleting content authored by an earlier session also
+/// trips this — the remedy (pass a base) is the same either way.
+///
+/// Only checks each span's starting chunk id — a span beginning on the
+/// writer's own chunk could still extend over peer chunks, which this does
+/// not detect.
+pub fn last_patch_deletes_peer_spans(pending_patches: &[u8]) -> Result<bool> {
+    let patches = deserialize_patches(pending_patches)?;
+    let Some(patch) = patches.last() else {
+        return Ok(false);
+    };
+    for op in &patch.ops {
+        if let json_joy::json_crdt_patch::operations::Op::Del { id, what, .. } = op {
+            if what.iter().any(|span| span.sid != id.sid) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 pub fn merge_records(
     def: &CollectionDef,
     local: &SerializedRecord,
