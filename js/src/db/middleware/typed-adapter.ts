@@ -289,14 +289,26 @@ export class TypedAdapter<
 
   private resolveDeleteOptions(options?: TWriteOpts): DeleteOptions {
     const meta = this.resolveWriteMetadata(options);
-    return { meta };
+    // Spread the original options: engine-level fields (sessionId) must
+    // survive the middleware pass-through, with resolved meta overriding.
+    return { ...(options as DeleteOptions | undefined), meta };
   }
 
   private resolveWriteOptions(
     options?: TWriteOpts,
   ): PutOptions & { meta: Record<string, unknown> } {
     const meta = this.resolveWriteMetadata(options);
-    return { meta };
+    // Spread the original options: engine-level fields (id, sessionId,
+    // skipUniqueCheck) must survive the middleware pass-through. The
+    // middleware-resolved meta wins only when it routed somewhere — an empty
+    // resolution must not clobber a caller-supplied meta.
+    const callerMeta = (options as PutOptions | undefined)?.meta as
+      | Record<string, unknown>
+      | undefined;
+    return {
+      ...(options as PutOptions | undefined),
+      meta: Object.keys(meta).length > 0 ? meta : (callerMeta ?? {}),
+    };
   }
 
   private resolveWriteMetadata(options?: TWriteOpts): Record<string, unknown> {

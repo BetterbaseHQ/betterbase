@@ -114,4 +114,28 @@ describe("OPFS CRUD", () => {
     const deleted = await db.delete(users, "nonexistent");
     expect(deleted).toBe(false);
   });
+
+  it("unique index violation fails the put", async () => {
+    await db.put(users, { name: "Alice", email: "dup@test.com", age: 30 });
+    await expect(
+      db.put(users, { name: "Bob", email: "dup@test.com", age: 25 }),
+    ).rejects.toThrow(/dup@test\.com|unique/i);
+  });
+
+  it("get with includeDeleted reads back a tombstoned record", async () => {
+    const record = await db.put(users, {
+      name: "Alice",
+      email: "alice@test.com",
+      age: 30,
+    });
+    await db.delete(users, record.id);
+
+    // Default read hides the tombstone
+    expect(await db.get(users, record.id)).toBeNull();
+
+    // includeDeleted exposes it (with deleted flag in metadata)
+    const tombstone = await db.get(users, record.id, { includeDeleted: true });
+    expect(tombstone).not.toBeNull();
+    expect(tombstone!.id).toBe(record.id);
+  });
 });

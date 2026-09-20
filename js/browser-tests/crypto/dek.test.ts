@@ -49,4 +49,37 @@ describe("DEK wrap/unwrap (browser)", () => {
     const wrapped = wrapDEK(dek, kek1, 0);
     expect(() => unwrapDEK(wrapped, kek2)).toThrow();
   });
+
+  it("tampered wrapped DEK fails unwrap (integrity, not just wrong key)", () => {
+    const kek = randomKey();
+    const wrapped = wrapDEK(generateDEK(), kek, 1);
+
+    // Flip a byte in the AES-KW ciphertext (after the 4-byte epoch prefix)
+    const tampered = wrapped.slice();
+    tampered[10]! ^= 0x01;
+    expect(() => unwrapDEK(tampered, kek)).toThrow();
+  });
+
+  it("truncated and oversized wrapped DEKs fail unwrap", () => {
+    const kek = randomKey();
+    const wrapped = wrapDEK(generateDEK(), kek, 0);
+
+    for (const len of [0, 4, 12, 43]) {
+      expect(
+        () => unwrapDEK(wrapped.slice(0, len), kek),
+        `length ${len}`,
+      ).toThrow();
+    }
+    const oversize = new Uint8Array(wrapped.length + 1);
+    oversize.set(wrapped);
+    expect(() => unwrapDEK(oversize, kek)).toThrow();
+  });
+
+  it("generated DEKs are unique", () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 10; i++) {
+      seen.add(String.fromCharCode(...generateDEK()));
+    }
+    expect(seen.size).toBe(10);
+  });
 });

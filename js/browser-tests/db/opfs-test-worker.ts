@@ -5,8 +5,9 @@
  * initializes the OPFS worker infrastructure.
  */
 import { initWorker } from "../../src/db/opfs/init.js";
-import { buildUsersCollection } from "./opfs-helpers.js";
+import { buildUsersCollection, buildDocsCollection } from "./opfs-helpers.js";
 
 const users = buildUsersCollection();
+const docs = buildDocsCollection();
 
-initWorker([users]);
+initWorker([users, docs]);

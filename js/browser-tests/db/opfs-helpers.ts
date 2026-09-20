@@ -71,3 +71,17 @@ export function buildUsersCollection() {
 }
 
 export type UsersCollection = ReturnType<typeof buildUsersCollection>;
+
+/** Richer schema for the query operator matrix: arrays, nesting, optionals. */
+export function buildDocsCollection() {
+  return collection("docs")
+    .v(1, {
+      title: t.string(),
+      tags: t.array(t.string()),
+      meta: t.object({ category: t.string(), score: t.number() }),
+      note: t.optional(t.string()),
+    })
+    .build();
+}
+
+export type DocsCollection = ReturnType<typeof buildDocsCollection>;

@@ -217,4 +217,167 @@ describe("RpcClient", () => {
       expect(notifications[0]).toEqual({ type: "observe", data: "fresh" });
     });
   });
+
+  describe("call error handling", () => {
+    it("rejects when the worker responds with an error", async () => {
+      const t = createMockTransport();
+      const client = new RpcClient(t.transport);
+
+      const promise = client.call("put", ["users", {}], 5_000);
+      const id = (t.sent[0] as { id: number }).id;
+      t.deliverMessage({ type: "response", id, error: "schema invalid" });
+
+      await expect(promise).rejects.toThrow("schema invalid");
+      // Pending cleaned up: a duplicate response is a no-op
+      t.deliverMessage({ type: "response", id, result: "late" });
+    });
+
+    it("ignores responses for unknown or already-resolved ids", async () => {
+      const t = createMockTransport();
+      const client = new RpcClient(t.transport);
+
+      const promise = client.call("get", ["users", "x"], 5_000);
+      const id = (t.sent[0] as { id: number }).id;
+      t.deliverMessage({ type: "response", id: 9999, result: "ghost" });
+      t.deliverMessage({ type: "response", id, result: "real" });
+
+      await expect(promise).resolves.toBe("real");
+    });
+
+    it("times out with a descriptive error and cleans up pending", async () => {
+      vi.useFakeTimers();
+      try {
+        const t = createMockTransport();
+        const client = new RpcClient(t.transport);
+
+        const promise = client.call("open", ["db"], 100);
+        // Attach the handler before advancing so the rejection is never
+        // unhandled at the tick the timer fires.
+        const expectation = expect(promise).rejects.toThrow(
+          /Worker RPC timeout: open did not respond within 100ms/,
+        );
+        await vi.advanceTimersByTimeAsync(100);
+        await expectation;
+
+        // The timed-out call is gone: a late response must not resolve or
+        // reject anything (would be an unhandled rejection).
+        const id = (t.sent[0] as { id: number }).id;
+        t.deliverMessage({ type: "response", id, result: "late" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("transport errors reject all pending calls", async () => {
+      const t = createMockTransport();
+      const client = new RpcClient(t.transport);
+
+      const p1 = client.call("get", ["a"], 5_000);
+      const p2 = client.call("get", ["b"], 5_000);
+      t.deliverError(new Error("worker crashed"));
+
+      await expect(p1).rejects.toThrow("worker crashed");
+      await expect(p2).rejects.toThrow("worker crashed");
+    });
+  });
+
+  describe("lifecycle", () => {
+    it("removes the subscription entry when the setup call fails", async () => {
+      const t = createMockTransport();
+      const client = new RpcClient(t.transport);
+
+      const promise = client.subscribe("observe", ["users", "u1"], () => {});
+      const req = t.sent[0] as { id: number; type: string };
+      t.deliverMessage({ type: "response", id: req.id, error: "not found" });
+
+      await expect(promise).rejects.toThrow("not found");
+
+      // Entry was cleaned up: resubscribeAll must replay nothing
+      client.resubscribeAll();
+      expect(t.sent.length).toBe(1);
+    });
+
+    it("unsubscribe sends the wire message while live, suppresses it after terminate", async () => {
+      const t = createMockTransport();
+      const client = new RpcClient(t.transport);
+
+      const subPromise = client.subscribe("observe", ["users", "u1"], () => {});
+      const req = t.sent[0] as { id: number };
+      t.deliverMessage({ type: "response", id: req.id, result: undefined });
+      const [, unsubscribe] = await subPromise;
+
+      unsubscribe();
+      expect(t.sent.filter((m) => m.type === "unsubscribe").length).toBe(1);
+
+      client.terminate();
+      unsubscribe(); // must not throw or send
+      expect(t.sent.filter((m) => m.type === "unsubscribe").length).toBe(1);
+    });
+
+    it("terminate rejects pending, clears subscriptions, closes transport, and rejects new calls", async () => {
+      const t = createMockTransport();
+      const client = new RpcClient(t.transport);
+
+      const pending = client.call("get", ["a"], 5_000);
+      const onNotification = vi.fn();
+      const subPromise = client.subscribe(
+        "observeQuery",
+        ["users"],
+        onNotification,
+      );
+      const req = t.sent[1] as { id: number };
+      t.deliverMessage({ type: "response", id: req.id, result: undefined });
+      await subPromise;
+
+      client.terminate();
+
+      await expect(pending).rejects.toThrow("Worker terminated");
+      expect(t.transport.close).toHaveBeenCalledTimes(1);
+      await expect(client.call("get", ["b"], 5_000)).rejects.toThrow(
+        "Worker has been terminated",
+      );
+
+      // Subscriptions cleared: no resubscribe replay, no notifications
+      client.resubscribeAll();
+      expect(t.sent.filter((m) => m.type === "request").length).toBe(2);
+      t.deliverMessage({ type: "notification", subscriptionId: 1, payload: 1 });
+      expect(onNotification).not.toHaveBeenCalled();
+    });
+
+    it("resubscribeAll replays each subscription with a fresh request id and the subscriptionId appended last", async () => {
+      const t = createMockTransport();
+      const client = new RpcClient(t.transport);
+
+      const sub1 = client.subscribe("observe", ["users", "u1"], () => {});
+      const sub2 = client.subscribe(
+        "observeQuery",
+        ["users", { limit: 5 }],
+        () => {},
+      );
+      for (const req of [t.sent[0], t.sent[1]] as { id: number }[]) {
+        t.deliverMessage({ type: "response", id: req.id, result: undefined });
+      }
+      await Promise.all([sub1, sub2]);
+
+      client.resubscribeAll();
+      const replays = t.sent.slice(2).filter((m) => m.type === "request");
+      expect(replays.length).toBe(2);
+      // Fresh request ids (monotonic past the originals)
+      expect((replays[0] as { id: number }).id).toBeGreaterThan(
+        (t.sent[1] as { id: number }).id,
+      );
+      // Original args preserved with subscriptionId appended at the END —
+      // the worker dispatches on this arg order.
+      expect((replays[0] as { method: string; args: unknown[] }).args).toEqual([
+        "users",
+        "u1",
+        1,
+      ]);
+      expect((replays[1] as { method: string; args: unknown[] }).args).toEqual([
+        "users",
+        { limit: 5 },
+        2,
+      ]);
+    });
+  });
 });

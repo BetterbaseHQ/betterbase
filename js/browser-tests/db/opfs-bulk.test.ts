@@ -69,4 +69,42 @@ describe("OPFS bulk operations", () => {
     ]);
     expect(result.errors.length).toBe(0);
   });
+
+  it("bulkPut reports partial failure: the valid record persists, the invalid one errors", async () => {
+    await db.put(users, { name: "Taken", email: "taken@test.com", age: 1 });
+
+    const result = await db.bulkPut(users, [
+      { name: "Good", email: "good@test.com", age: 30 },
+      { name: "Bad", email: "taken@test.com", age: 25 }, // unique violation
+    ]);
+
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0]).toMatchObject({ collection: "users" });
+    expect(result.records.length).toBe(1);
+    expect(result.records[0].name).toBe("Good");
+
+    // The valid record really persisted
+    const all = await db.getAll(users);
+    expect(all.map((r) => r.name).sort()).toEqual(["Good", "Taken"]);
+  });
+
+  it("bulkPut and bulkDelete accept empty arrays", async () => {
+    const put = await db.bulkPut(users, []);
+    expect(put.records.length).toBe(0);
+    expect(put.errors.length).toBe(0);
+
+    const del = await db.bulkDelete(users, []);
+    expect(del.deleted_ids.length).toBe(0);
+    expect(del.errors.length).toBe(0);
+  });
+
+  it("bulkDelete mixed existing/nonexistent deletes only what exists, without errors", async () => {
+    const put = await db.bulkPut(users, [
+      { name: "A", email: "a@test.com", age: 1 },
+    ]);
+    const result = await db.bulkDelete(users, [put.records[0].id, "missing-1"]);
+
+    expect(result.deleted_ids).toEqual([put.records[0].id]);
+    expect(result.errors.length).toBe(0);
+  });
 });
