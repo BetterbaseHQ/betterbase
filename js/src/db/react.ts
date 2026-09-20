@@ -183,9 +183,16 @@ export interface EditableRecord<S extends SchemaShape> {
   /**
    * Patch fields onto the record, anchored to `base`. The next rendered
    * version becomes the new anchor automatically.
+   *
+   * `baseOverride` anchors the diff to an explicit snapshot instead of the
+   * currently delivered one — for writers that debounce or otherwise hold a
+   * value derived from an *earlier* delivery (e.g. a keystroke captured
+   * before a peer edit synced in). Pass the `base` captured when the value
+   * was derived; the patch then merges with everything that landed since.
    */
   update: (
     fields: Partial<Omit<CollectionPatch<S>, "id">>,
+    baseOverride?: Uint8Array | null,
   ) => Promise<CollectionRead<S>>;
 }
 
@@ -248,17 +255,30 @@ export function useEditableRecord<S extends SchemaShape>(
   );
 
   const update = useCallback(
-    async (fields: Partial<Omit<CollectionPatch<S>, "id">>) => {
+    async (
+      fields: Partial<Omit<CollectionPatch<S>, "id">>,
+      baseOverride?: Uint8Array | null,
+    ) => {
       const current = snapshotRef.current;
       if (!current?.record) {
         throw new Error(
           "useEditableRecord.update: record not loaded (or deleted)",
         );
       }
+      if (
+        baseOverride !== undefined &&
+        baseOverride !== null &&
+        baseOverride.length === 0
+      ) {
+        console.warn(
+          "useEditableRecord.update: baseOverride is empty — pass null to patch unanchored, or a snapshot from the hook's base",
+        );
+      }
+      const base = baseOverride !== undefined ? baseOverride : current.base;
       return db.patch(
         def,
         { ...(fields as object), id: current.record.id } as CollectionPatch<S>,
-        current.base ? { base: current.base } : undefined,
+        base ? { base } : undefined,
       );
     },
     [db, def],

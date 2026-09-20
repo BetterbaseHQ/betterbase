@@ -416,6 +416,28 @@ describe("useEditableRecord", () => {
     });
   });
 
+  it("update honors an explicit base override over the delivered one", async () => {
+    const db = makeDb();
+    const { result } = renderHook(() => useEditableRecord(editNotes, "n1"), {
+      wrapper: wrapper(db),
+    });
+    act(() => db.pushBaseRecord("n1", { id: "n1", body: "v1" }, base1));
+    // A peer edit lands after the writer captured its value+base.
+    act(() => db.pushBaseRecord("n1", { id: "n1", body: "v2" }, base2));
+
+    await result.current.update({ body: "v1-derived" }, base1);
+    expect(db.recordedPatches()[0]).toMatchObject({
+      fields: { body: "v1-derived" },
+      base: base1,
+    });
+
+    // Explicit null means unanchored; undefined falls back to the delivered base.
+    await result.current.update({ body: "unanchored" }, null);
+    await result.current.update({ body: "current" });
+    expect(db.recordedPatches()[1]?.base).toBeFalsy();
+    expect(db.recordedPatches()[2]).toMatchObject({ base: base2 });
+  });
+
   it("update rejects before the record loads", async () => {
     const db = makeDb();
     const { result } = renderHook(() => useEditableRecord(editNotes, "n1"), {
