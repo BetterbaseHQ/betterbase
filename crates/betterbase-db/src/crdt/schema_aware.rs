@@ -1197,4 +1197,58 @@ mod tests {
         assert_eq!(merged["body"], "New body text");
         assert_eq!(merged["score"], 1);
     }
+    /// Documents the stale-write hazard found by the e2e conflict-reconcile
+    /// capstone: when a device's local model already contains a peer's text
+    /// edit (pulled while the writer wasn't looking) and the writer then
+    /// patches the field with a full value derived from a stale view, the
+    /// view-diff emits a Del for the peer's chars. The tombstone then wins
+    /// over the peer's own re-inserted InsStr during merge replay — the peer's
+    /// edit is permanently lost on both devices.
+    ///
+    /// This is current, intended LWW-style semantics for full-value writes:
+    /// the new value is authoritative for the whole field. Apps that must
+    /// preserve concurrent text should compute their patches against the view
+    /// they actually rendered (or use incremental text edits).
+    #[test]
+    fn stale_full_value_write_tombstones_unseen_peer_text() {
+        use base64::Engine;
+        // Captured from the e2e capstone failure: A's pushed fork (prepend +
+        // tombstone of B's append), B's local fork (append), B's patch log.
+        let e64 = "AAAAsIIyRWRib2R5gjGDHngPQSB3YXMgaGVyZSDigJQggjB4K1RoZSBxdWljayBicm93biBmb3gganVtcHMgb3ZlciB0aGUgbGF6eSBkb2c/DngJY3JlYXRlZEF0JQAbAAABoMAQNEBiaWQkAHgkMDQyM2ViMGItYzJjMi00MzZkLWFkZGUtMWJmZmFlMzY3Njk3eAZwaW5uZWQjAPR4CXVwZGF0ZWRBdBEAGwAAAaDAEDxIA9+Hn5iaioAlU9+Hn5iaioAlM5LSz5bjwqQiQw==";
+        let b_crdt = "AAAAr4IyRWRib2R5gjGCgjB4K1RoZSBxdWljayBicm93biBmb3gganVtcHMgb3ZlciB0aGUgbGF6eSBkb2cfeBAg4oCUIEIgd2FzIGhlcmUueAljcmVhdGVkQXQlABsAAAGgwBA0QGJpZCQAeCQwNDIzZWIwYi1jMmMyLTQzNmQtYWRkZS0xYmZmYWUzNjc2OTd4BnBpbm5lZCMA9HgJdXBkYXRlZEF0EQAbAAABoMAQOMICktLPluPCpCJD34efmJqKgCUz";
+        let p64 = "AQAAAFCS0s+W48KkIjT3A2AQgt+Hn5iaioAlrd+Hn5iaioAlIOKAlCBCIHdhcyBoZXJlLgAbAAABoMAQOMJRgd+Hn5iaioAleAl1cGRhdGVkQXRCAQ==";
+        let engine = base64::engine::general_purpose::STANDARD;
+        let remote_bin = engine.decode(e64).unwrap();
+        let patches_bin = engine.decode(p64).unwrap();
+        let local_bin = engine.decode(b_crdt).unwrap();
+
+        let mut schema = test_schema();
+        schema.insert("pinned".to_string(), SchemaNode::Boolean);
+
+        let mut remote_model = crate::crdt::model_from_binary(&remote_bin).unwrap();
+        let remote_only_view =
+            deserialize_from_crdt(&schema, &crate::crdt::view_model(&remote_model));
+        assert_eq!(
+            remote_only_view["body"],
+            "A was here — The quick brown fox jumps over the lazy dog"
+        );
+
+        let local_view_model = crate::crdt::model_from_binary(&local_bin).unwrap();
+        assert_eq!(
+            deserialize_from_crdt(&schema, &crate::crdt::view_model(&local_view_model))["body"],
+            "The quick brown fox jumps over the lazy dog — B was here."
+        );
+
+        let patches = crate::crdt::patch_log::deserialize_patches(&patches_bin).unwrap();
+        assert_eq!(patches.len(), 1);
+
+        crate::crdt::merge_with_pending_patches(&mut remote_model, &patches);
+        let merged_view = deserialize_from_crdt(&schema, &crate::crdt::view_model(&remote_model));
+
+        // The tombstone in A's fork wins: B's append does not survive replay.
+        assert_eq!(
+            merged_view["body"],
+            "A was here — The quick brown fox jumps over the lazy dog"
+        );
+    }
 }

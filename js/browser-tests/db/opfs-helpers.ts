@@ -72,6 +72,13 @@ export function buildUsersCollection() {
 
 export type UsersCollection = ReturnType<typeof buildUsersCollection>;
 
+/** Text (RGA) collection for CRDT merge tests. */
+export function buildNotesCollection() {
+  return collection("notes").v(1, { body: t.text() }).build();
+}
+
+export type NotesCollection = ReturnType<typeof buildNotesCollection>;
+
 /** Richer schema for the query operator matrix: arrays, nesting, optionals. */
 export function buildDocsCollection() {
   return collection("docs")
