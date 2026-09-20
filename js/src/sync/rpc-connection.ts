@@ -45,6 +45,14 @@ const REQUEST_TIMEOUT = 30_000;
 const MAX_FRAME_BYTES = 4 * 1024 * 1024; // 4 MiB (matches server wsReadLimit)
 
 /**
+ * A connection must stay open this long before the reconnect backoff
+ * resets. Without this, a flapping connection (or a server repeatedly
+ * closing with token-expired) resets the attempt counter on every open
+ * and reconnects at full speed forever.
+ */
+const STABLE_CONNECTION_MS = 5_000;
+
+/**
  * WebSocket RPC connection with CBOR binary framing, auto-reconnect,
  * and typed call/callChunked/notify operations.
  */
@@ -55,6 +63,7 @@ export class RpcConnection {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private openedAt = 0;
 
   // --- RPC pending tracking ---
   private pending = new Map<string, PendingCall>();
@@ -176,13 +185,13 @@ export class RpcConnection {
     return new Promise<void>((resolve, reject) => {
       ws.onopen = () => {
         this.ws = ws;
+        this.openedAt = Date.now();
         // Send token as first frame (over encrypted TLS channel)
         this.sendRaw({
           type: RPC_NOTIFICATION,
           method: "auth",
           params: { token },
         });
-        this.reconnectAttempt = 0;
         this.config.onOpen?.();
         resolve();
       };
@@ -199,6 +208,15 @@ export class RpcConnection {
 
       ws.onclose = (event: CloseEvent) => {
         this.ws = null;
+        // A connection that stayed open for a while was healthy — the next
+        // drop starts backoff from scratch. A quick flap (or a server
+        // repeatedly closing with token-expired) keeps growing the backoff.
+        if (
+          this.openedAt > 0 &&
+          Date.now() - this.openedAt >= STABLE_CONNECTION_MS
+        ) {
+          this.reconnectAttempt = 0;
+        }
         this.rejectAllPending(
           new Error(`connection lost (code ${event.code})`),
         );
