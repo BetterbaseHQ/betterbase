@@ -157,6 +157,21 @@ export interface SyncTransportConfig {
  *
  * Pull accepts pre-pulled changes from the outer transport for decryption.
  */
+/**
+ * A fresh-epoch key share could not be fetched due to a transient failure
+ * (network, WS drop). Records failing decryption for this reason are
+ * retryable — the next pull re-attempts resolution.
+ */
+export class TransientKeyResolutionError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message);
+    this.name = "TransientKeyResolutionError";
+    if (options?.cause !== undefined) {
+      (this as { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
 export class SyncTransport implements SyncTransportInterface {
   private pushFn: (changes: Change[]) => Promise<PushResult>;
   private spaceId?: string;
@@ -468,7 +483,10 @@ export class SyncTransport implements SyncTransportInterface {
             id: f.id,
             sequence: f.sequence,
             error: f.error,
-            retryable: false, // Decryption failures are permanent
+            // Decryption failures are permanent — except transient key-share
+            // resolution failures (rotation window + flaky network), which
+            // the next pull retries (AUD-024).
+            retryable: f.error instanceof TransientKeyResolutionError,
           }))
         : undefined;
 
@@ -1023,29 +1041,26 @@ export class SyncTransport implements SyncTransportInterface {
 
   /**
    * Resolve the KEK for an epoch, preferring a fresh-rotation share over
-   * derivation (AUD-024). Resolved shares are cached; a derivation FALLBACK
-   * is never cached under a resolver-eligible epoch (a transient share-fetch
-   * failure must not poison the epoch with a wrong derived key).
+   * derivation (AUD-024). Resolved shares are cached; a transient share
+   * failure never poisons the cache — it rethrows as
+   * TransientKeyResolutionError so the record's decryption visibly fails as
+   * retryable rather than silently succeeding with a wrong derived key.
    */
   private async kekForEpoch(dekEpoch: number): Promise<Uint8Array> {
     if (dekEpoch > this.baseEpoch && this.epochKeyResolver) {
       const cached = this.derivedKeyCache.get(dekEpoch);
       if (cached) return cached;
-      try {
-        const resolved = await this.epochKeyResolver(dekEpoch);
-        if (resolved) {
-          this.derivedKeyCache.set(dekEpoch, resolved);
-          return resolved;
-        }
-      } catch (err) {
-        // Definitive "no share" falls through to derivation; transient
-        // failures rethrow so this record's decryption visibly fails and is
-        // retried later rather than silently succeeding with a wrong key.
-        const notFound =
-          err instanceof Error &&
-          "code" in err &&
-          (err as { code?: unknown }).code === "not_found";
-        if (!notFound) throw err;
+      // The resolver maps a definitive "no share" (legacy epoch) to null;
+      // transient failures throw and propagate as retryable.
+      const resolved = await this.epochKeyResolver(dekEpoch).catch((err) => {
+        throw new TransientKeyResolutionError(
+          err instanceof Error ? err.message : String(err),
+          { cause: err },
+        );
+      });
+      if (resolved) {
+        this.derivedKeyCache.set(dekEpoch, resolved);
+        return resolved;
       }
     }
     return this.getKEKForEpoch(dekEpoch);

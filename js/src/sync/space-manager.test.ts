@@ -751,6 +751,12 @@ describe("SpaceManager", () => {
       // completion is immediately followed by a fresh re-rotation (D-005):
       // final epoch 3, second rewrap with a fresh key.
       expect(manager.getSpaceEpoch("s1")).toBe(3);
+      // The follow-up rotation distributed fresh shares for epoch 3.
+      const followUpPuts = server.sent.filter(
+        (f) => f.method === "epochKeys.put",
+      );
+      expect(followUpPuts).toHaveLength(1);
+      expect((followUpPuts[0]!.params as { epoch: number }).epoch).toBe(3);
       expect(vi.mocked(rewrapAllDEKs)).toHaveBeenCalledWith(
         expect.objectContaining({ newEpoch: 3, freshKey: true }),
       );
@@ -772,6 +778,66 @@ describe("SpaceManager", () => {
   });
 
   describe("removeMember (fresh-key rotation, AUD-024)", () => {
+    it("shares reach re-invited members but not stale revoked delegations", async () => {
+      await activate();
+
+      const memberEntry = (aud: string) => ({
+        ucan: ucan(SELF_DID, aud, "/space/write", { with: "space:s1" }),
+        type: "d" as const,
+        signature: new Uint8Array([1, 2, 3, 4]),
+        signerPublicKey: jwkFor(SELF_DID),
+        epoch: 1,
+        mailboxId: `mbx-${aud}`,
+        publicKeyJwk: jwkFor(aud),
+      });
+      const revokeEntry = (aud: string) => ({
+        ucan: ucan(SELF_DID, aud, "/space/write", { with: "space:s1" }),
+        type: "r" as const,
+        signature: new Uint8Array([1, 2, 3, 4]),
+        signerPublicKey: jwkFor(SELF_DID),
+        epoch: 1,
+      });
+      // Log: friend delegated; ghost delegated then revoked (never
+      // re-invited); reinvite target revoked then re-invited; the victim.
+      const seq = (
+        entry: ReturnType<typeof memberEntry> | ReturnType<typeof revokeEntry>,
+        n: number,
+      ) => ({
+        chain_seq: n,
+        prev_hash: new Uint8Array(0),
+        entry_hash: new Uint8Array(0),
+        payload: new TextEncoder().encode(serializeMembershipEntry(entry)),
+      });
+      membershipLog.entries = [
+        seq(memberEntry("did:key:victim"), 1),
+        seq(memberEntry("did:key:friend"), 2),
+        seq(memberEntry("did:key:ghost"), 3),
+        seq(revokeEntry("did:key:ghost"), 4),
+        seq(revokeEntry("did:key:reinvite"), 5),
+        seq(memberEntry("did:key:reinvite"), 6),
+      ];
+
+      let shareRecipients: string[] = [];
+      server.handle("membership.revoke", () => ({}));
+      server.handle("epochKeys.put", (params) => {
+        shareRecipients = (
+          params as { keys: Array<{ member_did: string }> }
+        ).keys.map((k) => k.member_did);
+        return { count: shareRecipients.length };
+      });
+      server.handle("invitation.create", () => ({ id: "inv-notice" }));
+
+      await manager.removeMember("s1", "did:key:victim");
+
+      // Active members receive shares: friend (never revoked) and reinvite
+      // (revoked then re-invited). Ghost's stale delegation does NOT.
+      expect(shareRecipients.sort()).toEqual([
+        "did:key:friend",
+        "did:key:mock-self",
+        "did:key:reinvite",
+      ]);
+    });
+
     it("names the member DID on revoke, distributes shares to remaining members only, and rewraps with a fresh key", async () => {
       await activate();
 

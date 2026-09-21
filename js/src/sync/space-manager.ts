@@ -140,6 +140,8 @@ export class SpaceManager {
   private memberRefreshPromises = new Map<string, Promise<Member[]>>();
   /** Spaces currently undergoing admin-initiated removal (suppresses self-revocation). */
   private activeRemovalSpaces = new Set<string>();
+  /** Spaces with a fresh re-rotation follow-up in flight (recursion bound). */
+  private freshFollowupActive = new Set<string>();
 
   constructor(config: SpaceManagerConfig) {
     this.config = config;
@@ -789,12 +791,14 @@ export class SpaceManager {
     );
     const decrypted = this.decryptLogEntries(log.entries, syncCrypto, spaceId);
     const ucanCIDs: string[] = [];
-    const remainingEntries: string[] = [];
-    const remainingContacts: MemberContact[] = []; // fresh-key recipients
     const ucansToRevoke: string[] = []; // UCANs needing revocation log entries
-    // DIDs whose delegations were revoked by earlier removals — they must
-    // not receive fresh-key shares (AUD-024).
-    const previouslyRevoked = new Set<string>();
+    // Order-sensitive active-member tracking (AUD-024): a `d` entry
+    // (re-)activates its audience; an `r` entry deactivates it. Fresh-key
+    // shares and the re-encrypted log cover only members whose FINAL state
+    // is active — a revoked-then-re-invited member must receive the key,
+    // while a stale pre-revocation delegation must not be resurrected.
+    const contactsByDid = new Map<string, MemberContact>();
+    const payloadsByDid = new Map<string, string>();
     let memberContact:
       | { mailboxId: string; publicKeyJwk: JsonWebKey }
       | undefined;
@@ -803,9 +807,10 @@ export class SpaceManager {
     for (const { payloadStr, entry: memberEntry } of decrypted) {
       const parsed = parseUCANPayload(memberEntry.ucan);
 
-      // Revocation entries deactivate their audience for key distribution.
+      // Revocation entries deactivate their audience.
       if (memberEntry.type === "r") {
-        previouslyRevoked.add(parsed.audienceDID);
+        contactsByDid.delete(parsed.audienceDID);
+        payloadsByDid.delete(parsed.audienceDID);
         continue;
       }
       // Only process delegation entries for member discovery
@@ -828,21 +833,19 @@ export class SpaceManager {
           };
         }
       } else {
-        // Preserve the full serialized entry (including contact info)
-        remainingEntries.push(payloadStr);
-        // Collect the remaining member's delivery info for fresh-key
-        // distribution (AUD-024): the replacement key must reach them.
-        if (
-          memberEntry.publicKeyJwk &&
-          !previouslyRevoked.has(parsed.audienceDID)
-        ) {
-          remainingContacts.push({
-            did: parsed.audienceDID,
-            publicKeyJwk: memberEntry.publicKeyJwk,
-          });
-        }
+        // Latest delegation wins for the member's final state.
+        contactsByDid.set(parsed.audienceDID, {
+          did: parsed.audienceDID,
+          publicKeyJwk: memberEntry.publicKeyJwk,
+        });
+        payloadsByDid.set(parsed.audienceDID, payloadStr);
       }
     }
+
+    const remainingEntries = [...payloadsByDid.values()];
+    const remainingContacts = [...contactsByDid.values()].filter(
+      (contact) => !!contact.publicKeyJwk,
+    );
 
     if (ucanCIDs.length === 0) {
       throw new Error(`Member ${memberDID} not found in space ${spaceId}`);
@@ -1271,13 +1274,20 @@ export class SpaceManager {
     // If the completed epoch had no distributed share (orphaned pre-
     // distribution advance), its key is derivable by removed members —
     // immediately schedule a fresh re-rotation for shared spaces (D-005).
-    if (spaceUCAN && share === null) {
-      await this.rotateSpaceKey(spaceId).catch((err) => {
+    // Bounded: a follow-up already in flight for this space suppresses
+    // nested follow-ups (rotate → conflict → complete → follow-up ...).
+    if (spaceUCAN && share === null && !this.freshFollowupActive.has(spaceId)) {
+      this.freshFollowupActive.add(spaceId);
+      try {
+        await this.rotateSpaceKey(spaceId);
+      } catch (err) {
         console.error(
           `[betterbase-sync] Fresh re-rotation after derived completion failed for ${spaceId}:`,
           err,
         );
-      });
+      } finally {
+        this.freshFollowupActive.delete(spaceId);
+      }
     }
   }
 
@@ -1675,7 +1685,7 @@ export class SpaceManager {
    * derived-key epoch) to null; every other failure rethrows so callers
    * never derive a fresh-rotation key from transient errors.
    */
-  private async resolveEpochKeyOrNull(
+  async resolveEpochKeyOrNull(
     spaceId: string,
     epoch: number,
   ): Promise<Uint8Array | null> {

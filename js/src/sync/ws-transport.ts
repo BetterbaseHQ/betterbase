@@ -572,7 +572,7 @@ export class WSTransport implements SyncTransportInterface {
       // Fresh-key rotation (AUD-024): future-epoch DEKs resolve their
       // distributed keys on demand instead of deriving from the base.
       resolveEpochKey: (epoch) =>
-        this.config.spaceManager.resolveEpochKey(spaceId, epoch),
+        this.config.spaceManager.resolveEpochKeyOrNull(spaceId, epoch),
     });
     this.spaceTransports.set(spaceId, transport);
     if (spaceKey) {
