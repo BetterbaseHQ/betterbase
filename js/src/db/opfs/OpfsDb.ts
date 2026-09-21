@@ -210,6 +210,10 @@ export class Database {
    * `get()` followed by `snapshotBase()`, where the base could correspond
    * to a newer version than the returned view (diffing the two would
    * tombstone the concurrent edits).
+   *
+   * Note: tombstones return `{ record, base: null }` — the base read does
+   * not honor `options.includeDeleted` (callers must not base-anchor a
+   * patch against a deleted record; `patch` rejects tombstones anyway).
    */
   async getWithBase<S extends SchemaShape>(
     def: CollectionDefHandle<string, S>,

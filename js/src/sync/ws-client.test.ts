@@ -157,6 +157,33 @@ describe("WSClient", () => {
     expect(s1!.prev).toBe(3);
   });
 
+  it("rejects a duplicate pull.begin for the same space (AUD-025 review)", async () => {
+    server.handle("pull", (_params, reply) => {
+      const id = reply.socket.sentFrames.find((f) => f.method === "pull")!
+        .id as string;
+      reply.chunk(id, "pull.begin", {
+        space: "s1",
+        prev: 0,
+        cursor: 5,
+        key_generation: 1,
+      });
+      // Buggy/malicious server repeats the begin — the first segment must
+      // not be silently discarded.
+      reply.chunk(id, "pull.begin", {
+        space: "s1",
+        prev: 0,
+        cursor: 5,
+        key_generation: 1,
+      });
+      return { _chunks: 2 };
+    });
+    await connect();
+
+    await expect(client.pull([{ id: "s1", since: 0 }])).rejects.toThrow(
+      /duplicate pull.begin/,
+    );
+  });
+
   it("falls back to prev when nothing is delivered from a partial stream (AUD-025)", async () => {
     server.handle("pull", (_params, reply) => {
       const id = reply.socket.sentFrames.find((f) => f.method === "pull")!

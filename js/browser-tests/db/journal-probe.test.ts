@@ -26,6 +26,10 @@ describe("OPFS journal mode (AUD-017)", () => {
         },
       ),
     });
-    expect(await db.journalMode()).toBe("persist");
+    try {
+      expect(await db.journalMode()).toBe("persist");
+    } finally {
+      await db.close();
+    }
   });
 });

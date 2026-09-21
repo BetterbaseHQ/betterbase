@@ -286,6 +286,7 @@ describe("WSTransport", () => {
       expect(result.failures).toHaveLength(1);
       expect(result.failures![0]!.id).toBe("bad");
       expect(result.failures![0]!.sequence).toBe(4);
+      expect(result.failures![0]!.retryable).toBe(false);
       expect(result.latestSequence).toBe(3);
       transport.commitPersistedCursors("notes");
       expect(cursorStore.set).toHaveBeenCalledWith("notes:space-personal", 3);
@@ -462,5 +463,158 @@ describe("WSTransport", () => {
       expect(pullCalls).toEqual(["controller:notes", "controller:tasks"]);
       expect(result.pulled).toBe(2);
     });
+  });
+});
+
+describe("WSTransport AUD-025 review fixes", () => {
+  let server: FakeSyncServer;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetFakeWebSocket();
+    server = new FakeSyncServer();
+    stubWebSocket(server);
+  });
+
+  afterEach(() => {
+    server.destroy();
+    vi.unstubAllGlobals();
+    resetFakeWebSocket();
+    vi.useRealTimers();
+  });
+
+  const connect = async (ws: WSClient) => {
+    const p = ws.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    return p;
+  };
+
+  /** Pull handler with one permanently-undecryptable record at seq 4. */
+  const failingPullHandler = () =>
+    server.handle("pull", (params, reply) => {
+      const since = (params as { spaces: Array<{ id: string; since: number }> })
+        .spaces[0]!.since;
+      const id = reply.socket.sentFrames
+        .filter((f) => f.method === "pull")
+        .pop()!.id as string;
+      reply.chunk(id, "pull.begin", {
+        space: PERSONAL,
+        prev: since,
+        cursor: 5,
+        key_generation: 1,
+      });
+      reply.chunk(id, "pull.record", {
+        space: PERSONAL,
+        id: "ok1",
+        blob: null,
+        cursor: 3,
+        deleted: true,
+      });
+      reply.chunk(id, "pull.record", {
+        space: PERSONAL,
+        id: "bad",
+        blob: new Uint8Array([0x04, 1, 2, 3, 4]),
+        cursor: 4,
+        deleted: false,
+      });
+      reply.chunk(id, "pull.commit", { space: PERSONAL, count: 2, cursor: 5 });
+      return { _chunks: 4 };
+    });
+
+  it("releases a permanent-decrypt cursor gate after repeated pulls", async () => {
+    failingPullHandler();
+    const { ws, transport, cursorStore } = makeHarness();
+    await connect(ws);
+
+    // Four cycles hold the gate at 3 (the failed record re-pulls each time).
+    for (let i = 0; i < 4; i++) {
+      await transport.pull("notes", 0);
+      transport.commitPersistedCursors("notes");
+    }
+    expect(cursorStore.set).toHaveBeenLastCalledWith("notes:space-personal", 3);
+
+    // The fifth cycle releases the gate and advances to the head with a
+    // loud error — re-pulling a record that will never decrypt forever
+    // would wedge the space.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await transport.pull("notes", 0);
+    transport.commitPersistedCursors("notes");
+    expect(cursorStore.set).toHaveBeenLastCalledWith("notes:space-personal", 5);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("a realtime event does not leap a gated collection past its cursor", async () => {
+    failingPullHandler();
+    const { ws, transport, cursorStore } = makeHarness();
+    await connect(ws);
+
+    // notes gates at 3 (decrypt failure at 4).
+    await transport.pull("notes", 0);
+    transport.commitPersistedCursors("notes");
+
+    // tasks catches up cleanly to 5.
+    server.handle("pull", (params, reply) => {
+      const since = (params as { spaces: Array<{ id: string; since: number }> })
+        .spaces[0]!.since;
+      const id = reply.socket.sentFrames
+        .filter((f) => f.method === "pull")
+        .pop()!.id as string;
+      reply.chunk(id, "pull.begin", {
+        space: PERSONAL,
+        prev: since,
+        cursor: 5,
+        key_generation: 1,
+      });
+      reply.chunk(id, "pull.commit", { space: PERSONAL, count: 0, cursor: 5 });
+      return { _chunks: 2 };
+    });
+    await transport.pull("tasks", 0);
+    transport.commitPersistedCursors("tasks");
+
+    // A realtime event contiguous with tasks (prev 5) but NOT with the
+    // gated notes (3) must fall back to a full pull — the fast path must
+    // not advance notes to the event's sequence.
+    const pullCalls: string[] = [];
+    const controller = {
+      getCollections: () => [{ name: "notes" }, { name: "tasks" }],
+      pull: vi.fn(async (def: { name: string }) => {
+        pullCalls.push(def.name);
+        return { pulled: 0, merged: 0, errors: [] };
+      }),
+    } as never;
+
+    await transport.applySyncEvent(
+      { space: PERSONAL, records: [], prev: 5, seq: 6 },
+      controller,
+    );
+
+    expect(pullCalls).toEqual(["notes", "tasks"]);
+    expect(cursorStore.set).not.toHaveBeenCalledWith("notes:space-personal", 6);
+
+    // Contiguous event (prev === min cursor): only collections sitting at
+    // prev advance; tasks (at 5) must not be touched.
+    const sets: Array<[string, number]> = [];
+    (cursorStore.set as ReturnType<typeof vi.fn>).mockImplementation(
+      (k: string, v: number) => {
+        sets.push([k, v]);
+        return Promise.resolve();
+      },
+    );
+    const result = await transport.applySyncEvent(
+      { space: PERSONAL, records: [], prev: 3, seq: 4 },
+      {
+        getCollections: () => [{ name: "notes" }, { name: "tasks" }],
+        applyRemoteRecords: vi.fn(async () => ({
+          count: 0,
+          mergedCount: 0,
+          records: [],
+          errors: [],
+        })),
+      } as never,
+    );
+    expect(result.errors).toEqual([]);
+    expect(sets).toContainEqual(["notes:space-personal", 4]);
+    expect(sets).not.toContainEqual(["tasks:space-personal", 4]);
   });
 });

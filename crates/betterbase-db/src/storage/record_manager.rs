@@ -586,7 +586,10 @@ pub fn prepare_mark_synced(
         let deleted_changed = record.deleted != snap.deleted;
         // Metadata-only changes (e.g. routing metadata) never touch the
         // patch log or the deleted flag — the snapshot's meta is the only
-        // witness that a newer one exists (AUD-019).
+        // witness that a newer one exists (AUD-019). Structural Value
+        // equality: keep meta to JSON-safe shapes (integers within 2^53,
+        // no non-finite floats) or a JS↔Rust round-trip could make equal
+        // values compare unequal and pin the record dirty.
         let meta_changed = snap
             .meta
             .as_ref()

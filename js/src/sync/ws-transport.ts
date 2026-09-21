@@ -91,6 +91,8 @@ export interface WSTransportConfig {
 export class WSTransport implements SyncTransportInterface {
   /** Max epoch rotations per pull to avoid blocking sync after long offline periods. */
   private static readonly MAX_ROTATIONS_PER_PULL = 3;
+  /** Consecutive pulls a permanent-decrypt cursor gate may hold (AUD-025). */
+  private static readonly MAX_GATE_ATTEMPTS = 5;
 
   private config: WSTransportConfig;
   private wsClient: WSClient;
@@ -109,6 +111,12 @@ export class WSTransport implements SyncTransportInterface {
     string,
     { collection: string; spaceId: string; cursor: number }
   >();
+  /** Consecutive-pull counter per cursor gate held by permanent failures. */
+  private cursorGateAttempts = new Map<
+    string,
+    { sequence: number; attempts: number }
+  >();
+  private warnedUncommittedStaging = false;
 
   constructor(config: WSTransportConfig) {
     this.config = config;
@@ -391,7 +399,15 @@ export class WSTransport implements SyncTransportInterface {
         const firstFailed = Math.min(
           ...transportPullResult.failures.map((f) => f.sequence),
         );
-        safeSequence = Math.min(safeSequence, Math.max(firstFailed - 1, 0));
+        safeSequence = this.gateSequence(
+          collection,
+          spaceId,
+          Math.min(safeSequence, Math.max(firstFailed - 1, 0)),
+          transportPullResult.failures.every((f) => !f.retryable),
+          spaceResult.cursor,
+        );
+      } else {
+        this.cursorGateAttempts.delete(this.cursorKey(collection, spaceId));
       }
       if (safeSequence > 0) {
         // Staged, not set: the durable commit happens once the records are
@@ -510,16 +526,30 @@ export class WSTransport implements SyncTransportInterface {
       return { pushed: 0, pulled: 0, merged: 0, errors: [] };
     }
 
-    // Gap/stale detection using per-space cursor (accurate for multi-space)
-    const spaceCursor = this.getAnyCursor(eventData.space);
-
-    // Stale: already processed this event
-    if (eventData.seq <= spaceCursor) {
+    const collections = controller.getCollections();
+    if (collections.length === 0) {
       return { pushed: 0, pulled: 0, merged: 0, errors: [] };
     }
 
-    // Gap: missed events between our cursor and this event's prev
-    if (eventData.prev !== spaceCursor) {
+    // Gap/stale detection must consider EVERY collection's cursor, not the
+    // max: a collection gated below the head (decrypt failure, uncommitted
+    // stage) must not be leapt past by a fast-path event (AUD-025). Using
+    // the minimum: stale only when all collections are at/after the event;
+    // a gap for ANY collection falls back to a full pull, which re-fetches
+    // each collection from its own cursor.
+    const minCursor = collections.reduce(
+      (min, def) =>
+        Math.min(min, this.getCollectionCursor(def.name, eventData.space)),
+      Infinity,
+    );
+
+    // Stale: every collection has already processed this event
+    if (eventData.seq <= minCursor) {
+      return { pushed: 0, pulled: 0, merged: 0, errors: [] };
+    }
+
+    // Gap: some collection missed events between its cursor and this event
+    if (eventData.prev !== minCursor) {
       // Fall back to full pull for all collections
       const result: SyncResult = {
         pushed: 0,
@@ -527,7 +557,7 @@ export class WSTransport implements SyncTransportInterface {
         merged: 0,
         errors: [],
       };
-      for (const def of controller.getCollections()) {
+      for (const def of collections) {
         const pullResult = await controller.pull(def);
         result.pulled += pullResult.pulled;
         result.merged += pullResult.merged;
@@ -539,10 +569,16 @@ export class WSTransport implements SyncTransportInterface {
     // Decrypt and apply via per-space transport (no redundant gap/stale checks)
     const result = await transport.decryptAndApply(eventData, controller);
 
-    // Advance cursor for this space across all collections
+    // Advance only collections contiguous with this event (cursor === prev).
+    // A gated collection stays put; the next event's gap detection above
+    // routes it through a full pull that re-fetches its missing range.
     if (result.errors.length === 0) {
-      for (const def of controller.getCollections()) {
-        this.setCursor(def.name, eventData.space, eventData.seq);
+      for (const def of collections) {
+        if (
+          this.getCollectionCursor(def.name, eventData.space) === eventData.prev
+        ) {
+          this.setCursor(def.name, eventData.space, eventData.seq);
+        }
       }
     }
 
@@ -624,6 +660,43 @@ export class WSTransport implements SyncTransportInterface {
   }
 
   /**
+   * Resolve a decrypt-failure cursor gate. Retryable failures (e.g. a key
+   * share that has not arrived yet) gate indefinitely — the next pull
+   * retries them. A gate held by ONLY non-retryable failures for many
+   * consecutive cycles would wedge the space into re-pulling a record that
+   * will never decrypt: after MAX_GATE_ATTEMPTS the gate is released with
+   * a loud error (the failure itself is already surfaced as a permanent
+   * sync error every cycle).
+   */
+  private gateSequence(
+    collection: string,
+    spaceId: string,
+    gated: number,
+    allPermanent: boolean,
+    fullSequence: number,
+  ): number {
+    const key = this.cursorKey(collection, spaceId);
+    if (!allPermanent || gated >= fullSequence) {
+      this.cursorGateAttempts.delete(key);
+      return gated;
+    }
+    const entry = this.cursorGateAttempts.get(key);
+    const attempts =
+      entry !== undefined && entry.sequence === gated ? entry.attempts + 1 : 1;
+    if (attempts >= WSTransport.MAX_GATE_ATTEMPTS) {
+      this.cursorGateAttempts.delete(key);
+      console.error(
+        `[betterbase-sync] Releasing cursor gate at ${gated} for ${key}: ` +
+          `undecryptable record(s) failed ${attempts} consecutive pulls; ` +
+          `advancing to ${fullSequence} and skipping them.`,
+      );
+      return fullSequence;
+    }
+    this.cursorGateAttempts.set(key, { sequence: gated, attempts });
+    return gated;
+  }
+
+  /**
    * Commit staged per-space cursors for a collection after its pulled
    * records were applied (SyncTransport.commitPersistedCursors, AUD-025).
    */
@@ -655,10 +728,24 @@ export class WSTransport implements SyncTransportInterface {
 
   /** Drop uncommitted staged cursors for a collection (superseded pull). */
   private dropStagedCursors(collection: string): void {
+    let dropped = false;
     for (const key of this.pendingCursorCommits.keys()) {
       if (key.startsWith(`${collection}:`)) {
         this.pendingCursorCommits.delete(key);
+        dropped = true;
       }
+    }
+    // Staged cursors surviving into the next pull were never committed —
+    // their records were never confirmed applied. That is safe (the range
+    // re-pulls) but if it happens forever the consumer is not calling
+    // commitPersistedCursors and every pull redownloads history.
+    if (dropped && !this.warnedUncommittedStaging) {
+      this.warnedUncommittedStaging = true;
+      console.warn(
+        `[betterbase-sync] Staged pull cursors for "${collection}" were superseded before commitPersistedCursors() — ` +
+          `that range will be re-pulled. If this happens every cycle, the transport consumer ` +
+          `is not calling commitPersistedCursors after applying pulled records.`,
+      );
     }
   }
 
@@ -707,6 +794,11 @@ export class WSTransport implements SyncTransportInterface {
       }
     }
     return max;
+  }
+
+  /** One collection's cursor for a space (0 when never advanced). */
+  private getCollectionCursor(collection: string, spaceId: string): number {
+    return this.cursors.get(this.cursorKey(collection, spaceId)) ?? 0;
   }
 }
 

@@ -186,6 +186,11 @@ export class WSClient {
         switch (name) {
           case "pull.begin": {
             const d = data as WSPullBeginData;
+            // A second begin for the same space would silently discard the
+            // first segment's records (INV-02 posture — AUD-025 review).
+            if (result.spaces.has(d.space)) {
+              throw new Error(`duplicate pull.begin for space ${d.space}`);
+            }
             const spaceResult: PullSpaceResult = {
               space: d.space,
               prev: d.prev,
@@ -245,8 +250,12 @@ export class WSClient {
                 );
               }
               // The advertised head is authoritative only once the server
-              // confirms the full range was delivered (AUD-025).
-              if (d.cursor !== undefined) target.cursor = d.cursor;
+              // confirms the full range was delivered (AUD-025). Monotonic
+              // like entry advancement: a commit cursor below a delivered
+              // entry's sequence must not regress the space cursor.
+              if (d.cursor !== undefined && d.cursor > target.cursor) {
+                target.cursor = d.cursor;
+              }
             }
             break;
           }
