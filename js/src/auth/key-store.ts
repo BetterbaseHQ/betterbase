@@ -323,7 +323,16 @@ export class KeyStore {
     const prefix = `${scope}::`;
     const ids = await this.listKeyIds();
     await Promise.all(
-      ids.filter((id) => id.startsWith(prefix)).map((id) => this.deleteKey(id)),
+      ids
+        .filter(
+          (id) =>
+            id.startsWith(prefix) ||
+            // Transaction-scoped ephemeral OAuth keys are not scope-prefixed;
+            // a session cleanup must still sweep its origin's abandoned
+            // login attempts (review of AUD-012).
+            id.startsWith("ephemeral-oauth-key::"),
+        )
+        .map((id) => this.deleteKey(id)),
     );
   }
 

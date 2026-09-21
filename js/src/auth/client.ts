@@ -181,6 +181,17 @@ export class OAuthClient {
       await keyStore.initialize();
       const privateKey =
         await KeyStore.getInstance().getEphemeralOAuthKey(storedState);
+      let ephemeralCleaned = false;
+      const cleanupEphemeral = async () => {
+        if (ephemeralCleaned) return;
+        ephemeralCleaned = true;
+        // The transaction key must not survive any exit from this block
+        // (review of AUD-012: abandoned logins otherwise leak a private
+        // key into IndexedDB forever).
+        await KeyStore.getInstance()
+          .deleteEphemeralOAuthKey(storedState)
+          .catch(() => {});
+      };
 
       if (privateKey) {
         try {
@@ -238,10 +249,11 @@ export class OAuthClient {
         } catch (err) {
           result.encryptionKeyError =
             err instanceof Error ? err : new Error(String(err));
+        } finally {
+          // Clean up the transaction-scoped ephemeral key on every exit
+          // path (review of AUD-012).
+          await cleanupEphemeral();
         }
-
-        // Clean up the transaction-scoped ephemeral key.
-        await KeyStore.getInstance().deleteEphemeralOAuthKey(storedState);
       } else {
         const error = new Error(
           "Missing ephemeral private key for JWE decryption",
@@ -251,6 +263,7 @@ export class OAuthClient {
           "[betterbase-auth] Failed to decrypt encryption key:",
           error.message,
         );
+        await cleanupEphemeral();
       }
     }
 

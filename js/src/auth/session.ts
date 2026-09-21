@@ -432,19 +432,25 @@ export class AuthSession {
       this.cleanupSync();
       return;
     }
+    let state: SessionState;
     try {
-      const state = JSON.parse(raw) as SessionState;
-      if (!state.refreshToken || state.refreshToken === this.refreshTokenValue)
-        return;
-      this.accessToken = state.accessToken;
-      this.refreshTokenValue = state.refreshToken;
-      this.expiresAt = state.expiresAt;
+      state = JSON.parse(raw) as SessionState;
     } catch (err) {
+      // Fail closed (review of AUD-004): presenting the in-memory token
+      // against unknown peer state could be sequential reuse and revoke
+      // the family. Abandon this refresh via the generation fence.
       console.error(
-        "[betterbase-auth] Failed to adopt peer-rotated credentials:",
+        "[betterbase-auth] Persisted session is unreadable; abandoning refresh:",
         err,
       );
+      this.cleanupSync();
+      return;
     }
+    if (!state.refreshToken || state.refreshToken === this.refreshTokenValue)
+      return;
+    this.accessToken = state.accessToken;
+    this.refreshTokenValue = state.refreshToken;
+    this.expiresAt = state.expiresAt;
   }
 
   /**

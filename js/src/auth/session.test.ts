@@ -175,10 +175,13 @@ describe("AuthSession AUD-010: refresh fencing across destroy()", () => {
     const session = await AuthSession.restore(makeConfig(client));
     const pending = session!.refresh();
     await vi.waitFor(() => expect(client.refreshToken).toHaveBeenCalled());
+    const callsAtDestroy = client.refreshToken.mock.calls.length;
     await session!.destroy();
 
-    // The retry loop must not keep cycling a destroyed session.
+    // The retry loop must not keep cycling a destroyed session: no
+    // further network attempts and no persisted state.
     await expect(pending).rejects.toThrow();
+    expect(client.refreshToken.mock.calls.length).toBe(callsAtDestroy);
     expect(storedState()).toBeNull();
   });
 });
