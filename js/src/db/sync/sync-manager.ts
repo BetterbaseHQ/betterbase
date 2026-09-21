@@ -237,12 +237,13 @@ export class SyncManager {
 
     const pushSnapshots = new Map<
       string,
-      { pendingPatchesLength: number; deleted: boolean }
+      { pendingPatchesLength: number; deleted: boolean; meta?: unknown }
     >();
     const allOutbound: OutboundRecord[] = dirtyRecords.map((record) => {
       pushSnapshots.set(record.id, {
         pendingPatchesLength: record.pendingPatchesLength,
         deleted: record.deleted,
+        meta: record.meta,
       });
       return {
         id: record.id,
@@ -287,6 +288,7 @@ export class SyncManager {
               ? {
                   pending_patches_length: snapshot.pendingPatchesLength,
                   deleted: snapshot.deleted,
+                  meta: snapshot.meta,
                 }
               : undefined,
           );

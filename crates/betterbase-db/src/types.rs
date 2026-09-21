@@ -149,6 +149,12 @@ pub enum RemoteAction {
 pub struct PushSnapshot {
     pub pending_patches_length: usize,
     pub deleted: bool,
+    /// Record meta as of the pushed read. A metadata-only change after the
+    /// snapshot leaves pending_patches and `deleted` untouched, so without
+    /// this the acknowledgement guard cannot see it and a stale ack clears
+    /// the newer routing metadata (AUD-019). Optional for older callers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
 }
 
 /// Migration tracking status

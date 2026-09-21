@@ -584,7 +584,14 @@ pub fn prepare_mark_synced(
     let stay_dirty = if let Some(snap) = snapshot {
         let patches_grew = record.pending_patches.len() > snap.pending_patches_length;
         let deleted_changed = record.deleted != snap.deleted;
-        patches_grew || deleted_changed
+        // Metadata-only changes (e.g. routing metadata) never touch the
+        // patch log or the deleted flag — the snapshot's meta is the only
+        // witness that a newer one exists (AUD-019).
+        let meta_changed = snap
+            .meta
+            .as_ref()
+            .is_some_and(|m| record.meta.as_ref() != Some(m));
+        patches_grew || deleted_changed || meta_changed
     } else {
         false
     };

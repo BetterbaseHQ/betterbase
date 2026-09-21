@@ -284,6 +284,9 @@ export interface RustRemoteRecord {
 export interface PushSnapshot {
   pending_patches_length: number;
   deleted: boolean;
+  /** Record meta at push time — guards metadata-only changes against stale
+   *  acknowledgements (AUD-019). */
+  meta?: unknown;
 }
 
 export interface ApplyRemoteOptions {

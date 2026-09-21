@@ -377,6 +377,7 @@ fn prepare_mark_synced_clears_dirty_when_snapshot_matches() {
     let snapshot = PushSnapshot {
         pending_patches_length: rec.pending_patches.len(),
         deleted: rec.deleted,
+        meta: None,
     };
 
     let synced = prepare_mark_synced(&rec, 42, Some(&snapshot));
@@ -397,6 +398,7 @@ fn prepare_mark_synced_stays_dirty_when_patches_grew() {
     let snapshot = PushSnapshot {
         pending_patches_length: 0,
         deleted: false,
+        meta: None,
     };
 
     // Add an update (which grows pending_patches)
@@ -1247,4 +1249,54 @@ fn merge_records_ignores_meta_divergence_when_local_clean() {
         !result.had_local_changes,
         "clean local records never claim meta changes"
     );
+}
+
+#[test]
+fn prepare_mark_synced_stays_dirty_when_meta_only_change_landed_after_snapshot() {
+    // AUD-019: a metadata-only change (e.g. routing meta) never grows the
+    // patch log and never flips `deleted` — a stale in-flight ack whose
+    // snapshot predates the change must not clear it.
+    let def = users_def();
+    let mut rec = make_record(&def, "user-1", json!({"name": "Alice", "email": "a@b.com"}));
+    assert!(rec.pending_patches.is_empty());
+
+    // Snapshot taken at push time (meta A).
+    let snapshot = PushSnapshot {
+        pending_patches_length: 0,
+        deleted: false,
+        meta: Some(json!({"space": "space-a"})),
+    };
+
+    // A metadata-only change lands while the push is in flight: meta A→B,
+    // still dirty, patch log unchanged.
+    rec.meta = Some(json!({"space": "space-b"}));
+    rec.dirty = true;
+
+    let synced = prepare_mark_synced(&rec, 42, Some(&snapshot));
+    assert!(
+        synced.dirty,
+        "metadata-only change must survive the stale ack"
+    );
+    assert_eq!(
+        synced.meta, rec.meta,
+        "the newer meta must be preserved, not reverted"
+    );
+
+    // Control: matching meta acks cleanly.
+    let matching = PushSnapshot {
+        pending_patches_length: 0,
+        deleted: false,
+        meta: Some(json!({"space": "space-b"})),
+    };
+    let synced = prepare_mark_synced(&rec, 43, Some(&matching));
+    assert!(!synced.dirty, "matching snapshot acks cleanly");
+
+    // Older callers without snapshot meta keep the previous behavior.
+    let legacy = PushSnapshot {
+        pending_patches_length: 0,
+        deleted: false,
+        meta: None,
+    };
+    let synced = prepare_mark_synced(&rec, 44, Some(&legacy));
+    assert!(!synced.dirty);
 }

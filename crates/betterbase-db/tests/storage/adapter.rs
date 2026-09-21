@@ -856,6 +856,7 @@ fn mark_synced_with_snapshot_stays_dirty_if_patches_grew() {
     let snapshot = PushSnapshot {
         pending_patches_length: 0,
         deleted: false,
+        meta: None,
     };
 
     adapter
@@ -1619,6 +1620,7 @@ fn mark_synced_with_snapshot_patches_grew_stays_dirty() {
     let snapshot = PushSnapshot {
         pending_patches_length: 0, // pretend no patches at snapshot time
         deleted: false,
+        meta: None,
     };
 
     // Patch the record (this grows pending_patches)

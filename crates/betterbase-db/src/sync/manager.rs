@@ -203,6 +203,7 @@ impl SyncManager {
                 PushSnapshot {
                     pending_patches_length: record.pending_patches.len(),
                     deleted: record.deleted,
+                    meta: record.meta.clone(),
                 },
             );
 
