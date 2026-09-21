@@ -76,13 +76,20 @@ impl<B: StorageBackend> Adapter<B> {
 
     /// Load or generate the session ID, caching it in memory.
     fn get_or_create_session_id(&self) -> Result<u64> {
+        self.get_or_create_session_id_on(&self.backend)
+    }
+
+    /// Backend-parameterized variant for use inside transactions: the
+    /// meta read/write joins the caller's transaction so it cannot
+    /// interleave with another thread's operations.
+    fn get_or_create_session_id_on(&self, backend: &B) -> Result<u64> {
         let mut guard = self.session_id.lock();
         if let Some(sid) = *guard {
             return Ok(sid);
         }
 
         // Try loading from meta store
-        if let Some(stored) = self.backend.get_meta(META_SESSION_ID)? {
+        if let Some(stored) = backend.get_meta(META_SESSION_ID)? {
             let sid: u64 = stored
                 .parse()
                 .map_err(|_| LessDbError::Internal("Invalid session_id stored in meta".into()))?;
@@ -92,7 +99,7 @@ impl<B: StorageBackend> Adapter<B> {
 
         // Generate and persist a new session ID
         let sid = crdt::generate_session_id();
-        self.backend.set_meta(META_SESSION_ID, &sid.to_string())?;
+        backend.set_meta(META_SESSION_ID, &sid.to_string())?;
         *guard = Some(sid);
         Ok(sid)
     }
@@ -213,8 +220,9 @@ impl<B: StorageBackend> Adapter<B> {
     /// Check all unique indexes for the given record data.
     ///
     /// `exclude_id` — the ID of the record being updated (exclude from the check).
-    fn check_unique_constraints(
+    fn check_unique_constraints_on(
         &self,
+        backend: &B,
         def: &CollectionDef,
         data: &Value,
         computed: Option<&Value>,
@@ -226,10 +234,210 @@ impl<B: StorageBackend> Adapter<B> {
                 crate::index::types::IndexDefinition::Computed(c) => c.unique,
             };
             if is_unique {
-                self.backend
-                    .check_unique(&def.name, index, data, computed, exclude_id)?;
+                backend.check_unique(&def.name, index, data, computed, exclude_id)?;
             }
         }
+        Ok(())
+    }
+
+    fn put_impl(
+        &self,
+        backend: &B,
+        def: &CollectionDef,
+        data: &Value,
+        opts: &PutOptions,
+    ) -> Result<StoredRecordWithMeta> {
+        use crate::storage::record_manager::try_extract_id;
+
+        let session_id = if let Some(sid) = opts.session_id {
+            sid
+        } else {
+            self.get_or_create_session_id_on(backend)?
+        };
+
+        // Upsert: if data contains an ID and that record exists, update instead
+        let id = opts
+            .id
+            .clone()
+            .or_else(|| try_extract_id(&def.current_schema, data));
+
+        let existing = if let Some(ref id) = id {
+            backend.get_raw(&def.name, id)?
+        } else {
+            None
+        };
+
+        // Throw if trying to put into a deleted record
+        if let Some(ref existing) = existing {
+            if existing.deleted {
+                return Err(StorageError::Deleted {
+                    collection: def.name.clone(),
+                    id: existing.id.clone(),
+                }
+                .into());
+            }
+        }
+
+        if let Some(ref existing) = existing {
+            // Update existing record — merge auto-fields from existing data so
+            // callers don't need to echo back id/createdAt in the new document.
+            let merged_data = {
+                let mut base = existing.data.as_object().cloned().unwrap_or_default();
+                if let Some(new_obj) = data.as_object() {
+                    for (k, v) in new_obj {
+                        base.insert(k.clone(), v.clone());
+                    }
+                }
+                Value::Object(base)
+            };
+            let patch_opts = PatchOptions {
+                id: existing.id.clone(),
+                session_id: opts.session_id,
+                skip_unique_check: opts.skip_unique_check,
+                meta: opts.meta.clone(),
+                base: None,
+                should_reset_sync_state: opts.should_reset_sync_state.clone(),
+            };
+            let result = prepare_update(def, existing, merged_data, session_id, &patch_opts)?;
+
+            if result.has_changes {
+                if !opts.skip_unique_check {
+                    self.check_unique_constraints_on(
+                        backend,
+                        def,
+                        &result.record.data,
+                        result.record.computed.as_ref(),
+                        Some(&existing.id),
+                    )?;
+                }
+
+                backend.put_raw(&result.record)?;
+            }
+
+            let data = result.record.data.clone();
+            Ok(Self::to_stored_record_with_meta(
+                result.record,
+                data,
+                false,
+                None,
+            ))
+        } else {
+            // Insert new record
+            let result = prepare_new(def, data.clone(), session_id, opts)?;
+
+            if !opts.skip_unique_check {
+                self.check_unique_constraints_on(
+                    backend,
+                    def,
+                    &result.record.data,
+                    result.record.computed.as_ref(),
+                    None,
+                )?;
+            }
+
+            backend.put_raw(&result.record)?;
+
+            let data = result.record.data.clone();
+            Ok(Self::to_stored_record_with_meta(
+                result.record,
+                data,
+                false,
+                None,
+            ))
+        }
+    }
+
+    fn patch_impl(
+        &self,
+        backend: &B,
+        def: &CollectionDef,
+        data: &Value,
+        opts: &PatchOptions,
+    ) -> Result<StoredRecordWithMeta> {
+        let existing = backend.get_raw(&def.name, &opts.id)?.ok_or_else(|| {
+            LessDbError::from(StorageError::NotFound {
+                collection: def.name.clone(),
+                id: opts.id.clone(),
+            })
+        })?;
+
+        if existing.deleted {
+            return Err(StorageError::Deleted {
+                collection: def.name.clone(),
+                id: opts.id.clone(),
+            }
+            .into());
+        }
+
+        let session_id = if let Some(sid) = opts.session_id {
+            sid
+        } else {
+            self.get_or_create_session_id_on(backend)?
+        };
+
+        let result = prepare_patch(def, &existing, data.clone(), session_id, opts)?;
+
+        if result.has_changes {
+            if !opts.skip_unique_check {
+                self.check_unique_constraints_on(
+                    backend,
+                    def,
+                    &result.record.data,
+                    result.record.computed.as_ref(),
+                    Some(&opts.id),
+                )?;
+            }
+
+            backend.put_raw(&result.record)?;
+        }
+
+        let data = result.record.data.clone();
+        Ok(Self::to_stored_record_with_meta(
+            result.record,
+            data,
+            false,
+            None,
+        ))
+    }
+
+    fn delete_impl(
+        &self,
+        backend: &B,
+        def: &CollectionDef,
+        id: &str,
+        opts: &DeleteOptions,
+    ) -> Result<bool> {
+        let existing = match backend.get_raw(&def.name, id)? {
+            Some(r) => r,
+            None => return Ok(false),
+        };
+
+        if existing.deleted {
+            return Ok(false);
+        }
+
+        let deleted_record = prepare_delete(&existing, opts);
+        backend.put_raw(&deleted_record)?;
+        Ok(true)
+    }
+
+    fn mark_synced_impl(
+        &self,
+        backend: &B,
+        def: &CollectionDef,
+        id: &str,
+        sequence: i64,
+        snapshot: Option<&PushSnapshot>,
+    ) -> Result<()> {
+        let existing = backend.get_raw(&def.name, id)?.ok_or_else(|| {
+            LessDbError::from(StorageError::NotFound {
+                collection: def.name.clone(),
+                id: id.to_string(),
+            })
+        })?;
+
+        let updated = prepare_mark_synced(&existing, sequence, snapshot);
+        backend.put_raw(&updated)?;
         Ok(())
     }
 
@@ -540,104 +748,12 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
         data: Value,
         opts: &PutOptions,
     ) -> Result<StoredRecordWithMeta> {
-        use crate::storage::record_manager::try_extract_id;
-
         self.check_initialized()?;
-
-        let session_id = if let Some(sid) = opts.session_id {
-            sid
-        } else {
-            self.get_or_create_session_id()?
-        };
-
-        // Upsert: if data contains an ID and that record exists, update instead
-        let id = opts
-            .id
-            .clone()
-            .or_else(|| try_extract_id(&def.current_schema, &data));
-
-        let existing = if let Some(ref id) = id {
-            self.backend.get_raw(&def.name, id)?
-        } else {
-            None
-        };
-
-        // Throw if trying to put into a deleted record
-        if let Some(ref existing) = existing {
-            if existing.deleted {
-                return Err(StorageError::Deleted {
-                    collection: def.name.clone(),
-                    id: existing.id.clone(),
-                }
-                .into());
-            }
-        }
-
-        if let Some(ref existing) = existing {
-            // Update existing record — merge auto-fields from existing data so
-            // callers don't need to echo back id/createdAt in the new document.
-            let merged_data = {
-                let mut base = existing.data.as_object().cloned().unwrap_or_default();
-                if let Some(new_obj) = data.as_object() {
-                    for (k, v) in new_obj {
-                        base.insert(k.clone(), v.clone());
-                    }
-                }
-                Value::Object(base)
-            };
-            let patch_opts = PatchOptions {
-                id: existing.id.clone(),
-                session_id: opts.session_id,
-                skip_unique_check: opts.skip_unique_check,
-                meta: opts.meta.clone(),
-                base: None,
-                should_reset_sync_state: opts.should_reset_sync_state.clone(),
-            };
-            let result = prepare_update(def, existing, merged_data, session_id, &patch_opts)?;
-
-            if result.has_changes {
-                if !opts.skip_unique_check {
-                    self.check_unique_constraints(
-                        def,
-                        &result.record.data,
-                        result.record.computed.as_ref(),
-                        Some(&existing.id),
-                    )?;
-                }
-
-                self.backend.put_raw(&result.record)?;
-            }
-
-            let data = result.record.data.clone();
-            Ok(Self::to_stored_record_with_meta(
-                result.record,
-                data,
-                false,
-                None,
-            ))
-        } else {
-            // Insert new record
-            let result = prepare_new(def, data, session_id, opts)?;
-
-            if !opts.skip_unique_check {
-                self.check_unique_constraints(
-                    def,
-                    &result.record.data,
-                    result.record.computed.as_ref(),
-                    None,
-                )?;
-            }
-
-            self.backend.put_raw(&result.record)?;
-
-            let data = result.record.data.clone();
-            Ok(Self::to_stored_record_with_meta(
-                result.record,
-                data,
-                false,
-                None,
-            ))
-        }
+        // AUD-020: the read/modify/write sequence runs inside one backend
+        // transaction so concurrent native callers cannot interleave
+        // between the existence check and the write.
+        self.backend
+            .transaction(|backend| self.put_impl(backend, def, &data, opts))
     }
 
     fn patch(
@@ -647,67 +763,16 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
         opts: &PatchOptions,
     ) -> Result<StoredRecordWithMeta> {
         self.check_initialized()?;
-
-        let existing = self.backend.get_raw(&def.name, &opts.id)?.ok_or_else(|| {
-            LessDbError::from(StorageError::NotFound {
-                collection: def.name.clone(),
-                id: opts.id.clone(),
-            })
-        })?;
-
-        if existing.deleted {
-            return Err(StorageError::Deleted {
-                collection: def.name.clone(),
-                id: opts.id.clone(),
-            }
-            .into());
-        }
-
-        let session_id = if let Some(sid) = opts.session_id {
-            sid
-        } else {
-            self.get_or_create_session_id()?
-        };
-
-        let result = prepare_patch(def, &existing, data, session_id, opts)?;
-
-        if result.has_changes {
-            if !opts.skip_unique_check {
-                self.check_unique_constraints(
-                    def,
-                    &result.record.data,
-                    result.record.computed.as_ref(),
-                    Some(&opts.id),
-                )?;
-            }
-
-            self.backend.put_raw(&result.record)?;
-        }
-
-        let data = result.record.data.clone();
-        Ok(Self::to_stored_record_with_meta(
-            result.record,
-            data,
-            false,
-            None,
-        ))
+        // AUD-020: read + prepare + write as one transaction.
+        self.backend
+            .transaction(|backend| self.patch_impl(backend, def, &data, opts))
     }
 
     fn delete(&self, def: &CollectionDef, id: &str, opts: &DeleteOptions) -> Result<bool> {
         self.check_initialized()?;
-
-        let existing = match self.backend.get_raw(&def.name, id)? {
-            Some(r) => r,
-            None => return Ok(false),
-        };
-
-        if existing.deleted {
-            return Ok(false);
-        }
-
-        let deleted_record = prepare_delete(&existing, opts);
-        self.backend.put_raw(&deleted_record)?;
-        Ok(true)
+        // AUD-020: tombstone write as one transaction.
+        self.backend
+            .transaction(|backend| self.delete_impl(backend, def, id, opts))
     }
 
     fn bulk_put(
@@ -718,12 +783,12 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
     ) -> Result<BatchResult> {
         self.check_initialized()?;
 
-        self.backend.transaction(|_| {
+        self.backend.transaction(|backend| {
             let mut result_records = Vec::new();
             let mut errors = Vec::new();
 
             for data in records {
-                match self.put(def, data, opts) {
+                match self.put_impl(backend, def, &data, opts) {
                     Ok(record) => result_records.push(record),
                     Err(e) => errors.push(RecordError {
                         id: String::new(),
@@ -748,12 +813,12 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
     ) -> Result<BulkDeleteResult> {
         self.check_initialized()?;
 
-        self.backend.transaction(|_| {
+        self.backend.transaction(|backend| {
             let mut deleted_ids = Vec::new();
             let mut errors = Vec::new();
 
             for &id in ids {
-                match self.delete(def, id, opts) {
+                match self.delete_impl(backend, def, id, opts) {
                     Ok(true) => deleted_ids.push(id.to_string()),
                     Ok(false) => {
                         // Record not found or already deleted — not an error
@@ -955,17 +1020,10 @@ impl<B: StorageBackend> StorageSync for Adapter<B> {
         snapshot: Option<&PushSnapshot>,
     ) -> Result<()> {
         self.check_initialized()?;
-
-        let existing = self.backend.get_raw(&def.name, id)?.ok_or_else(|| {
-            LessDbError::from(StorageError::NotFound {
-                collection: def.name.clone(),
-                id: id.to_string(),
-            })
-        })?;
-
-        let updated = prepare_mark_synced(&existing, sequence, snapshot);
-        self.backend.put_raw(&updated)?;
-        Ok(())
+        // AUD-020: an acknowledgement must not overwrite a record that
+        // changed after the read it was prepared against.
+        self.backend
+            .transaction(|backend| self.mark_synced_impl(backend, def, id, sequence, snapshot))
     }
 
     fn apply_remote_changes(

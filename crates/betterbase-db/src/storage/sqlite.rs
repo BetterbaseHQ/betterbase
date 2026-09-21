@@ -686,7 +686,13 @@ impl StorageBackend for SqliteBackend {
     {
         // Use a SAVEPOINT so this composes with outer transactions.
         // Each invocation gets a unique name to avoid collisions when nested.
-        // ReentrantMutex lets the closure re-acquire the lock for its SQL calls.
+        //
+        // AUD-020: the guard is held across the ENTIRE closure, not just
+        // the savepoint statements. The closure's own SQL calls re-enter
+        // this thread's reentrant lock; concurrent threads block until
+        // the whole read/modify/write sequence commits. Releasing the
+        // guard between statements would let another thread interleave
+        // whole operations inside this transaction.
         thread_local! {
             static SP_COUNTER: Cell<u64> = const { Cell::new(0) };
         }
@@ -696,27 +702,22 @@ impl StorageBackend for SqliteBackend {
             format!("sp_{n}")
         });
 
-        {
-            let guard = self.conn.lock();
-            guard
-                .borrow()
-                .execute(&format!("SAVEPOINT {sp_name}"), [])
-                .map_err(storage_err)?;
-        }
+        let guard = self.conn.lock();
+        guard
+            .borrow()
+            .execute(&format!("SAVEPOINT {sp_name}"), [])
+            .map_err(storage_err)?;
 
         match f(self) {
             Ok(v) => {
-                let guard = self.conn.lock();
                 let release_ok = guard
                     .borrow()
                     .execute(&format!("RELEASE SAVEPOINT {sp_name}"), [])
                     .is_ok();
-                drop(guard);
                 if release_ok {
                     Ok(v)
                 } else {
                     // Best-effort rollback to clean up the leaked savepoint
-                    let guard = self.conn.lock();
                     let _ = guard
                         .borrow()
                         .execute(&format!("ROLLBACK TO SAVEPOINT {sp_name}"), []);
@@ -727,7 +728,6 @@ impl StorageBackend for SqliteBackend {
                 }
             }
             Err(e) => {
-                let guard = self.conn.lock();
                 let _ = guard
                     .borrow()
                     .execute(&format!("ROLLBACK TO SAVEPOINT {sp_name}"), []);
