@@ -870,15 +870,28 @@ describe("SpaceManager", () => {
   });
 
   describe("checkInvitations", () => {
-    const wireInvitation = (spaceId: string, cmd = "/space/write") =>
-      JSON.stringify({
+    const wireInvitation = (
+      spaceId: string,
+      cmdOrMeta: string | { generation: number } = "/space/write",
+    ) => {
+      const cmd = typeof cmdOrMeta === "string" ? cmdOrMeta : "/space/write";
+      const metadata =
+        typeof cmdOrMeta === "string"
+          ? { space_name: "Shared", inviter_display_name: "self@test" }
+          : {
+              space_name: "Shared",
+              inviter_display_name: "self@test",
+              generation: cmdOrMeta.generation,
+            };
+      return JSON.stringify({
         space_id: spaceId,
         space_key: bytesToBase64(new Uint8Array(32).fill(9)),
         ucan_chain: [
           ucan(SELF_DID, SELF_DID, cmd, { with: `space:${spaceId}` }),
         ],
-        metadata: { space_name: "Shared", inviter_display_name: "self@test" },
+        metadata,
       });
+    };
 
     it("creates invited space records from valid invitations", async () => {
       server.handle("invitation.list", () => ({
@@ -905,6 +918,48 @@ describe("SpaceManager", () => {
         invitedBy: "self@test",
         serverInvitationId: "inv-1",
       });
+    });
+
+    it("stores the invitation's key generation as the space epoch (AUD-034)", async () => {
+      // After a rotation to epoch 3, the invitation must carry generation: 3;
+      // the recipient labels the delivered key with that epoch — not 1 — so
+      // epoch-key derivation starts from the right base.
+      server.handle("invitation.list", () => ({
+        invitations: [
+          { id: "inv-e3", payload: "jwe-e3", created_at: 0, expires_at: 0 },
+          {
+            id: "inv-legacy",
+            payload: "jwe-legacy",
+            created_at: 0,
+            expires_at: 0,
+          },
+        ],
+      }));
+      vi.mocked(decryptJwe).mockImplementation((payload: unknown) => {
+        const jwe = payload as string;
+        if (jwe === "jwe-e3") {
+          return new TextEncoder().encode(
+            wireInvitation("s-e3", { generation: 3 }),
+          );
+        }
+        if (jwe === "jwe-legacy") {
+          return new TextEncoder().encode(wireInvitation("s-legacy"));
+        }
+        return new Uint8Array(0);
+      });
+
+      const count = await manager.checkInvitations(jwkFor(SELF_DID));
+
+      expect(count).toBe(2);
+      const withGeneration = [...db.records.values()].find(
+        (r) => r.spaceId === "s-e3",
+      );
+      expect(withGeneration).toMatchObject({ epoch: 3 });
+      // Legacy invitations without a generation label still default to 1.
+      const legacy = [...db.records.values()].find(
+        (r) => r.spaceId === "s-legacy",
+      );
+      expect(legacy).toMatchObject({ epoch: 1 });
     });
 
     it("skips invitations for spaces already active", async () => {

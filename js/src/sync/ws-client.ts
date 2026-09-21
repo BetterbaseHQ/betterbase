@@ -42,10 +42,12 @@ import {
   type WSEpochCompleteParams,
   type WSDEKRecord,
   type WSDEKsGetParams,
+  type WSDEKsGetResult,
   type WSDEKsRewrapParams,
   type WSDEKsRewrapResult,
   type WSFileDEKRecord,
   type WSFileDEKsGetParams,
+  type WSFileDEKsGetResult,
   type WSFileDEKsRewrapParams,
   type WSFileDEKsRewrapResult,
 } from "./ws-frames.js";
@@ -309,40 +311,27 @@ export class WSClient {
 
   // --- DEK RPC ---
 
+  /**
+   * Fetch record DEKs. The server returns one ordinary `deks.get` result
+   * containing `{deks: [...]}` (AUD-032: this used callChunked, which
+   * discards the ordinary response value, so rotation saw zero DEKs).
+   */
   async getDEKs(params: WSDEKsGetParams): Promise<WSDEKRecord[]> {
-    const records: WSDEKRecord[] = [];
-
-    await this.rpc.callChunked(
-      "deks.get",
-      params,
-      (name: string, data: unknown) => {
-        if (name === "deks.record") {
-          records.push(data as WSDEKRecord);
-        }
-      },
-    );
-
-    return records;
+    const result = await this.rpc.call<WSDEKsGetResult>("deks.get", params);
+    return result.deks;
   }
 
   async rewrapDEKs(params: WSDEKsRewrapParams): Promise<WSDEKsRewrapResult> {
     return this.rpc.call<WSDEKsRewrapResult>("deks.rewrap", params);
   }
 
+  /** Fetch file DEKs (ordinary result, same framing as getDEKs). */
   async getFileDEKs(params: WSFileDEKsGetParams): Promise<WSFileDEKRecord[]> {
-    const records: WSFileDEKRecord[] = [];
-
-    await this.rpc.callChunked(
+    const result = await this.rpc.call<WSFileDEKsGetResult>(
       "deks.getFiles",
       params,
-      (name: string, data: unknown) => {
-        if (name === "deks.files.record") {
-          records.push(data as WSFileDEKRecord);
-        }
-      },
     );
-
-    return records;
+    return result.deks;
   }
 
   async rewrapFileDEKs(

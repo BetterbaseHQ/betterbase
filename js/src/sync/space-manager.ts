@@ -309,7 +309,9 @@ export class SpaceManager {
       proof: spaceRecord.ucanChain,
     });
 
-    // Build invitation payload
+    // Build invitation payload. The key's epoch must travel with it (AUD-034):
+    // a recipient after rotation otherwise labels the current key as epoch 1
+    // and derives every epoch key from the wrong base.
     const spaceKey = base64ToBytes(spaceRecord.spaceKey);
     const payload: InvitationPayload = {
       space_id: spaceId,
@@ -318,13 +320,17 @@ export class SpaceManager {
       metadata: {
         space_name: options?.spaceName ?? spaceRecord.name,
         inviter_display_name: this.config.selfHandle,
+        generation: this.spaceEpochs.get(spaceId) ?? spaceRecord.epoch ?? 1,
       },
     };
 
     // Sign and append delegated UCAN + contact info to membership log (with CAS retry).
     // This ensures the log is consistent before the recipient receives the invite.
     // Contact info is stored so removeMember() can send revocation notices later.
-    const currentEpoch = this.spaceEpochs.get(spaceId) ?? 1;
+    // Fall back to the persisted record epoch: inviting or rotating before this
+    // session activated the space must not relabel keys as epoch 1 (AUD-034).
+    const currentEpoch =
+      this.spaceEpochs.get(spaceId) ?? spaceRecord.epoch ?? 1;
     const signedDelegation = this.signMembershipEntry(
       "d",
       spaceId,
@@ -752,7 +758,10 @@ export class SpaceManager {
     syncCrypto: SyncCryptoInterface,
   ): Promise<void> {
     const spaceUCAN = this.spaceUCANs.get(spaceId);
-    const currentEpoch = this.spaceEpochs.get(spaceId) ?? 1;
+    // Fall back to the persisted record epoch: inviting or rotating before this
+    // session activated the space must not relabel keys as epoch 1 (AUD-034).
+    const currentEpoch =
+      this.spaceEpochs.get(spaceId) ?? spaceRecord.epoch ?? 1;
     const currentKey = this.spaceKeys.get(spaceId)!;
 
     // 1b. Find all UCAN CIDs for this member from membership log.
@@ -1039,12 +1048,15 @@ export class SpaceManager {
     const currentKey = this.spaceKeys.get(spaceId);
     if (!currentKey) throw new Error(`No space key for space ${spaceId}`);
 
-    const currentEpoch = this.spaceEpochs.get(spaceId) ?? 1;
     const spaceUCAN = this.spaceUCANs.get(spaceId);
 
     const spaceRecord = await this.findBySpaceId(spaceId);
     if (!spaceRecord) throw new Error(`No space record for ${spaceId}`);
 
+    // Fall back to the persisted record epoch (AUD-034): rotating before this
+    // session activated the space must not derive from epoch 1.
+    const currentEpoch =
+      this.spaceEpochs.get(spaceId) ?? spaceRecord.epoch ?? 1;
     const newEpoch = currentEpoch + 1;
     const newKey = deriveForward(currentKey, spaceId, currentEpoch, newEpoch);
 
@@ -1356,7 +1368,9 @@ export class SpaceManager {
           spaceKey,
           ucanChain,
           rootPublicKey: "", // Will be populated on accept if needed
-          epoch: 1,
+          // The epoch the delivered key belongs to (AUD-034): invitations
+          // after rotation must not relabel the current key as epoch 1.
+          epoch: payload.metadata.generation ?? 1,
           serverInvitationId: invitation.id,
         } as never,
         { space: this.config.personalSpaceId },

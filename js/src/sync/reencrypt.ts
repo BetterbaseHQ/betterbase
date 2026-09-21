@@ -19,6 +19,7 @@ import {
 } from "../crypto/webcrypto.js";
 import type { WSClient } from "./ws-client.js";
 import type { WSEpochConflictResult } from "./ws-frames.js";
+import { RPCCallError } from "./rpc-connection.js";
 
 /**
  * Thrown when epoch advancement fails due to server state mismatch (conflict).
@@ -71,10 +72,15 @@ export async function advanceEpoch(
     ...(opts?.setMinKeyGeneration ? { set_min_key_generation: true } : {}),
   });
 
-  // Check for conflict result (returned as success with error field)
+  // Check for conflict result (returned as success with error field).
+  // The server sends error code "conflict" (ERR_CODE_CONFLICT); tolerate the
+  // legacy "epoch_conflict" spelling as well (AUD-030: previously only
+  // "epoch_conflict" was recognized, so real conflicts were treated as
+  // success and rotation recovery never ran).
   if (
     "error" in result &&
-    (result as WSEpochConflictResult).error === "epoch_conflict"
+    ((result as WSEpochConflictResult).error === "conflict" ||
+      (result as WSEpochConflictResult).error === "epoch_conflict")
   ) {
     const conflict = result as WSEpochConflictResult;
     throw new EpochMismatchError(
@@ -156,64 +162,104 @@ export async function rewrapAllDEKs(
   }
 
   try {
-    // Re-wrap record DEKs
-    const deks = await ws.getDEKs({
-      space: spaceId,
-      ...(ucan ? { ucan } : {}),
-      since: 0,
-    });
-    const rewrapped: Array<{ id: string; dek: Uint8Array }> = [];
-    for (const { id, dek: wrappedDEK } of deks) {
-      const dekEpoch = peekEpoch(wrappedDEK);
-      if (dekEpoch === newEpoch) continue;
-      const unwrapKey = keyCache.get(dekEpoch);
-      if (!unwrapKey) throw new Error(`No key for DEK epoch ${dekEpoch}`);
-      const { dek } = unwrapDEK(wrappedDEK, unwrapKey);
-      try {
-        rewrapped.push({ id, dek: wrapDEK(dek, rawNewKey, newEpoch) });
-      } finally {
-        dek.fill(0);
-      }
-    }
-    if (rewrapped.length > 0) {
-      const result = await ws.rewrapDEKs({
-        space: spaceId,
-        ...(ucan ? { ucan } : {}),
-        deks: rewrapped,
-      });
-      if (!result.ok) throw new Error("DEK re-wrapping failed on server");
-    }
-
-    // Re-wrap file DEKs
-    let fileDekCount = 0;
-    if (includeFiles) {
-      const fileDeks = await ws.getFileDEKs({
+    // Re-wrap record DEKs. Each entry carries the wrapper we observed so the
+    // server applies a compare-and-set; a concurrent push replaces a wrapper,
+    // and rewrapping from a stale read would make that record undecryptable
+    // (AUD-026). On conflict the whole pass refetches and retries.
+    const rewrapped: Array<{
+      id: string;
+      dek: Uint8Array;
+      observed_dek: Uint8Array;
+    }> = [];
+    for (let attempt = 0; ; attempt++) {
+      const deks = await ws.getDEKs({
         space: spaceId,
         ...(ucan ? { ucan } : {}),
         since: 0,
       });
-      const rewrappedFiles: Array<{ id: string; dek: Uint8Array }> = [];
-      for (const { id, dek: wrappedDEK } of fileDeks) {
+      rewrapped.length = 0;
+      for (const { id, dek: wrappedDEK } of deks) {
         const dekEpoch = peekEpoch(wrappedDEK);
         if (dekEpoch === newEpoch) continue;
         const unwrapKey = keyCache.get(dekEpoch);
-        if (!unwrapKey)
-          throw new Error(`No key for file DEK epoch ${dekEpoch}`);
+        if (!unwrapKey) throw new Error(`No key for DEK epoch ${dekEpoch}`);
         const { dek } = unwrapDEK(wrappedDEK, unwrapKey);
         try {
-          rewrappedFiles.push({ id, dek: wrapDEK(dek, rawNewKey, newEpoch) });
+          rewrapped.push({
+            id,
+            dek: wrapDEK(dek, rawNewKey, newEpoch),
+            observed_dek: wrappedDEK,
+          });
         } finally {
           dek.fill(0);
         }
       }
-      if (rewrappedFiles.length > 0) {
-        const result = await ws.rewrapFileDEKs({
+      if (rewrapped.length === 0) break;
+      try {
+        const result = await ws.rewrapDEKs({
           space: spaceId,
           ...(ucan ? { ucan } : {}),
-          deks: rewrappedFiles,
+          deks: rewrapped,
         });
-        if (!result.ok)
-          throw new Error("File DEK re-wrapping failed on server");
+        if (!result.ok) throw new Error("DEK re-wrapping failed on server");
+        break;
+      } catch (err) {
+        if (!isRetryableRewrapConflict(err) || attempt >= REWRAP_MAX_RETRIES) {
+          throw err;
+        }
+      }
+    }
+
+    // Re-wrap file DEKs (same compare-and-set discipline)
+    let fileDekCount = 0;
+    if (includeFiles) {
+      const rewrappedFiles: Array<{
+        id: string;
+        dek: Uint8Array;
+        observed_dek: Uint8Array;
+      }> = [];
+      for (let attempt = 0; ; attempt++) {
+        const fileDeks = await ws.getFileDEKs({
+          space: spaceId,
+          ...(ucan ? { ucan } : {}),
+          since: 0,
+        });
+        rewrappedFiles.length = 0;
+        for (const { id, dek: wrappedDEK } of fileDeks) {
+          const dekEpoch = peekEpoch(wrappedDEK);
+          if (dekEpoch === newEpoch) continue;
+          const unwrapKey = keyCache.get(dekEpoch);
+          if (!unwrapKey)
+            throw new Error(`No key for file DEK epoch ${dekEpoch}`);
+          const { dek } = unwrapDEK(wrappedDEK, unwrapKey);
+          try {
+            rewrappedFiles.push({
+              id,
+              dek: wrapDEK(dek, rawNewKey, newEpoch),
+              observed_dek: wrappedDEK,
+            });
+          } finally {
+            dek.fill(0);
+          }
+        }
+        if (rewrappedFiles.length === 0) break;
+        try {
+          const result = await ws.rewrapFileDEKs({
+            space: spaceId,
+            ...(ucan ? { ucan } : {}),
+            deks: rewrappedFiles,
+          });
+          if (!result.ok)
+            throw new Error("File DEK re-wrapping failed on server");
+          break;
+        } catch (err) {
+          if (
+            !isRetryableRewrapConflict(err) ||
+            attempt >= REWRAP_MAX_RETRIES
+          ) {
+            throw err;
+          }
+        }
       }
       fileDekCount = rewrappedFiles.length;
     }
@@ -232,6 +278,14 @@ export async function rewrapAllDEKs(
 
 /** Maximum epoch gap for forward derivation (defense-in-depth). */
 const MAX_EPOCH_ADVANCE = 1000;
+
+/** Bounded refetch+retry passes when a rewrap loses a compare-and-set race. */
+const REWRAP_MAX_RETRIES = 3;
+
+/** A rewrap conflict (concurrent replacement or epoch mismatch) is retryable. */
+function isRetryableRewrapConflict(err: unknown): boolean {
+  return err instanceof RPCCallError && err.code === "conflict";
+}
 
 /**
  * CryptoKey path for rewrapAllDEKs — uses Web Crypto for unwrap/wrap.

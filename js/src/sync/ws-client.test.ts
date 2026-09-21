@@ -281,24 +281,39 @@ describe("WSClient", () => {
     ).rejects.toThrow(/internal: boom/);
   });
 
-  it("getDEKs accumulates deks.record chunks", async () => {
-    server.handle("deks.get", (_params, reply) => {
-      const id = reply.socket.sentFrames.find((f) => f.method === "deks.get")!
-        .id as string;
-      reply.chunk(id, "deks.record", {
-        id: "d1",
-        wrapped_dek: new Uint8Array([1]),
-      });
-      reply.chunk(id, "deks.record", {
-        id: "d2",
-        wrapped_dek: new Uint8Array([2]),
-      });
-      return { _chunks: 2 };
+  it("getDEKs parses the ordinary deks.get result (real server shape)", async () => {
+    // AUD-032: the server answers deks.get with one ordinary result
+    // containing {deks: [...]}, not chunk frames. The old callChunked path
+    // discarded the result value and rotation always saw an empty array.
+    server.handle("deks.get", () => {
+      return {
+        deks: [
+          { id: "d1", dek: new Uint8Array([1]), seq: 5 },
+          { id: "d2", dek: new Uint8Array([2]), seq: 6 },
+        ],
+      };
     });
     await connect();
 
     const deks = await client.getDEKs({ space: "s1" });
 
     expect(deks.map((d) => d.id)).toEqual(["d1", "d2"]);
+    expect(deks.map((d) => d.seq)).toEqual([5, 6]);
+  });
+
+  it("getFileDEKs parses the ordinary deks.getFiles result", async () => {
+    server.handle("deks.getFiles", () => {
+      return {
+        deks: [
+          { id: "f1", dek: new Uint8Array([9]), cursor: 3 },
+          { id: "f2", dek: new Uint8Array([8]), cursor: 4 },
+        ],
+      };
+    });
+    await connect();
+
+    const deks = await client.getFileDEKs({ space: "s1" });
+
+    expect(deks.map((d) => d.id)).toEqual(["f1", "f2"]);
   });
 });

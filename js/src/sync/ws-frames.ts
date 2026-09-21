@@ -333,6 +333,8 @@ export interface WSDEKsGetResult {
 export interface WSDEKRewrapEntry {
   id: string;
   dek: Uint8Array;
+  /** Wrapped DEK observed when read; server applies a compare-and-set. */
+  observed_dek?: Uint8Array;
 }
 
 export interface WSDEKsRewrapParams {
@@ -367,6 +369,8 @@ export interface WSFileDEKsGetResult {
 export interface WSFileDEKRewrapEntry {
   id: string;
   dek: Uint8Array;
+  /** Wrapped DEK observed when read; server applies a compare-and-set. */
+  observed_dek?: Uint8Array;
 }
 
 export interface WSFileDEKsRewrapParams {
