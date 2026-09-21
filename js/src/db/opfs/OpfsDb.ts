@@ -194,6 +194,14 @@ export class Database {
   }
 
   /**
+   * Current SQLite journal mode — diagnostics; pins the durability
+   * configuration (AUD-017: must be "persist").
+   */
+  async journalMode(): Promise<string> {
+    return (await this.rpc.call("journalMode", [])) as string;
+  }
+
+  /**
    * Atomically read a record together with its CRDT base for base-aware
    * patching (`patch(def, data, { base })`).
    *

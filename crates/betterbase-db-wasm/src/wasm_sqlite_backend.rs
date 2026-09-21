@@ -124,28 +124,43 @@ impl WasmSqliteBackend {
         Ok(std::cell::Ref::map(r, |opt| opt.as_ref().unwrap()))
     }
 
+    /// Current journal mode — durability pin for AUD-017 (must be "persist":
+    /// a file-backed rollback journal survives abrupt browser termination).
+    pub fn journal_mode(&self) -> betterbase_db::error::Result<String> {
+        let conn = self.borrow_conn()?;
+        let mut stmt = conn.prepare("PRAGMA journal_mode;").map_err(storage_err)?;
+        stmt.step().map_err(storage_err)?;
+        Ok(stmt.column_text(0))
+    }
+
     /// Initialize the database schema (tables, indexes, pragmas).
     pub fn init_schema(&self) -> betterbase_db::error::Result<()> {
         let conn = self.borrow_conn()?;
-        // MEMORY journal mode: the rollback journal is held in memory rather
-        // than written to an OPFS file. This avoids the SAH Pool VFS file I/O
-        // on every transaction, giving ~3.5x faster single-record writes
-        // (benchmarked at 0.9ms vs 3.4ms per put with PERSIST).
+        // PERSIST journal mode: the rollback journal is a real OPFS file
+        // (kept and header-truncated across transactions instead of deleted
+        // and recreated). A crash mid-transaction rolls the database back to
+        // the last commit — previously committed data survives (AUD-017).
         //
-        // The tradeoff: if the browser crashes mid-transaction, the in-memory
-        // journal is lost and the partial transaction cannot be rolled back.
-        // In practice this means at most one in-flight write is lost — acceptable
-        // for a local-first database with server sync.
+        // Measured cost vs a RAM-only journal (MEMORY): single-record puts
+        // ~2.6ms vs ~0.8ms (3.2x); bulk/transactional writes are unaffected
+        // (~0.04ms/record — one journal cycle per transaction). MEMORY was
+        // previously chosen for the write speed, but its documented failure
+        // mode is file *corruption*, not just losing the in-flight write:
+        // modified pages can reach the OPFS file while the rollback journal
+        // exists only in RAM, so an abrupt browser termination can corrupt
+        // previously committed data. For a local-first database whose only
+        // copy of unsynced data is this file, that trade is not worth 1.8ms
+        // on debounced UI writes.
         //
-        // WAL mode is not an option: the OPFS SAH Pool VFS doesn't support the
-        // shared-memory primitives WAL requires.
+        // WAL mode is not an option: the OPFS SAH Pool VFS doesn't support
+        // the shared-memory primitives WAL requires.
         //
-        // NORMAL synchronous: fsync at critical moments (after WAL checkpoint
-        // or after journal header write) but not after every page write. This is
-        // SQLite's default and provides good durability without the overhead of
-        // FULL synchronous.
+        // synchronous=NORMAL: with a file-backed rollback journal this
+        // covers browser/process crashes (the OS retains file contents); a
+        // power-loss window remains unless synchronous=FULL fsyncs every
+        // commit.
         conn.execute_batch(
-            "PRAGMA journal_mode=MEMORY;
+            "PRAGMA journal_mode=PERSIST;
              PRAGMA synchronous=NORMAL;
              PRAGMA cache_size=-4000;
              PRAGMA temp_store=MEMORY;",

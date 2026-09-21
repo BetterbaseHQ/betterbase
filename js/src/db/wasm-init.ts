@@ -23,6 +23,7 @@ export interface WasmDbInstance {
   put(collection: string, data: unknown, options: unknown): unknown;
   get(collection: string, id: string, options: unknown): unknown;
   record_base(collection: string, id: string): unknown;
+  journal_mode(): string;
   patch(collection: string, data: unknown, options: unknown): unknown;
   delete(collection: string, id: string, options: unknown): boolean;
   query(

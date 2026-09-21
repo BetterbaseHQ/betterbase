@@ -172,6 +172,17 @@ impl WasmDb {
         self.adapter.close().into_js()
     }
 
+    /// Current SQLite journal mode — durability pin (AUD-017). Must be
+    /// "persist": a file-backed rollback journal survives abrupt browser
+    /// termination; a RAM-only journal can corrupt committed data.
+    pub fn journal_mode(&self) -> Result<JsValue, JsValue> {
+        let mode = self
+            .adapter
+            .with_backend(|backend| backend.journal_mode())
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(JsValue::from_str(&mode))
+    }
+
     /// Release OPFS access handles held by the VFS pool.
     ///
     /// Must be called after `close()`. This unregisters the VFS and closes all

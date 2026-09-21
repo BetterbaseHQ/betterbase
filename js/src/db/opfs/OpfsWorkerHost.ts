@@ -95,6 +95,8 @@ export class OpfsWorkerHost {
       }
       case "getRecordBase":
         return this.wasm.record_base(args[0] as string, args[1] as string);
+      case "journalMode":
+        return this.wasm.journal_mode();
       case "patch":
         return this.wasm.patch(args[0] as string, args[1], args[2] ?? null);
       case "delete":
