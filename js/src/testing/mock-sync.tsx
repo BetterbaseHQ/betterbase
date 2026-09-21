@@ -299,22 +299,57 @@ export function useMembers(_spaceId: string | null | undefined) {
 }
 
 let fileUrls = new Map<string, string>();
+let unavailableFiles = new Set<string>();
 
 /** Make `useFile(fileId)` resolve to a url (e.g. a data: URL in tests). */
 export function setFileUrl(fileId: string, url: string | null) {
-  if (url === null) fileUrls.delete(fileId);
-  else fileUrls.set(fileId, url);
+  if (url === null) {
+    fileUrls.delete(fileId);
+    unavailableFiles.delete(fileId);
+  } else {
+    fileUrls.set(fileId, url);
+  }
+}
+
+/** Make `useFile(fileId)` report the unavailable state (bytes missing). */
+export function setFileUnavailable(fileId: string) {
+  fileUrls.delete(fileId);
+  unavailableFiles.add(fileId);
 }
 
 export function useFile(fileId: string | null | undefined, _mimeType?: string) {
   // status mirrors the real FileStatus union ("idle" | "loading" | "ready" |
   // "error" | "unavailable")
   const url = fileId ? (fileUrls.get(fileId) ?? null) : null;
-  return { url, status: url ? "ready" : "idle" } as const;
+  const status = url
+    ? "ready"
+    : fileId && unavailableFiles.has(fileId)
+      ? "unavailable"
+      : "idle";
+  return { url, status } as const;
 }
 
 export function useEditChain(_record: unknown): unknown[] {
   return [];
+}
+
+let uploadQueueState: { pending: number; errored: number } = {
+  pending: 0,
+  errored: 0,
+};
+
+/** Make `useFileUploadQueue()` report the given counts in tests. */
+export function setUploadQueue(pending: number, errored: number) {
+  uploadQueueState = { pending, errored };
+}
+
+export function useFileUploadQueue() {
+  return {
+    pending: uploadQueueState.pending,
+    errored: uploadQueueState.errored,
+    entries: [],
+    retry: vi.fn().mockResolvedValue(undefined),
+  };
 }
 
 export function useSendEvent(
