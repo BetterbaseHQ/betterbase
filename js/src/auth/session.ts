@@ -69,6 +69,12 @@ export class AuthSession {
   private config: AuthSessionConfig;
   private storageKey: string;
   private disposed = false;
+  /**
+   * Bumped on every cleanup (destroy/dispose/cross-tab logout). Async work
+   * captures the value at start and aborts if it changed, so a response
+   * landing after logout can never re-persist credentials (AUD-010).
+   */
+  private generation = 0;
   /** Set when refresh fails with a server error (4xx). No further requests will succeed. */
   private dead = false;
   private epochValue: number | undefined;
@@ -372,15 +378,67 @@ export class AuthSession {
   /**
    * Force an immediate token refresh. Concurrent calls are coalesced into one request.
    * Retries network errors with exponential backoff. Gives up on 4xx errors.
+   *
+   * Cross-tab coordination (AUD-004): the server revokes the whole refresh
+   * family when one token is presented twice, so two tabs presenting the
+   * same shared token concurrently would log both out. Where Web Locks are
+   * available, rotation is serialized per storage key and each holder first
+   * adopts whatever token a peer tab persisted while it waited.
    */
   async refresh(): Promise<void> {
     if (this.refreshPromise) return this.refreshPromise;
 
-    this.refreshPromise = this.doRefresh();
+    this.refreshPromise = this.refreshWithCrossTabFence();
     try {
       await this.refreshPromise;
     } finally {
       this.refreshPromise = null;
+    }
+  }
+
+  private async refreshWithCrossTabFence(): Promise<void> {
+    const locks =
+      typeof navigator !== "undefined" ? navigator.locks : undefined;
+    if (!locks?.request) {
+      return this.doRefresh();
+    }
+    return locks.request(
+      `betterbase:refresh:${this.storageKey}`,
+      { mode: "exclusive" },
+      async () => {
+        this.adoptPersistedTokenIfNewer();
+        return this.doRefresh();
+      },
+    );
+  }
+
+  /**
+   * Adopt the persisted credentials when a peer tab rotated them while this
+   * tab was waiting for the refresh lock. Re-presenting the superseded
+   * token would be sequential reuse and revoke the family server-side. An
+   * empty store means a peer logged this session out: retire this object.
+   */
+  private adoptPersistedTokenIfNewer(): void {
+    if (this.disposed) return;
+    const raw = localStorage.getItem(this.storageKey);
+    if (raw === null) {
+      // Logged out in another tab while we waited — never present the
+      // stale token; abandon this refresh via the generation fence.
+      this.cleanupSync();
+      return;
+    }
+    try {
+      const state = JSON.parse(raw) as SessionState;
+      if (!state.refreshToken || state.refreshToken === this.refreshTokenValue)
+        return;
+      this.accessToken = state.accessToken;
+      this.refreshTokenValue = state.refreshToken;
+      this.expiresAt = state.expiresAt;
+    } catch (err) {
+      console.error(
+        "[betterbase-auth] Failed to adopt peer-rotated credentials:",
+        err,
+      );
     }
   }
 
@@ -418,6 +476,8 @@ export class AuthSession {
 
   private cleanupSync(): void {
     this.disposed = true;
+    // Invalidate any in-flight refresh belonging to the previous lifetime.
+    this.generation++;
     this.accessToken = "";
     this.refreshTokenValue = "";
     this.expiresAt = 0;
@@ -440,13 +500,26 @@ export class AuthSession {
   }
 
   private async doRefresh(): Promise<void> {
+    if (this.disposed) {
+      throw new TokenRefreshError("session destroyed during refresh");
+    }
     let lastError: Error | undefined;
+    const generation = this.generation;
+    /** True when this session was destroyed/disposed mid-refresh. */
+    const abandoned = () => this.disposed || generation !== this.generation;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         const response: TokenResponse = await this.config.client.refreshToken(
           this.refreshTokenValue,
         );
+
+        if (abandoned()) {
+          // Logout (or replacement) happened while the token endpoint was
+          // in flight — applying the response would resurrect the
+          // logged-out session or clobber the replacement's credentials.
+          throw new TokenRefreshError("session destroyed during refresh");
+        }
 
         this.accessToken = response.access_token;
         if (response.refresh_token) {
@@ -478,6 +551,9 @@ export class AuthSession {
         // Network error — wait and retry
         if (attempt < MAX_RETRIES - 1) {
           await sleep(BASE_RETRY_MS * Math.pow(2, attempt));
+          if (abandoned()) {
+            throw new TokenRefreshError("session destroyed during refresh");
+          }
         }
       }
     }
@@ -531,6 +607,9 @@ export class AuthSession {
   }
 
   private persist(): void {
+    // State writes are refused after disposal — a late async completion
+    // must not resurrect a logged-out session (AUD-010).
+    if (this.disposed) return;
     const state: SessionState = {
       accessToken: this.accessToken,
       refreshToken: this.refreshTokenValue,
