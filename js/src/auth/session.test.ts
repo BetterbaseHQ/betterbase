@@ -9,11 +9,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthSessionConfig } from "./types.js";
 
 const { AuthSession } = await import("./session.js");
+// The mocked key-store exposes its shared key-presence table for tests.
+const { __keyPresence: KEY_PRESENCE } =
+  (await import("./key-store.js")) as unknown as {
+    __keyPresence: Record<string, boolean>;
+  };
 
 vi.mock("../wasm-init.js", () => ({ initWasm: vi.fn() }));
 vi.mock("./crypto.js", () => ({ hkdfDerive: () => new Uint8Array(32) }));
 vi.mock("./key-store.js", () => {
   const clearAllCalls: string[] = [];
+  // Tests flip entries to true to make the corresponding key "present"
+  // in the (mocked) IndexedDB.
+  const keyPresence: Record<string, boolean> = {};
   const makeScoped = (scope: string) => ({
     initialize: vi.fn(async () => {}),
     clearAll: vi.fn(async () => {
@@ -23,8 +31,12 @@ vi.mock("./key-store.js", () => {
     importEpochKey: vi.fn(async () => {}),
     importAppPrivateKey: vi.fn(async () => {}),
     storeKeys: vi.fn(async () => {}),
-    getCryptoKey: vi.fn(async () => null),
-    getJwk: vi.fn(async () => null),
+    getCryptoKey: vi.fn(async (id: string) =>
+      (keyPresence[`${scope}::${id}`] ?? false) ? ({} as CryptoKey) : null,
+    ),
+    getJwk: vi.fn(async (id: string) =>
+      (keyPresence[`${scope}::${id}`] ?? false) ? ({} as JsonWebKey) : null,
+    ),
     getRawKey: vi.fn(async () => null),
   });
   return {
@@ -37,6 +49,8 @@ vi.mock("./key-store.js", () => {
       }),
       __clearAllCalls: clearAllCalls,
     },
+    __clearAllCalls: clearAllCalls,
+    __keyPresence: keyPresence,
   };
 });
 
@@ -297,5 +311,69 @@ describe("AuthSession AUD-012: identity-scoped key storage", () => {
     // (or the global store).
     expect(new Set(calls).size).toBe(calls.length);
     expect(calls.every((c) => c === "betterbase_session_")).toBe(true);
+  });
+});
+
+describe("AuthSession AUD-012 residual: credential/key snapshot binding", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    for (const k of Object.keys(KEY_PRESENCE)) delete KEY_PRESENCE[k];
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function seedStateWithKeys(): void {
+    localStorage.setItem(
+      "betterbase_session_state",
+      JSON.stringify({
+        accessToken: "old-access",
+        refreshToken: "old-refresh",
+        expiresAt: Date.now() + 3600_000,
+        hasEncryptionKey: true,
+        keyId: "key-1",
+        hasEpochKey: true,
+        hasAppPrivateKey: true,
+        appPublicKeyJwk: "pub",
+      }),
+    );
+  }
+
+  it("fails closed when IndexedDB lost keys the credentials reference", async () => {
+    seedStateWithKeys();
+    const client = {
+      refreshToken: vi.fn(async () => ({
+        access_token: "a",
+        refresh_token: "r",
+        expires_in: 3600,
+      })),
+    };
+
+    // No keyPresence entries: IndexedDB has none of the referenced keys.
+    const session = await AuthSession.restore(makeConfig(client));
+    expect(session).toBeNull();
+    // The half-state is removed so the next load starts clean.
+    expect(localStorage.getItem("betterbase_session_state")).toBeNull();
+    expect(client.refreshToken).not.toHaveBeenCalled();
+  });
+
+  it("restores when every referenced key is present", async () => {
+    seedStateWithKeys();
+    const scope = "betterbase_session_";
+    KEY_PRESENCE[`${scope}::encryption-key`] = true;
+    KEY_PRESENCE[`${scope}::epoch-key`] = true;
+    KEY_PRESENCE[`${scope}::app-private-key`] = true;
+    const client = {
+      refreshToken: vi.fn(async () => ({
+        access_token: "a",
+        refresh_token: "r",
+        expires_in: 3600,
+      })),
+    };
+
+    const session = await AuthSession.restore(makeConfig(client));
+    expect(session).not.toBeNull();
+    expect(localStorage.getItem("betterbase_session_state")).not.toBeNull();
   });
 });

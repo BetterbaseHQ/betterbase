@@ -221,6 +221,36 @@ export class AuthSession {
       return null;
     }
 
+    // AUD-012 residual: bind the credential snapshot to the key snapshot.
+    // Keys are always written to IndexedDB BEFORE the localStorage commit,
+    // so a consistent restore requires every key the credential state
+    // references to still be present. If IndexedDB was evicted or cleared
+    // while localStorage survived (or a crash split the pair), restoring
+    // anyway would yield a session whose encryption operations fail far
+    // from the cause — fail closed and force a fresh login instead.
+    const missingKeys: string[] = [];
+    if (state.hasEncryptionKey) {
+      const key = await session.keyStore.getCryptoKey("encryption-key");
+      if (!key) missingKeys.push("encryption-key");
+    }
+    if (state.hasEpochKey) {
+      const key = await session.keyStore.getCryptoKey("epoch-key");
+      if (!key) missingKeys.push("epoch-key");
+    }
+    if (state.hasAppPrivateKey) {
+      const jwk = await session.keyStore.getJwk("app-private-key");
+      if (!jwk) missingKeys.push("app-private-key");
+    }
+    if (missingKeys.length > 0) {
+      console.error(
+        "[betterbase-auth] Persisted session references keys missing from KeyStore:",
+        missingKeys.join(", "),
+      );
+      localStorage.removeItem(storageKey);
+      session.cleanupSync();
+      return null;
+    }
+
     // Backfill personalSpaceId from access token for sessions persisted before this field existed
     if (!session.personalSpaceIdValue && state.accessToken) {
       session.personalSpaceIdValue = decodeJwtClaim(
