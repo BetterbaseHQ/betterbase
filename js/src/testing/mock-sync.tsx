@@ -276,9 +276,14 @@ export function useTyping(
 }
 
 export function useSyncDb() {
-  if (!dbAdapter)
+  // Prefer the adapter the mounted provider received — the real provider
+  // supplies its own adapter prop, and apps that swap a live `db` binding
+  // (account scoping) render the current instance. `setSyncDb` remains as
+  // the fallback for providers mounted without an adapter prop.
+  const adapter = captured?.adapter ?? dbAdapter;
+  if (!adapter)
     throw new Error("call setSyncDb(db) before rendering the app");
-  return dbAdapter;
+  return adapter;
 }
 
 export function usePresence(
