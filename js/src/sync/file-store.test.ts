@@ -147,6 +147,29 @@ async function deleteBlobBehindStore(
   });
 }
 
+/** Overwrite a queue entry's persisted state directly — simulates the
+ * IndexedDB state a crash mid-upload leaves behind (AUD-036). */
+async function forceQueueState(
+  store: FileStore,
+  fileId: string,
+  state: { uploadStatus: string; lastAttemptAt?: number },
+): Promise<void> {
+  const db = await (store as unknown as { dbPromise: Promise<IDBDatabase> })
+    .dbPromise;
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction("meta", "readwrite");
+    const req = tx.objectStore("meta").get(`_\0${fileId}`);
+    req.onsuccess = () => {
+      const entry = req.result;
+      entry.uploadStatus = state.uploadStatus;
+      entry.lastAttemptAt = state.lastAttemptAt ?? Date.now();
+      tx.objectStore("meta").put(entry);
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -514,16 +537,58 @@ describe("FileStore upload queue", () => {
     expect(await store.get(UUID)).toBeNull();
   });
 
+  it("resets a stale uploading entry and retries it (crash recovery)", async () => {
+    const upload = vi.fn().mockResolvedValue({ fileId: UUID });
+    const store = freshStore();
+    await store.put(UUID, data(8), RECORD);
+
+    // What a crash mid-upload leaves behind: in-flight status, attempt
+    // timestamped beyond the stale window, bytes still cached.
+    await forceQueueState(store, UUID, {
+      uploadStatus: "uploading",
+      lastAttemptAt: Date.now() - 16 * 60 * 1000,
+    });
+
+    await store.connect(syncConfig(makeFilesClient({ upload })));
+    await store.processQueue();
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(await store.getQueueEntries()).toEqual([]);
+  });
+
+  it("does not steal a live uploading entry from a peer instance", async () => {
+    const upload = vi.fn();
+    const store = freshStore();
+    await store.put(UUID, data(8), RECORD);
+
+    // Recent attempt — a peer tab may genuinely be uploading right now.
+    await forceQueueState(store, UUID, {
+      uploadStatus: "uploading",
+      lastAttemptAt: Date.now(),
+    });
+
+    await store.connect(syncConfig(makeFilesClient({ upload })));
+    await store.processQueue();
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(await store.getQueueEntries()).toEqual([
+      expect.objectContaining({ status: "uploading" }),
+    ]);
+  });
+
   it("disconnect reverts to local-only and stops queue processing", async () => {
     const upload = vi.fn().mockResolvedValue({ fileId: UUID });
     const store = freshStore();
     await store.connect(syncConfig(makeFilesClient({ upload })));
     expect(store.connected).toBe(true);
 
-    await store.put(UUID, data(8), RECORD);
+    // Disconnect BEFORE enqueuing: a connected store processes the queue in
+    // the background, so enqueue-then-disconnect races that processing
+    // (an upload legitimately started while connected is not "stopped").
     store.disconnect();
     expect(store.connected).toBe(false);
 
+    await store.put(UUID, data(8), RECORD);
     await store.processQueue();
     expect(upload).not.toHaveBeenCalled();
     expect(await store.getQueueEntries()).toEqual([

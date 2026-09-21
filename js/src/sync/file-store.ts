@@ -130,6 +130,29 @@ interface MetaEntry {
   lastAttemptAt?: number;
 }
 
+/**
+ * An `uploading` entry whose last attempt started longer ago than this is
+ * treated as abandoned (process crash / tab close mid-upload) and reset to
+ * `pending` on the next queue scan (AUD-036). Without a reset there is no
+ * path back: the scan only picks `pending`/`error`, so the item is excluded
+ * from uploads forever and its cache allocation is pinned.
+ *
+ * The window is deliberately generous: `uploading` also acts as the
+ * cross-instance claim (a peer tab's scan skips it), and a slow link can
+ * legitimately hold a large upload in flight for many minutes. A reset that
+ * races a genuinely-live uploader is safe, not merely rare: the object store
+ * create-mode + idempotent metadata commit mean the loser of the race
+ * observes an already-recorded file and simply clears its queue state.
+ */
+const STALE_UPLOAD_MS = 15 * 60 * 1000;
+
+function isStaleUploading(meta: MetaEntry): boolean {
+  return (
+    meta.uploadStatus === "uploading" &&
+    Date.now() - (meta.lastAttemptAt ?? 0) > STALE_UPLOAD_MS
+  );
+}
+
 /** Heavy blob data — only read when actually needed. */
 interface BlobEntry {
   /** Compound key: `${spaceId}\0${fileId}` */
@@ -607,6 +630,7 @@ export class FileStore {
     const db = await this.dbPromise;
     while (true) {
       if (!this.syncConfig) break;
+      await this.resetStaleUploading(db);
       const allMeta = await metaGetAllForSpace(db, this.spaceId);
       const entries = allMeta.filter(
         (m) => m.uploadStatus === "pending" || m.uploadStatus === "error",
@@ -759,6 +783,21 @@ export class FileStore {
   ): Promise<void> {
     await metaPut(db, entry);
     await this.fireQueueChange(db);
+  }
+
+  /**
+   * Reset abandoned `uploading` entries back to `pending` (AUD-036).
+   * Attempts are kept so the retry-visible count stays honest; the stale
+   * window keeps a live uploader in another tab from being stolen.
+   */
+  private async resetStaleUploading(db: IDBDatabase): Promise<void> {
+    const allMeta = await metaGetAllForSpace(db, this.spaceId);
+    const stale = allMeta.filter(isStaleUploading);
+    if (stale.length === 0) return;
+    for (const entry of stale) {
+      entry.uploadStatus = "pending";
+      await this.persistQueueEntry(db, entry);
+    }
   }
 
   private async markUploading(
@@ -1019,6 +1058,11 @@ export class FileStore {
     let evicted = false;
     for (const meta of allMeta) {
       if (totalBytes <= this.maxCacheBytes) break;
+      // Queue entries are protected: their local blob may be the only copy
+      // of bytes not yet acknowledged by the server. Stale `uploading`
+      // entries stay protected too — the queue scan resets them within
+      // STALE_UPLOAD_MS, after which they either upload (protection ends
+      // with the queue state) or drop themselves when the blob is gone.
       if (meta.uploadStatus !== undefined) continue;
 
       await deleteFile(db, meta.key);
