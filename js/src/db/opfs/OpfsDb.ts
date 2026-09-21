@@ -132,12 +132,33 @@ export class Database {
   // CRUD
   // ========================================================================
 
+  /**
+   * Preallocate the record id before dispatch (AUD-022).
+   *
+   * Pending writes are replayed verbatim after a leader failover or worker
+   * reconnect (`RpcClient.replaceTransport`). If the id were left for Rust
+   * autofill, each replay would generate a fresh UUID — an ambiguously
+   * committed insert (commit reached the store, reply was lost) would
+   * duplicate. Pinning the id in the request makes the replay an idempotent
+   * upsert (Rust `put` updates when the id exists).
+   */
+  private preallocateId<T extends object>(data: T, options?: PutOptions): T {
+    const record = data as Record<string, unknown>;
+    const existing = record["id"];
+    const id =
+      existing === undefined || existing === null || existing === ""
+        ? (options?.id ?? crypto.randomUUID())
+        : (existing as string);
+    return { ...record, id } as T;
+  }
+
   async put<S extends SchemaShape>(
     def: CollectionDefHandle<string, S>,
     data: CollectionWrite<S>,
     options?: PutOptions,
   ): Promise<CollectionRead<S>> {
-    const serialized = serializeForRust(data as Record<string, unknown>);
+    const withId = this.preallocateId(data as Record<string, unknown>, options);
+    const serialized = serializeForRust(withId);
     const result = (await this.rpc.call("put", [
       def.name,
       serialized,
@@ -292,7 +313,9 @@ export class Database {
     options?: PutOptions,
   ): Promise<BatchResult<CollectionRead<S>>> {
     const serialized = records.map((r) =>
-      serializeForRust(r as Record<string, unknown>),
+      serializeForRust(
+        this.preallocateId(r as Record<string, unknown>, options),
+      ),
     );
     const result = (await this.rpc.call("bulkPut", [
       def.name,

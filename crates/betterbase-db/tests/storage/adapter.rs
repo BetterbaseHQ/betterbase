@@ -187,6 +187,50 @@ fn put_with_explicit_id() {
 }
 
 #[test]
+fn put_with_existing_id_updates_instead_of_duplicating() {
+    // AUD-022: after an ambiguous commit + failover replay, the client
+    // re-puts the identical document (id preallocated before dispatch).
+    // The adapter must treat it as an update — one record, stable id,
+    // createdAt preserved.
+    let def = users_def();
+    let adapter = make_adapter(&def);
+
+    let first = adapter
+        .put(
+            &def,
+            json!({ "id": "replay-1", "name": "Alice", "email": "alice@example.com" }),
+            &put_opts(),
+        )
+        .expect("first put");
+    let created_at = first.data["createdAt"]
+        .as_str()
+        .expect("createdAt")
+        .to_string();
+
+    // The replayed document is identical (no id knowledge beyond the
+    // preallocated one; no echoed timestamps).
+    let replay = adapter
+        .put(
+            &def,
+            json!({ "id": "replay-1", "name": "Alice", "email": "alice@example.com" }),
+            &put_opts(),
+        )
+        .expect("replayed put");
+
+    assert_eq!(replay.id, "replay-1");
+    assert_eq!(replay.data["createdAt"].as_str().unwrap(), created_at);
+
+    let all = adapter
+        .get_all(&def, &ListOptions::default())
+        .expect("list");
+    assert_eq!(
+        all.records.len(),
+        1,
+        "replay must not insert a second record"
+    );
+}
+
+#[test]
 fn get_returns_record_by_id() {
     let def = users_def();
     let adapter = make_adapter(&def);
