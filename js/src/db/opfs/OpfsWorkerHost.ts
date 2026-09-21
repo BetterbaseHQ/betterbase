@@ -78,6 +78,21 @@ export class OpfsWorkerHost {
           args[1] as string,
           args[2] ?? null,
         );
+      case "getWithBase": {
+        // Record + CRDT base in a single dispatch: the worker is
+        // single-threaded, so no sync application can interleave between
+        // the two reads — callers get an atomic (view, base) pair.
+        const record = this.wasm.get(
+          args[0] as string,
+          args[1] as string,
+          args[2] ?? null,
+        );
+        const base = this.wasm.record_base(
+          args[0] as string,
+          args[1] as string,
+        );
+        return { record, base };
+      }
       case "getRecordBase":
         return this.wasm.record_base(args[0] as string, args[1] as string);
       case "patch":

@@ -258,3 +258,30 @@ describe("Database.put auto-id preallocation (AUD-022)", () => {
     expect(new Set(ids).size).toBe(2);
   });
 });
+
+describe("Database.getWithBase (AUD-049 plumbing)", () => {
+  it("returns the record and base from one dispatch", async () => {
+    const { db, rpc } = makeDb();
+    rpc.call.mockResolvedValue({
+      record: { id: "n1", when: "2024-01-01T00:00:00.000Z" },
+      base: new Uint8Array([1, 2, 3]),
+    });
+
+    const result = await db.getWithBase(def, "n1");
+
+    expect(rpc.call).toHaveBeenCalledWith("getWithBase", ["notes", "n1", null]);
+    expect(result.record!.id).toBe("n1");
+    expect(result.record!.when).toEqual(new Date("2024-01-01T00:00:00.000Z"));
+    expect(result.base).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
+  it("returns null record and base for a missing record", async () => {
+    const { db, rpc } = makeDb();
+    rpc.call.mockResolvedValue({ record: null, base: null });
+
+    const result = await db.getWithBase(def, "missing");
+
+    expect(result.record).toBeNull();
+    expect(result.base).toBeNull();
+  });
+});

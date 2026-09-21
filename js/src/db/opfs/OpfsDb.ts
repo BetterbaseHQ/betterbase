@@ -194,6 +194,41 @@ export class Database {
   }
 
   /**
+   * Atomically read a record together with its CRDT base for base-aware
+   * patching (`patch(def, data, { base })`).
+   *
+   * Both values are produced by a single worker dispatch, so a sync
+   * application cannot land between the read and the base capture — unlike
+   * `get()` followed by `snapshotBase()`, where the base could correspond
+   * to a newer version than the returned view (diffing the two would
+   * tombstone the concurrent edits).
+   */
+  async getWithBase<S extends SchemaShape>(
+    def: CollectionDefHandle<string, S>,
+    id: string,
+    options?: GetOptions,
+  ): Promise<{
+    record: CollectionRead<S> | null;
+    base: Uint8Array | null;
+  }> {
+    const result = (await this.rpc.call("getWithBase", [
+      def.name,
+      id,
+      options ?? null,
+    ])) as { record: Record<string, unknown> | null; base: Uint8Array | null };
+    return {
+      record:
+        result?.record === null || result?.record === undefined
+          ? null
+          : (deserializeFromRust(
+              result.record,
+              this.schemaFor(def),
+            ) as CollectionRead<S>),
+      base: result?.base ?? null,
+    };
+  }
+
+  /**
    * Opaque CRDT snapshot of a record, for base-aware patching.
    *
    * Capture at the moment a record is rendered for editing and pass back as

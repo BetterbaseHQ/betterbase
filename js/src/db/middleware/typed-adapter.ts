@@ -165,6 +165,23 @@ export class TypedAdapter<
     return this.inner.snapshotBase(def, id);
   }
 
+  /** Atomic record + CRDT base pair — see Database.getWithBase. */
+  async getWithBase<S extends SchemaShape>(
+    def: CollectionDefHandle<string, S>,
+    id: string,
+    options?: GetOptions,
+  ): Promise<{
+    record: (CollectionRead<S> & TExtra) | undefined;
+    base: Uint8Array | null;
+  }> {
+    const result = await this.inner.getWithBase(def, id, options);
+    if (!result.record) return { record: undefined, base: result.base };
+    return {
+      record: this.enrichRecord(result.record),
+      base: result.base,
+    };
+  }
+
   async delete<S extends SchemaShape>(
     def: CollectionDefHandle<string, S>,
     id: string,
