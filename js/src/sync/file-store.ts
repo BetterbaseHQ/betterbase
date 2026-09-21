@@ -789,6 +789,14 @@ export class FileStore {
    * Reset abandoned `uploading` entries back to `pending` (AUD-036).
    * Attempts are kept so the retry-visible count stays honest; the stale
    * window keeps a live uploader in another tab from being stolen.
+   *
+   * Runs from the queue scan AND from eviction: a device that crashes
+   * mid-upload and never reconnects would otherwise keep its entries
+   * `uploading` — and their cache allocations pinned — forever.
+   *
+   * Resets are batched into a single notification: a crash during a large
+   * import can strand hundreds of entries, and per-entry queue-change
+   * fires (each a full metadata scan) made recovery O(n²).
    */
   private async resetStaleUploading(db: IDBDatabase): Promise<void> {
     const allMeta = await metaGetAllForSpace(db, this.spaceId);
@@ -796,8 +804,9 @@ export class FileStore {
     if (stale.length === 0) return;
     for (const entry of stale) {
       entry.uploadStatus = "pending";
-      await this.persistQueueEntry(db, entry);
+      await metaPut(db, entry);
     }
+    await this.fireQueueChange(db);
   }
 
   private async markUploading(
@@ -1044,6 +1053,9 @@ export class FileStore {
 
   private async runEviction(): Promise<void> {
     const db = await this.dbPromise;
+
+    // Reclaim stale-uploading pins even while disconnected (AUD-036)
+    await this.resetStaleUploading(db);
 
     const allMeta = await metaGetAllForSpace(db, this.spaceId);
     let totalBytes = 0;

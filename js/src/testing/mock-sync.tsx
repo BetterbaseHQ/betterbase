@@ -281,8 +281,7 @@ export function useSyncDb() {
   // (account scoping) render the current instance. `setSyncDb` remains as
   // the fallback for providers mounted without an adapter prop.
   const adapter = captured?.adapter ?? dbAdapter;
-  if (!adapter)
-    throw new Error("call setSyncDb(db) before rendering the app");
+  if (!adapter) throw new Error("call setSyncDb(db) before rendering the app");
   return adapter;
 }
 
@@ -348,12 +347,17 @@ export function setUploadQueue(pending: number, errored: number) {
   uploadQueueState = { pending, errored };
 }
 
-export function useFileUploadQueue() {
+export function useFileUploadQueue(): {
+  pending: number;
+  errored: number;
+  entries: never[];
+  retry: () => Promise<void>;
+} {
   return {
     pending: uploadQueueState.pending,
     errored: uploadQueueState.errored,
     entries: [],
-    retry: vi.fn().mockResolvedValue(undefined),
+    retry: async () => {},
   };
 }
 
