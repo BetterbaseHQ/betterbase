@@ -197,6 +197,22 @@ export function useSessionToken(
     privateKeyJwk: JsonWebKey;
     publicKeyJwk: JsonWebKey;
   } | null>(null);
+  // Bumped when another tab replaces the persisted session (storage
+  // event). The session object updates its fields in place, so without
+  // this the key-loading effect below would keep serving the previous
+  // account's keys alongside the new account's tokens (AUD-012).
+  const [identityVersion, setIdentityVersion] = useState(0);
+
+  useEffect(() => {
+    if (!session) return;
+    const onStorage = (e: StorageEvent) => {
+      if (e.key && e.key.endsWith("state")) {
+        setIdentityVersion((v) => v + 1);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [session]);
 
   useEffect(() => {
     if (!session) {
@@ -229,7 +245,7 @@ export function useSessionToken(
     return () => {
       cancelled = true;
     };
-  }, [session]);
+  }, [session, identityVersion]);
 
   return {
     getToken,

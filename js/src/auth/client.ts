@@ -75,12 +75,13 @@ export class OAuthClient {
       // Encode public key for URL parameter
       keysJwk = encodePublicJwk(keyPair.publicKeyJwk);
 
-      // Store non-extractable CryptoKey in IndexedDB.
-      // Clean up any orphan from a prior aborted flow first.
+      // Store non-extractable CryptoKey in IndexedDB, namespaced by the
+      // OAuth transaction (AUD-012): state/verifier are tab-local, and a
+      // single cross-tab key slot would let a parallel login in another
+      // tab overwrite this tab's decryption key at callback time.
       const keyStore = KeyStore.getInstance();
       await keyStore.initialize();
-      await keyStore.deleteEphemeralOAuthKey();
-      await keyStore.storeEphemeralOAuthKey(keyPair.privateKey);
+      await keyStore.storeEphemeralOAuthKey(keyPair.privateKey, state);
 
       // Store thumbprint in sessionStorage
       sessionStorage.setItem(
@@ -174,9 +175,12 @@ export class OAuthClient {
     // Raw key material must not survive across network calls (registerMailboxId,
     // refreshToken) to minimize the XSS exfiltration window.
     if (tokenResponse.keys_jwe) {
-      const keyStore = KeyStore.getInstance();
+      const keyStore = KeyStore.getInstance().scoped(
+        this.config.storagePrefix ?? "betterbase_session_",
+      );
       await keyStore.initialize();
-      const privateKey = await keyStore.getEphemeralOAuthKey();
+      const privateKey =
+        await KeyStore.getInstance().getEphemeralOAuthKey(storedState);
 
       if (privateKey) {
         try {
@@ -236,8 +240,8 @@ export class OAuthClient {
             err instanceof Error ? err : new Error(String(err));
         }
 
-        // Clean up ephemeral key
-        await keyStore.deleteEphemeralOAuthKey();
+        // Clean up the transaction-scoped ephemeral key.
+        await KeyStore.getInstance().deleteEphemeralOAuthKey(storedState);
       } else {
         const error = new Error(
           "Missing ephemeral private key for JWE decryption",

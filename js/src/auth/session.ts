@@ -11,7 +11,7 @@
 
 import { initWasm } from "../wasm-init.js";
 import type { AuthResult, AuthSessionConfig, TokenResponse } from "./types.js";
-import { KeyStore } from "./key-store.js";
+import { KeyStore, type ScopedKeyStore } from "./key-store.js";
 import { hkdfDerive } from "./crypto.js";
 import {
   SessionExpiredError,
@@ -80,7 +80,7 @@ export class AuthSession {
   private epochValue: number | undefined;
   private hasEpochKeyFlag: boolean;
   private epochAdvancedAtValue: number | undefined;
-  private keyStore: KeyStore;
+  private keyStore: ScopedKeyStore;
 
   private constructor(config: AuthSessionConfig, state: SessionState) {
     this.config = config;
@@ -98,7 +98,12 @@ export class AuthSession {
     this.epochValue = state.epoch;
     this.hasEpochKeyFlag = state.hasEpochKey ?? false;
     this.epochAdvancedAtValue = state.epochAdvancedAt;
-    this.keyStore = KeyStore.getInstance();
+    // AUD-012: key material is namespaced by storage prefix so two
+    // configured sessions never share or destroy each other's keys. The
+    // storage prefix therefore becomes real isolation.
+    this.keyStore = KeyStore.getInstance().scoped(
+      config.storagePrefix ?? DEFAULT_STORAGE_PREFIX,
+    );
   }
 
   /**
@@ -117,7 +122,9 @@ export class AuthSession {
       );
     }
 
-    const keyStore = KeyStore.getInstance();
+    const keyStore = KeyStore.getInstance().scoped(
+      config.storagePrefix ?? DEFAULT_STORAGE_PREFIX,
+    );
     await keyStore.initialize();
 
     // Import encryption key to KeyStore if not already done by handleCallback.
@@ -203,9 +210,9 @@ export class AuthSession {
     if (!state.accessToken || !state.refreshToken) return null;
 
     // Initialize KeyStore (keys should already be there from previous session)
-    const keyStore = KeyStore.getInstance();
+    const session = new AuthSession(config, state);
     try {
-      await keyStore.initialize();
+      await session.keyStore.initialize();
     } catch (err) {
       console.error(
         "[betterbase-auth] KeyStore initialization failed, cannot restore session:",
@@ -213,8 +220,6 @@ export class AuthSession {
       );
       return null;
     }
-
-    const session = new AuthSession(config, state);
 
     // Backfill personalSpaceId from access token for sessions persisted before this field existed
     if (!session.personalSpaceIdValue && state.accessToken) {

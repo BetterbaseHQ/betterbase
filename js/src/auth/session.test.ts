@@ -13,22 +13,29 @@ const { AuthSession } = await import("./session.js");
 vi.mock("../wasm-init.js", () => ({ initWasm: vi.fn() }));
 vi.mock("./crypto.js", () => ({ hkdfDerive: () => new Uint8Array(32) }));
 vi.mock("./key-store.js", () => {
-  const instances: unknown[] = [];
+  const clearAllCalls: string[] = [];
+  const makeScoped = (scope: string) => ({
+    initialize: vi.fn(async () => {}),
+    clearAll: vi.fn(async () => {
+      clearAllCalls.push(scope);
+    }),
+    importEncryptionKey: vi.fn(async () => {}),
+    importEpochKey: vi.fn(async () => {}),
+    importAppPrivateKey: vi.fn(async () => {}),
+    storeKeys: vi.fn(async () => {}),
+    getCryptoKey: vi.fn(async () => null),
+    getJwk: vi.fn(async () => null),
+    getRawKey: vi.fn(async () => null),
+  });
   return {
     KeyStore: {
-      getInstance: () => {
-        const ks = {
-          initialize: vi.fn(async () => {}),
-          clearAll: vi.fn(async () => {}),
-          importEncryptionKey: vi.fn(async () => {}),
-          importEpochKey: vi.fn(async () => {}),
-          importAppPrivateKey: vi.fn(async () => {}),
-          getJwk: vi.fn(async () => null),
-        };
-        instances.push(ks);
-        return ks;
-      },
-      __instances: instances,
+      getInstance: () => ({
+        initialize: vi.fn(async () => {}),
+        clearAll: vi.fn(async () => {}),
+        deleteEphemeralOAuthKey: vi.fn(async () => {}),
+        scoped: (scope: string) => makeScoped(scope),
+      }),
+      __clearAllCalls: clearAllCalls,
     },
   };
 });
@@ -253,5 +260,39 @@ describe("AuthSession AUD-004: cross-tab refresh coordination", () => {
     await expect(session!.refresh()).rejects.toThrow();
     expect(client.refreshToken).not.toHaveBeenCalled();
     expect(await session!.getToken()).toBeNull();
+  });
+});
+
+describe("AuthSession AUD-012: identity-scoped key storage", () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    const { KeyStore } = await import("./key-store.js");
+    (
+      KeyStore as unknown as { __clearAllCalls: string[] }
+    ).__clearAllCalls.length = 0;
+  });
+
+  it("destroy() clears only its own key scope", async () => {
+    seedState();
+    const client = {
+      refreshToken: vi.fn(async () => ({
+        access_token: "a",
+        refresh_token: "r",
+        expires_in: 3600,
+      })),
+    };
+    const session = await AuthSession.restore(makeConfig(client, {}));
+    expect(session).not.toBeNull();
+
+    await session!.destroy();
+
+    const { KeyStore } = await import("./key-store.js");
+    const calls = (KeyStore as unknown as { __clearAllCalls: string[] })
+      .__clearAllCalls;
+    expect(calls).toContain("betterbase_session_");
+    // Only this session's scope was destroyed — never another session's
+    // (or the global store).
+    expect(new Set(calls).size).toBe(calls.length);
+    expect(calls.every((c) => c === "betterbase_session_")).toBe(true);
   });
 });

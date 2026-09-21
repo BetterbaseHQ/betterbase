@@ -10,6 +10,13 @@ export interface OAuthConfig {
   domain: string;
   /** Space-separated list of scopes (e.g., "openid email sync") */
   scope: string;
+  /**
+   * Key-storage scope / localStorage prefix for the session this client
+   * feeds (AUD-012). Must match the AuthSession's storagePrefix so keys
+   * imported during the callback land in the session's scope. Default
+   * "betterbase_session_".
+   */
+  storagePrefix?: string;
 }
 
 /**

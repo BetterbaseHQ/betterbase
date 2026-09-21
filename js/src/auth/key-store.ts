@@ -23,6 +23,30 @@ const DB_NAME = "betterbase-key-store";
 const DB_VERSION = 2;
 const STORE_NAME = "keys";
 
+/** Ephemeral OAuth keys are namespaced per transaction (the OAuth state). */
+function ephemeralId(txId?: string): string {
+  return txId ? `ephemeral-oauth-key::${txId}` : "ephemeral-oauth-key";
+}
+
+/**
+ * A scope-isolated view over a KeyStore (see {@link KeyStore.scoped}).
+ * Sessions use one view per storage prefix so concurrent sessions hold
+ * disjoint key material (AUD-012).
+ */
+export interface ScopedKeyStore {
+  initialize(): Promise<void>;
+  getCryptoKey(id: KeyId | (string & {})): Promise<CryptoKey | null>;
+  getJwk(id: KeyId | (string & {})): Promise<JsonWebKey | null>;
+  getRawKey(id: KeyId | (string & {})): Promise<Uint8Array | null>;
+  importEncryptionKey(rawKey: Uint8Array): Promise<void>;
+  importEpochKey(rawKey: Uint8Array): Promise<void>;
+  importAppPrivateKey(jwk: JsonWebKey): Promise<void>;
+  storeKeys(
+    entries: { id: KeyId | (string & {}); value: CryptoKey }[],
+  ): Promise<void>;
+  clearAll(): Promise<void>;
+}
+
 export type KeyId =
   | "encryption-key"
   | "epoch-key"
@@ -121,7 +145,7 @@ export class KeyStore {
    * Store a value in IndexedDB.
    */
   async storeValue(
-    id: KeyId,
+    id: KeyId | (string & {}),
     value: Uint8Array | JsonWebKey | CryptoKey,
   ): Promise<void> {
     await this.ensureInitialized();
@@ -141,7 +165,7 @@ export class KeyStore {
    * Retrieve a raw key (Uint8Array) from IndexedDB.
    * Use only for keys stored as raw bytes (e.g., legacy data).
    */
-  async getRawKey(id: KeyId): Promise<Uint8Array | null> {
+  async getRawKey(id: KeyId | (string & {})): Promise<Uint8Array | null> {
     await this.ensureInitialized();
 
     return new Promise((resolve, reject) => {
@@ -172,7 +196,7 @@ export class KeyStore {
    * Handles migration: if the stored value is raw bytes (Uint8Array/ArrayBuffer),
    * re-imports as a non-extractable CryptoKey and updates the stored value.
    */
-  async getCryptoKey(id: KeyId): Promise<CryptoKey | null> {
+  async getCryptoKey(id: KeyId | (string & {})): Promise<CryptoKey | null> {
     await this.ensureInitialized();
 
     const value = await this.getRawValue(id);
@@ -204,10 +228,13 @@ export class KeyStore {
    * Import raw bytes as the appropriate CryptoKey type based on KeyId.
    */
   private async importRawToCryptoKey(
-    id: KeyId,
+    id: KeyId | (string & {}),
     raw: Uint8Array,
   ): Promise<CryptoKey> {
-    switch (id) {
+    // Scoped ids (`scope::encryption-key`) resolve by their base name so
+    // legacy raw-byte values upgrade to CryptoKeys in every scope.
+    const base = String(id).split("::").pop() ?? String(id);
+    switch (base) {
       case "encryption-key":
         return importEncryptionCryptoKey(raw);
       case "epoch-key":
@@ -222,7 +249,7 @@ export class KeyStore {
   /**
    * Get any stored value without type coercion.
    */
-  private async getRawValue(id: KeyId): Promise<unknown> {
+  private async getRawValue(id: KeyId | (string & {})): Promise<unknown> {
     await this.ensureInitialized();
 
     return new Promise((resolve, reject) => {
@@ -241,7 +268,7 @@ export class KeyStore {
   /**
    * Retrieve a JWK from IndexedDB.
    */
-  async getJwk(id: KeyId): Promise<JsonWebKey | null> {
+  async getJwk(id: KeyId | (string & {})): Promise<JsonWebKey | null> {
     await this.ensureInitialized();
 
     return new Promise((resolve, reject) => {
@@ -260,7 +287,7 @@ export class KeyStore {
   /**
    * Delete a specific key from IndexedDB.
    */
-  async deleteKey(id: KeyId): Promise<void> {
+  async deleteKey(id: KeyId | (string & {})): Promise<void> {
     await this.ensureInitialized();
 
     return new Promise((resolve, reject) => {
@@ -275,19 +302,127 @@ export class KeyStore {
   }
 
   /**
-   * Clear all keys from IndexedDB. Use on logout.
+   * Clear keys from IndexedDB. Without a scope, clears everything; with a
+   * scope, clears only that scope's keys (AUD-012: sessions must not be
+   * able to destroy each other's key material).
    */
-  async clearAll(): Promise<void> {
+  async clearAll(scope?: string): Promise<void> {
+    await this.ensureInitialized();
+
+    if (!scope) {
+      return new Promise((resolve, reject) => {
+        const transaction = this.db!.transaction(STORE_NAME, "readwrite");
+        const store = transaction.objectStore(STORE_NAME);
+        store.clear();
+
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(new Error("Failed to clear keys"));
+      });
+    }
+
+    const prefix = `${scope}::`;
+    const ids = await this.listKeyIds();
+    await Promise.all(
+      ids.filter((id) => id.startsWith(prefix)).map((id) => this.deleteKey(id)),
+    );
+  }
+
+  /**
+   * List all stored key ids (for scoped cleanup).
+   */
+  private async listKeyIds(): Promise<string[]> {
     await this.ensureInitialized();
 
     return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction(STORE_NAME, "readwrite");
+      const transaction = this.db!.transaction(STORE_NAME, "readonly");
       const store = transaction.objectStore(STORE_NAME);
-      store.clear();
+      const request = store.getAllKeys();
 
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(new Error("Failed to clear keys"));
+      request.onerror = () =>
+        reject(new Error(`Failed to list keys: ${request.error?.message}`));
+      request.onsuccess = () =>
+        resolve((request.result as string[] | IDBValidKey[]).map(String));
     });
+  }
+
+  /**
+   * A scope-isolated view of this key store (AUD-012). All key ids are
+   * namespaced under `scope::`, so two sessions (different storage
+   * prefixes) hold disjoint key material: neither can read the other's
+   * keys, and destroying one cannot clear the other's. Legacy unscoped
+   * keys are adopted into the first scope that claims them, exactly once.
+   */
+  scoped(scope: string): ScopedKeyStore {
+    const instance = this;
+    const sid = (id: KeyId | (string & {})) => `${scope}::${id}`;
+    let adoption: Promise<void> | null = null;
+
+    const adoptLegacyKeys = async (): Promise<void> => {
+      // The claim marker is GLOBAL: pre-scoping key material is ambiguous
+      // by definition (whoever imported it last), so exactly one scope may
+      // adopt it. Later scopes find no legacy keys and must re-login.
+      const marker = "legacy-adopted-by";
+      const claimedBy = await instance.getRawKey(marker);
+      if (claimedBy !== null) return;
+      const legacyIds: Array<KeyId | (string & {})> = [
+        "encryption-key",
+        "epoch-key",
+        "epoch-derive-key",
+        "app-private-key",
+      ];
+      for (const id of legacyIds) {
+        const scopedId = sid(id);
+        const [scoped, legacy] = await Promise.all([
+          instance.getRawValue(scopedId),
+          instance.getRawValue(id),
+        ]);
+        if (scoped === null && legacy !== null) {
+          await instance.storeValue(
+            scopedId,
+            legacy as Uint8Array | JsonWebKey | CryptoKey,
+          );
+        }
+      }
+      // Marker value records the claiming scope; only presence matters.
+      await instance.storeValue(marker, new TextEncoder().encode(scope));
+    };
+
+    const ensureAdopted = (): Promise<void> => {
+      if (!adoption) adoption = adoptLegacyKeys();
+      return adoption;
+    };
+
+    return {
+      initialize: () => instance.initialize().then(ensureAdopted),
+      getCryptoKey: (id) =>
+        ensureAdopted().then(() => instance.getCryptoKey(sid(id))),
+      getJwk: (id) => ensureAdopted().then(() => instance.getJwk(sid(id))),
+      getRawKey: (id) =>
+        ensureAdopted().then(() => instance.getRawKey(sid(id))),
+      importEncryptionKey: (raw) =>
+        ensureAdopted().then(() =>
+          instance.importEncryptionKeyTo(sid("encryption-key"), raw),
+        ),
+      importEpochKey: (raw) =>
+        ensureAdopted().then(() =>
+          instance.importEpochKeyTo(
+            sid("epoch-key"),
+            sid("epoch-derive-key"),
+            raw,
+          ),
+        ),
+      importAppPrivateKey: (jwk) =>
+        ensureAdopted().then(() =>
+          instance.storeValue(sid("app-private-key"), jwk),
+        ),
+      storeKeys: (entries) =>
+        ensureAdopted().then(() =>
+          instance.storeKeys(
+            entries.map((e) => ({ id: sid(e.id), value: e.value })),
+          ),
+        ),
+      clearAll: () => instance.clearAll(scope),
+    };
   }
 
   /**
@@ -295,6 +430,17 @@ export class KeyStore {
    * The input array is zeroed after import.
    */
   async importEncryptionKey(rawKey: Uint8Array): Promise<void> {
+    await this.importEncryptionKeyTo("encryption-key", rawKey);
+  }
+
+  /**
+   * Import a raw 256-bit encryption key to a specific storage id
+   * (scoped sessions pass a namespaced id).
+   */
+  async importEncryptionKeyTo(
+    id: KeyId | (string & {}),
+    rawKey: Uint8Array,
+  ): Promise<void> {
     if (rawKey.length !== 32) {
       throw new Error(
         `Invalid encryption key length: expected 32 bytes, got ${rawKey.length}`,
@@ -303,7 +449,7 @@ export class KeyStore {
 
     try {
       const cryptoKey = await importEncryptionCryptoKey(rawKey);
-      await this.storeValue("encryption-key", cryptoKey);
+      await this.storeValue(id, cryptoKey);
     } finally {
       rawKey.fill(0);
     }
@@ -316,6 +462,18 @@ export class KeyStore {
    * The input array is zeroed after import.
    */
   async importEpochKey(rawKey: Uint8Array): Promise<void> {
+    await this.importEpochKeyTo("epoch-key", "epoch-derive-key", rawKey);
+  }
+
+  /**
+   * Import a raw 256-bit epoch key to specific storage ids (scoped
+   * sessions pass namespaced ids for both the KW and HKDF forms).
+   */
+  async importEpochKeyTo(
+    kwId: KeyId | (string & {}),
+    deriveId: KeyId | (string & {}),
+    rawKey: Uint8Array,
+  ): Promise<void> {
     if (rawKey.length !== 32) {
       throw new Error(
         `Invalid epoch key length: expected 32 bytes, got ${rawKey.length}`,
@@ -328,8 +486,8 @@ export class KeyStore {
         importEpochDeriveKey(rawKey),
       ]);
       await this.storeKeys([
-        { id: "epoch-key", value: kwKey },
-        { id: "epoch-derive-key", value: deriveKey },
+        { id: kwId, value: kwKey },
+        { id: deriveId, value: deriveKey },
       ]);
     } finally {
       rawKey.fill(0);
@@ -340,7 +498,9 @@ export class KeyStore {
    * Store multiple keys atomically in a single IndexedDB transaction.
    * If any write fails, all writes are rolled back.
    */
-  async storeKeys(entries: { id: KeyId; value: CryptoKey }[]): Promise<void> {
+  async storeKeys(
+    entries: { id: KeyId | (string & {}); value: CryptoKey }[],
+  ): Promise<void> {
     await this.ensureInitialized();
 
     return new Promise((resolve, reject) => {
@@ -373,15 +533,15 @@ export class KeyStore {
   /**
    * Store a non-extractable ECDH CryptoKey for OAuth JWE decryption.
    */
-  async storeEphemeralOAuthKey(key: CryptoKey): Promise<void> {
-    await this.storeValue("ephemeral-oauth-key", key);
+  async storeEphemeralOAuthKey(key: CryptoKey, txId?: string): Promise<void> {
+    await this.storeValue(ephemeralId(txId), key);
   }
 
   /**
    * Retrieve the ephemeral OAuth ECDH CryptoKey.
    */
-  async getEphemeralOAuthKey(): Promise<CryptoKey | null> {
-    const value = await this.getRawValue("ephemeral-oauth-key");
+  async getEphemeralOAuthKey(txId?: string): Promise<CryptoKey | null> {
+    const value = await this.getRawValue(ephemeralId(txId));
     if (value instanceof CryptoKey) return value;
     return null;
   }
@@ -389,8 +549,8 @@ export class KeyStore {
   /**
    * Delete the ephemeral OAuth key after use.
    */
-  async deleteEphemeralOAuthKey(): Promise<void> {
-    await this.deleteKey("ephemeral-oauth-key");
+  async deleteEphemeralOAuthKey(txId?: string): Promise<void> {
+    await this.deleteKey(ephemeralId(txId));
   }
 
   /**
