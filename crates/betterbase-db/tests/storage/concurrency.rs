@@ -3,38 +3,51 @@
 //!
 //! `SqliteBackend::transaction` holds the connection mutex for the whole
 //! closure, and the adapter runs every single-record RMW (put/patch/
-//! delete/mark_synced) inside one — so a concurrent delete either lands
-//! entirely before the RMW's read (the RMW sees the tombstone) or
-//! entirely after its commit (the delete wins). The stale-read window in
-//! between, which previously let a patch resurrect a deleted record, is
-//! gone.
+//! delete/mark_synced) inside one. The gate below pauses a writer
+//! BETWEEN its read and its write (the exact stale-read window) and
+//! waits for a concurrent operation to complete:
+//!
+//! - Pre-fix (no encompassing lock): the concurrent operation completes
+//!   during the wait and the paused writer then overwrites it — the
+//!   lost update the finding describes.
+//! - Post-fix: the paused writer holds the transaction lock, so the
+//!   concurrent operation cannot complete until the writer commits;
+//!   the wait times out and either commit order leaves a consistent
+//!   state. Both outcomes are deterministic — the fixed tree can never
+//!   flake (the concurrent op provably cannot finish while blocked on
+//!   the lock), and the pre-fix tree always exhibits the interleave.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use betterbase_db::error::{LessDbError, Result};
+use betterbase_db::error::Result;
 use betterbase_db::index::types::{IndexDefinition, IndexScan};
+use betterbase_db::storage::{
+    adapter::Adapter,
+    sqlite::SqliteBackend,
+    traits::{StorageBackend, StorageLifecycle, StorageRead, StorageSync, StorageWrite},
+};
+use betterbase_db::types::{
+    DeleteOptions, GetOptions, PatchOptions, PurgeTombstonesOptions, PutOptions, RawBatchResult,
+    ScanOptions, SerializedRecord,
+};
 use betterbase_db::{
     collection::builder::{collection, CollectionDef},
     crdt::MIN_SESSION_ID,
     schema::node::t,
-    storage::{
-        adapter::Adapter,
-        sqlite::SqliteBackend,
-        traits::{StorageBackend, StorageLifecycle, StorageRead, StorageSync, StorageWrite},
-    },
-    types::{
-        DeleteOptions, GetOptions, PatchOptions, PurgeTombstonesOptions, PutOptions,
-        RawBatchResult, ScanOptions, SerializedRecord,
-    },
 };
 use serde_json::json;
 
 const SID: u64 = MIN_SESSION_ID;
+/// How long the gate waits for the concurrent operation before giving
+/// up. On the fixed tree the concurrent operation is blocked on the
+/// transaction lock and can never signal in time — the timeout is the
+/// deterministic "serialization proven" outcome.
+const GATE_WAIT: Duration = Duration::from_millis(750);
 
 fn users_def() -> CollectionDef {
     collection("users")
@@ -54,60 +67,70 @@ fn put_opts() -> PutOptions {
     }
 }
 
-/// A pass-through backend that pauses the FIRST armed `get_raw` long
-/// enough for another thread to attempt a full concurrent operation.
-///
-/// The pause happens while the caller holds its transaction lock (post
-/// -fix), so a concurrent single-record RMW on another thread blocks
-/// until the paused caller commits — which is exactly the serialization
-/// AUD-020 requires. Pre-fix, the concurrent operation completed during
-/// the pause and the paused caller then overwrote it.
+type ConcurrentDone = Receiver<()>;
+
+/// Pass-through backend whose first armed `put_raw` FROM THE DESIGNATED
+/// WRITER THREAD pauses between the caller's (already completed) read
+/// and its write, waiting for a pre-arranged concurrent operation to
+/// signal completion. Restricting the trigger to the writer thread
+/// keeps the concurrent op (which also writes) from consuming the gate.
 struct PausingBackend {
     inner: SqliteBackend,
     armed: Arc<AtomicBool>,
+    concurrent_done: Arc<Mutex<Option<ConcurrentDone>>>,
+    writer_thread: Arc<Mutex<Option<std::thread::ThreadId>>>,
 }
 
 impl PausingBackend {
-    fn new(armed: Arc<AtomicBool>) -> Self {
+    fn new(
+        armed: Arc<AtomicBool>,
+        concurrent_done: Arc<Mutex<Option<ConcurrentDone>>>,
+        writer_thread: Arc<Mutex<Option<std::thread::ThreadId>>>,
+    ) -> Self {
         Self {
             inner: SqliteBackend::open_in_memory().expect("open in-memory DB"),
             armed,
+            concurrent_done,
+            writer_thread,
         }
     }
 }
 
 impl StorageBackend for PausingBackend {
-    fn get_raw(&self, collection: &str, id: &str) -> Result<Option<SerializedRecord>, LessDbError> {
-        if self.armed.swap(false, Ordering::SeqCst) {
-            // Hold the (now transaction-scoped) read open while the other
-            // thread tries to interleave. 150ms is far more slack than a
-            // real interleave needs, so the fixed tree never flakes.
-            thread::sleep(Duration::from_millis(150));
-        }
+    fn get_raw(&self, collection: &str, id: &str) -> Result<Option<SerializedRecord>> {
         self.inner.get_raw(collection, id)
     }
 
-    fn put_raw(&self, record: &SerializedRecord) -> Result<(), LessDbError> {
+    fn put_raw(&self, record: &SerializedRecord) -> Result<()> {
+        let is_writer = *self.writer_thread.lock().unwrap() == Some(thread::current().id());
+        if is_writer && self.armed.swap(false, Ordering::SeqCst) {
+            // The stale-read window is open: this writer has read, and
+            // its write is withheld while the concurrent operation runs.
+            let done = self.concurrent_done.lock().unwrap().take();
+            if let Some(rx) = done {
+                // Pre-fix: the concurrent op completes (no lock is held)
+                // and signals; the stale write then overwrites it.
+                // Post-fix: it is blocked on this writer's transaction
+                // lock, the wait times out, and the write commits first.
+                let _ = rx.recv_timeout(GATE_WAIT);
+            }
+        }
         self.inner.put_raw(record)
     }
 
-    fn scan_raw(
-        &self,
-        collection: &str,
-        options: &ScanOptions,
-    ) -> Result<RawBatchResult, LessDbError> {
+    fn scan_raw(&self, collection: &str, options: &ScanOptions) -> Result<RawBatchResult> {
         self.inner.scan_raw(collection, options)
     }
 
-    fn scan_dirty_raw(&self, collection: &str) -> Result<RawBatchResult, LessDbError> {
+    fn scan_dirty_raw(&self, collection: &str) -> Result<RawBatchResult> {
         self.inner.scan_dirty_raw(collection)
     }
 
-    fn count_raw(&self, collection: &str) -> Result<usize, LessDbError> {
+    fn count_raw(&self, collection: &str) -> Result<usize> {
         self.inner.count_raw(collection)
     }
 
-    fn batch_put_raw(&self, records: &[SerializedRecord]) -> Result<(), LessDbError> {
+    fn batch_put_raw(&self, records: &[SerializedRecord]) -> Result<()> {
         self.inner.batch_put_raw(records)
     }
 
@@ -115,42 +138,33 @@ impl StorageBackend for PausingBackend {
         &self,
         collection: &str,
         options: &PurgeTombstonesOptions,
-    ) -> Result<usize, LessDbError> {
+    ) -> Result<usize> {
         self.inner.purge_tombstones_raw(collection, options)
     }
 
-    fn get_meta(&self, key: &str) -> Result<Option<String>, LessDbError> {
+    fn get_meta(&self, key: &str) -> Result<Option<String>> {
         self.inner.get_meta(key)
     }
 
-    fn set_meta(&self, key: &str, value: &str) -> Result<(), LessDbError> {
+    fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.inner.set_meta(key, value)
     }
 
-    fn transaction<F, T>(&self, f: F) -> Result<T, LessDbError>
+    fn transaction<F, T>(&self, f: F) -> Result<T>
     where
-        F: FnOnce(&Self) -> Result<T, LessDbError>,
+        F: FnOnce(&Self) -> Result<T>,
     {
-        // Delegate to the inner backend's lock-holding transaction. The
-        // closure receives `&SqliteBackend`, but adapter `_impl` methods
-        // were passed `&self.inner` as their backend, so the gate in
-        // `get_raw` above still fires on the armed read.
+        // Delegate to the inner backend's lock-holding transaction; the
+        // closure still runs against this gated view so the armed
+        // put_raw fires inside the (now held) lock scope.
         self.inner.transaction(|_| f(self))
     }
 
-    fn scan_index_raw(
-        &self,
-        collection: &str,
-        scan: &IndexScan,
-    ) -> Result<Option<RawBatchResult>, LessDbError> {
+    fn scan_index_raw(&self, collection: &str, scan: &IndexScan) -> Result<Option<RawBatchResult>> {
         self.inner.scan_index_raw(collection, scan)
     }
 
-    fn count_index_raw(
-        &self,
-        collection: &str,
-        scan: &IndexScan,
-    ) -> Result<Option<usize>, LessDbError> {
+    fn count_index_raw(&self, collection: &str, scan: &IndexScan) -> Result<Option<usize>> {
         self.inner.count_index_raw(collection, scan)
     }
 
@@ -161,23 +175,27 @@ impl StorageBackend for PausingBackend {
         data: &serde_json::Value,
         computed: Option<&serde_json::Value>,
         exclude_id: Option<&str>,
-    ) -> Result<(), LessDbError> {
+    ) -> Result<()> {
         self.inner
             .check_unique(collection, index, data, computed, exclude_id)
     }
 
-    fn scan_all_raw(&self) -> Result<Vec<SerializedRecord>, LessDbError> {
+    fn scan_all_raw(&self) -> Result<Vec<SerializedRecord>> {
         self.inner.scan_all_raw()
     }
 
-    fn scan_all_meta(&self) -> Result<Vec<(String, String)>, LessDbError> {
+    fn scan_all_meta(&self) -> Result<Vec<(String, String)>> {
         self.inner.scan_all_meta()
     }
 }
 
-fn make_gated_adapter(armed: Arc<AtomicBool>) -> (Adapter<PausingBackend>, Arc<CollectionDef>) {
+fn make_gated_adapter(
+    armed: Arc<AtomicBool>,
+    concurrent_done: Arc<Mutex<Option<ConcurrentDone>>>,
+    writer_thread: Arc<Mutex<Option<std::thread::ThreadId>>>,
+) -> (Adapter<PausingBackend>, Arc<CollectionDef>) {
     let def = Arc::new(users_def());
-    let mut backend = PausingBackend::new(armed);
+    let mut backend = PausingBackend::new(armed, concurrent_done, writer_thread);
     backend
         .inner
         .initialize(&[def.as_ref()])
@@ -189,68 +207,32 @@ fn make_gated_adapter(armed: Arc<AtomicBool>) -> (Adapter<PausingBackend>, Arc<C
     (adapter, def)
 }
 
-#[test]
-fn concurrent_delete_cannot_be_resurrected_by_in_flight_patch() {
-    let armed = Arc::new(AtomicBool::new(false));
-    let (adapter, def) = make_gated_adapter(armed.clone());
-    let adapter = Arc::new(adapter);
-
-    let record = adapter
-        .put(
-            &def,
-            json!({ "name": "Alice", "email": "alice@example.com" }),
-            &put_opts(),
-        )
-        .expect("seed put");
-    let id = record.id.clone();
-
-    // Arm the gate: the patch's read pauses mid-RMW.
-    armed.store(true, Ordering::SeqCst);
-
-    let patch_adapter = adapter.clone();
-    let patch_def = Arc::clone(&def);
-    let patch_id = id.clone();
+/// Spawn the concurrent op thread and hand its completion signal to the
+/// gate; register the CURRENT thread as the writer whose put_raw the
+/// gate pauses. The concurrent op runs on its own thread and can never
+/// consume the gate itself.
+fn arm<F: FnOnce() + Send + 'static>(
+    armed: &AtomicBool,
+    slot: &Mutex<Option<ConcurrentDone>>,
+    writer_thread: &Mutex<Option<std::thread::ThreadId>>,
+    op: F,
+) -> thread::JoinHandle<()> {
     let (tx, rx) = mpsc::channel::<()>();
-    let starter = thread::spawn(move || {
-        // Signal that the patch thread is running, then attempt the
-        // patch — its get_raw is the armed, pausing read.
+    *slot.lock().unwrap() = Some(rx);
+    *writer_thread.lock().unwrap() = Some(thread::current().id());
+    armed.store(true, Ordering::SeqCst);
+    thread::spawn(move || {
+        op();
         let _ = tx.send(());
-        let _ = patch_adapter.patch(
-            &patch_def,
-            json!({ "name": "Alice II" }),
-            &PatchOptions {
-                id: patch_id,
-                session_id: Some(SID),
-                ..Default::default()
-            },
-        );
-    });
-
-    // Give the patch thread time to reach its paused read, then run a
-    // full delete concurrently.
-    let _ = rx.recv();
-    thread::sleep(Duration::from_millis(50));
-    let del = adapter
-        .delete(&def, &id, &DeleteOptions::default())
-        .expect("concurrent delete");
-
-    starter.join().expect("patch thread");
-
-    // Both orders of a serialized execution end with the record
-    // deleted. A lost update would leave it live (patch applied on top
-    // of the completed delete).
-    let got = adapter.get(&def, &id, &GetOptions::default()).expect("get");
-    let resurrected = got.map(|r| !r.deleted).unwrap_or(false);
-    assert!(
-        del && !resurrected,
-        "delete was lost or the record was resurrected: del={del}, resurrected={resurrected}"
-    );
+    })
 }
 
 #[test]
-fn concurrent_patch_cannot_be_cleared_by_stale_mark_synced() {
+fn concurrent_delete_cannot_be_resurrected_by_in_flight_patch() {
     let armed = Arc::new(AtomicBool::new(false));
-    let (adapter, def) = make_gated_adapter(armed.clone());
+    let slot = Arc::new(Mutex::new(None));
+    let writer_thread = Arc::new(Mutex::new(None));
+    let (adapter, def) = make_gated_adapter(armed.clone(), slot.clone(), writer_thread.clone());
     let adapter = Arc::new(adapter);
 
     let record = adapter
@@ -262,23 +244,18 @@ fn concurrent_patch_cannot_be_cleared_by_stale_mark_synced() {
         .expect("seed put");
     let id = record.id.clone();
 
-    armed.store(true, Ordering::SeqCst);
-
-    // Thread A: mark_synced pauses after reading the pre-patch record.
-    let sync_adapter = adapter.clone();
-    let sync_def = Arc::clone(&def);
-    let sync_id = id.clone();
-    let (tx, rx) = mpsc::channel::<()>();
-    let ack = thread::spawn(move || {
-        let _ = tx.send(());
-        sync_adapter
-            .mark_synced(&sync_def, &sync_id, 1, None)
-            .expect("mark_synced");
+    // The concurrent delete signals completion through the gate slot.
+    let del_adapter = adapter.clone();
+    let del_def = Arc::clone(&def);
+    let del_id = id.clone();
+    let deleter = arm(&armed, &slot, &writer_thread, move || {
+        del_adapter
+            .delete(&del_def, &del_id, &DeleteOptions::default())
+            .expect("concurrent delete");
     });
 
-    let _ = rx.recv();
-    thread::sleep(Duration::from_millis(50));
-    // Thread B: a concurrent local patch marks the record dirty again.
+    // The patch's put fires the armed gate: its write is withheld while
+    // the delete runs.
     adapter
         .patch(
             &def,
@@ -289,16 +266,77 @@ fn concurrent_patch_cannot_be_cleared_by_stale_mark_synced() {
                 ..Default::default()
             },
         )
-        .expect("concurrent patch");
+        .expect("patch");
 
-    ack.join().expect("ack thread");
+    deleter.join().expect("delete thread");
 
-    // Serialized execution: either the ack cleared the pre-patch state
-    // and the patch re-dirtied it, or the patch landed first and the ack
-    // was prepared against it. Either way the record must still exist.
+    // Serialized execution ends deleted (patch-then-delete, or delete
+    // first and the patch reads the tombstone and errors). The lost
+    // update — patch applied on top of the completed delete — leaves a
+    // live record.
+    let got = adapter.get(&def, &id, &GetOptions::default()).expect("get");
+    let resurrected = got.map(|r| !r.deleted).unwrap_or(false);
+    assert!(
+        !resurrected,
+        "an in-flight patch resurrected a completed delete"
+    );
+}
+
+#[test]
+fn concurrent_patch_cannot_be_reverted_by_stale_mark_synced() {
+    let armed = Arc::new(AtomicBool::new(false));
+    let slot = Arc::new(Mutex::new(None));
+    let writer_thread = Arc::new(Mutex::new(None));
+    let (adapter, def) = make_gated_adapter(armed.clone(), slot.clone(), writer_thread.clone());
+    let adapter = Arc::new(adapter);
+
+    let record = adapter
+        .put(
+            &def,
+            json!({ "name": "Alice", "email": "alice@example.com" }),
+            &put_opts(),
+        )
+        .expect("seed put");
+    let id = record.id.clone();
+
+    // The concurrent patch signals completion through the gate slot.
+    let patch_adapter = adapter.clone();
+    let patch_def = Arc::clone(&def);
+    let patch_id = id.clone();
+    let patcher = arm(&armed, &slot, &writer_thread, move || {
+        patch_adapter
+            .patch(
+                &patch_def,
+                json!({ "name": "Alice II" }),
+                &PatchOptions {
+                    id: patch_id,
+                    session_id: Some(SID),
+                    ..Default::default()
+                },
+            )
+            .expect("concurrent patch");
+    });
+
+    // The acknowledgement's put fires the armed gate: its write is
+    // withheld while the patch runs.
+    adapter
+        .mark_synced(&def, &id, 1, None)
+        .expect("mark_synced");
+
+    patcher.join().expect("patch thread");
+
+    // Serialized execution keeps the newer change: the ack commits
+    // against the pre-patch state and the patch re-applies after it,
+    // or the patch lands first and the ack is prepared against it.
+    // The lost update — the stale ack overwriting the completed patch —
+    // reverts the name.
     let got = adapter
         .get(&def, &id, &GetOptions::default())
         .expect("get")
         .expect("record present");
-    assert!(!got.deleted, "record vanished: {got:?}");
+    assert_eq!(
+        got.data["name"],
+        json!("Alice II"),
+        "a stale acknowledgement reverted a concurrent patch: {got:?}"
+    );
 }

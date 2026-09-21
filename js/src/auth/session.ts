@@ -229,23 +229,47 @@ export class AuthSession {
     // anyway would yield a session whose encryption operations fail far
     // from the cause — fail closed and force a fresh login instead.
     const missingKeys: string[] = [];
+    const present = async (
+      kind: "key" | "jwk",
+      id: string,
+    ): Promise<boolean> => {
+      try {
+        const value =
+          kind === "key"
+            ? await session.keyStore.getCryptoKey(id)
+            : await session.keyStore.getJwk(id);
+        return value !== null;
+      } catch (err) {
+        // An unreadable store is as unusable as a missing key (e.g. a
+        // corrupt database) — fail closed like every other restore
+        // failure rather than throwing out of restore().
+        console.error(
+          "[betterbase-auth] KeyStore read failed during restore:",
+          err,
+        );
+        return false;
+      }
+    };
     if (state.hasEncryptionKey) {
-      const key = await session.keyStore.getCryptoKey("encryption-key");
-      if (!key) missingKeys.push("encryption-key");
+      if (!(await present("key", "encryption-key")))
+        missingKeys.push("encryption-key");
     }
     if (state.hasEpochKey) {
-      const key = await session.keyStore.getCryptoKey("epoch-key");
-      if (!key) missingKeys.push("epoch-key");
+      if (!(await present("key", "epoch-key"))) missingKeys.push("epoch-key");
     }
     if (state.hasAppPrivateKey) {
-      const jwk = await session.keyStore.getJwk("app-private-key");
-      if (!jwk) missingKeys.push("app-private-key");
+      if (!(await present("jwk", "app-private-key")))
+        missingKeys.push("app-private-key");
     }
     if (missingKeys.length > 0) {
       console.error(
         "[betterbase-auth] Persisted session references keys missing from KeyStore:",
         missingKeys.join(", "),
       );
+      // NOTE: surviving keys are deliberately left in IndexedDB — a
+      // sweep here could destroy a fresh key pair a peer tab committed
+      // just before its credential write (keys are always written
+      // first); they are identity-scoped and harmless until cleared.
       localStorage.removeItem(storageKey);
       session.cleanupSync();
       return null;

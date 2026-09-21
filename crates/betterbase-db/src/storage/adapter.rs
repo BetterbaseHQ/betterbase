@@ -102,6 +102,15 @@ impl<B: StorageBackend> Adapter<B> {
         backend.set_meta(META_SESSION_ID, &sid.to_string())?;
         *guard = Some(sid);
         Ok(sid)
+        // NOTE (review of AUD-020): the in-memory cache is set inside the
+        // caller's transaction; if that transaction rolls back, the meta
+        // row is discarded while the cache keeps the sid. Benign —
+        // session ids need no durability, and the next process restart
+        // regenerates one — but the pair can diverge until restart.
+        // Also: this mutex is held across backend I/O; runtime paths
+        // order conn -> session_id while initialize() (exclusive &mut)
+        // orders session_id -> conn — safe today because &mut self
+        // cannot race &self writers; preserve that invariant here.
     }
 
     // -----------------------------------------------------------------------
@@ -846,7 +855,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
     ) -> Result<BulkPatchResult> {
         self.check_initialized()?;
 
-        self.backend.transaction(|_| {
+        self.backend.transaction(|backend| {
             let mut records = Vec::new();
             let mut errors = Vec::new();
 
@@ -879,7 +888,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
                     should_reset_sync_state: opts.should_reset_sync_state.clone(),
                 };
 
-                match self.patch(def, patch_data, &patch_opts) {
+                match self.patch_impl(backend, def, &patch_data, &patch_opts) {
                     Ok(record) => records.push(record),
                     Err(e) => errors.push(RecordError {
                         id,
@@ -907,7 +916,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
         };
 
         // Query inside the transaction so the matched set and the writes are atomic.
-        self.backend.transaction(|_| {
+        self.backend.transaction(|backend| {
             let query_result = self.query(def, &query)?;
 
             let mut deleted_ids = Vec::new();
@@ -915,7 +924,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
 
             for record in query_result.records {
                 let id = record.id.clone();
-                match self.delete(def, &id, opts) {
+                match self.delete_impl(backend, def, &id, opts) {
                     Ok(true) => deleted_ids.push(id),
                     Ok(false) => {}
                     Err(e) => errors.push(RecordError {
@@ -948,7 +957,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
         };
 
         // Query inside the transaction so the matched set and the writes are atomic.
-        self.backend.transaction(|_| {
+        self.backend.transaction(|backend| {
             let query_result = self.query(def, &query)?;
             let matched_count = query_result.records.len();
 
@@ -967,7 +976,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
                     should_reset_sync_state: opts.should_reset_sync_state.clone(),
                 };
 
-                match self.patch(def, patch.clone(), &patch_opts) {
+                match self.patch_impl(backend, def, patch, &patch_opts) {
                     Ok(record) => records.push(record),
                     Err(e) => errors.push(RecordError {
                         id,

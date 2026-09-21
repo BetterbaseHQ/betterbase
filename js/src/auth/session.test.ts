@@ -358,6 +358,39 @@ describe("AuthSession AUD-012 residual: credential/key snapshot binding", () => 
     expect(client.refreshToken).not.toHaveBeenCalled();
   });
 
+  it("fails closed on a partial miss (one key evicted)", async () => {
+    seedStateWithKeys();
+    const scope = "betterbase_session_";
+    KEY_PRESENCE[`${scope}::encryption-key`] = true;
+    KEY_PRESENCE[`${scope}::epoch-key`] = true;
+    // app-private-key missing
+    const client = {
+      refreshToken: vi.fn(async () => ({
+        access_token: "a",
+        refresh_token: "r",
+        expires_in: 3600,
+      })),
+    };
+
+    const session = await AuthSession.restore(makeConfig(client));
+    expect(session).toBeNull();
+    expect(localStorage.getItem("betterbase_session_state")).toBeNull();
+  });
+
+  it("restores a keyless (non-sync) session without any manifest checks", async () => {
+    seedState(); // no key flags at all
+    const client = {
+      refreshToken: vi.fn(async () => ({
+        access_token: "a",
+        refresh_token: "r",
+        expires_in: 3600,
+      })),
+    };
+
+    const session = await AuthSession.restore(makeConfig(client));
+    expect(session).not.toBeNull();
+  });
+
   it("restores when every referenced key is present", async () => {
     seedStateWithKeys();
     const scope = "betterbase_session_";
