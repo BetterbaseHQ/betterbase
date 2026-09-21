@@ -139,6 +139,14 @@ export interface SyncTransportConfig {
   identity?: EditChainIdentity;
   /** Collections that have edit chain tracking enabled. */
   editChainCollections?: Set<string>;
+  /**
+   * Resolve the KEK for a FUTURE epoch under fresh-key rotation (AUD-024):
+   * fresh epoch keys are random secrets distributed as wrapped shares, not
+   * derivable from the base. Called during decryption when a record's DEK
+   * sits at an epoch above the base. Return null to fall back to forward
+   * derivation (legacy chains).
+   */
+  resolveEpochKey?: (epoch: number) => Promise<Uint8Array | null>;
 }
 
 /**
@@ -168,6 +176,8 @@ export class SyncTransport implements SyncTransportInterface {
   private currentEpoch: number;
   /** Derived key cache: epoch → derived KEK (raw bytes, shared spaces). */
   private derivedKeyCache = new Map<number, Uint8Array>();
+  /** Fresh-epoch key resolver (AUD-024); null until first resolved. */
+  private epochKeyResolver?: (epoch: number) => Promise<Uint8Array | null>;
   /** Derived KW key cache: epoch → CryptoKey (personal space). */
   private derivedKwKeyCache = new Map<number, CryptoKey>();
   /** Derived HKDF key cache: epoch → CryptoKey (personal space). */
@@ -193,6 +203,7 @@ export class SyncTransport implements SyncTransportInterface {
       rawKey instanceof Uint8Array ? new Uint8Array(rawKey) : rawKey;
     this.baseDeriveKey = config.epochConfig?.epochDeriveKey;
     this.baseEpoch = config.epochConfig?.epoch ?? 0;
+    this.epochKeyResolver = config.resolveEpochKey;
     this.currentEpoch = config.epochConfig?.epoch ?? 0;
 
     if (this.baseKek && !this.spaceId) {
@@ -989,11 +1000,11 @@ export class SyncTransport implements SyncTransportInterface {
           dek.fill(0);
         }
       } else {
-        // WASM path — shared spaces
-        const { dek } = unwrapDEK(
-          wrappedDEKBytes,
-          this.getKEKForEpoch(dekEpoch),
-        );
+        // WASM path — shared spaces. A DEK at a future epoch may belong to a
+        // fresh-key rotation (AUD-024): resolve its distributed key before
+        // falling back to forward derivation from the base.
+        const kek = await this.kekForEpoch(dekEpoch);
+        const { dek } = unwrapDEK(wrappedDEKBytes, kek);
         try {
           return decryptV4(blob, dek, context);
         } finally {
@@ -1008,6 +1019,36 @@ export class SyncTransport implements SyncTransportInterface {
     }
 
     throw new Error("Missing wrapped DEK for encrypted record");
+  }
+
+  /**
+   * Resolve the KEK for an epoch, preferring a fresh-rotation share over
+   * derivation (AUD-024). Resolved shares are cached; a derivation FALLBACK
+   * is never cached under a resolver-eligible epoch (a transient share-fetch
+   * failure must not poison the epoch with a wrong derived key).
+   */
+  private async kekForEpoch(dekEpoch: number): Promise<Uint8Array> {
+    if (dekEpoch > this.baseEpoch && this.epochKeyResolver) {
+      const cached = this.derivedKeyCache.get(dekEpoch);
+      if (cached) return cached;
+      try {
+        const resolved = await this.epochKeyResolver(dekEpoch);
+        if (resolved) {
+          this.derivedKeyCache.set(dekEpoch, resolved);
+          return resolved;
+        }
+      } catch (err) {
+        // Definitive "no share" falls through to derivation; transient
+        // failures rethrow so this record's decryption visibly fails and is
+        // retried later rather than silently succeeding with a wrong key.
+        const notFound =
+          err instanceof Error &&
+          "code" in err &&
+          (err as { code?: unknown }).code === "not_found";
+        if (!notFound) throw err;
+      }
+    }
+    return this.getKEKForEpoch(dekEpoch);
   }
 
   private decodeEnvelope(decrypted: Uint8Array): BlobEnvelope {

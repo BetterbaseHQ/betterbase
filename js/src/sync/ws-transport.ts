@@ -96,6 +96,8 @@ export class WSTransport implements SyncTransportInterface {
   private wsClient: WSClient;
   private personalTransport: SyncTransport;
   private spaceTransports = new Map<string, SyncTransport>();
+  /** Snapshot of the key each cached transport was built with (AUD-024). */
+  private spaceTransportKeys = new Map<string, Uint8Array>();
 
   /** Per-space cursors. Key: `${collection}:${spaceId}`, Value: cursor number. */
   private cursors = new Map<string, number>();
@@ -525,11 +527,22 @@ export class WSTransport implements SyncTransportInterface {
 
     const transport = this.spaceTransports.get(spaceId);
     if (transport) {
-      // Keep the existing transport (its base key is a defensive copy that survives
-      // zeroing by updateLocalEpochState). Just bump the encryption epoch so new
-      // records are wrapped at the latest epoch. The transport can still derive
-      // forward from its base to decrypt records from any epoch >= base.
+      const smKey = this.config.spaceManager.getSpaceKey(spaceId);
       const smEpoch = this.config.spaceManager.getSpaceEpoch(spaceId) ?? 0;
+      // Fresh-key rotation (AUD-024): a new epoch key is a random secret, NOT
+      // derivable from the old base. When the space key changed, the cached
+      // transport must be rebuilt from the current key — bumping the epoch
+      // label alone would encrypt DEKs under a key derived from the stale
+      // base while labelling them at the new epoch.
+      const builtKey = this.spaceTransportKeys.get(spaceId);
+      const keyUnchanged = !!smKey && !!builtKey && bytesEqual(smKey, builtKey);
+      if (smKey && !keyUnchanged) {
+        return this.createSharedTransport(spaceId);
+      }
+      // Legacy derived-key advance within the same key base: keep the
+      // existing transport (its base key is a defensive copy that survives
+      // zeroing by updateLocalEpochState) and bump the encryption epoch so
+      // new records are wrapped at the latest epoch.
       if (smEpoch > transport.epoch) {
         transport.updateEncryptionEpoch(smEpoch);
       }
@@ -556,8 +569,16 @@ export class WSTransport implements SyncTransportInterface {
         : {}),
       identity: this.config.identity,
       editChainCollections: this.config.editChainCollections,
+      // Fresh-key rotation (AUD-024): future-epoch DEKs resolve their
+      // distributed keys on demand instead of deriving from the base.
+      resolveEpochKey: (epoch) =>
+        this.config.spaceManager.resolveEpochKey(spaceId, epoch),
     });
     this.spaceTransports.set(spaceId, transport);
+    if (spaceKey) {
+      // Independent copy: updateLocalEpochState zeroes the old key in place.
+      this.spaceTransportKeys.set(spaceId, spaceKey.slice());
+    }
     return transport;
   }
 
@@ -615,4 +636,14 @@ export class WSTransport implements SyncTransportInterface {
     }
     return max;
   }
+}
+
+/** Plain byte equality for key-change detection — both sides are local
+ * state, not attacker-controlled, so timing side channels don't apply. */
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }

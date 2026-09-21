@@ -30,6 +30,7 @@ import {
 } from "./spaces.js";
 import { InvitationClient, type InvitationPayload } from "./invitations.js";
 import { SyncClient, AuthenticationError } from "./client.js";
+import { RPCCallError } from "./rpc-connection.js";
 import { base64ToBytes, bytesToBase64 } from "./encoding.js";
 import {
   MembershipClient,
@@ -65,6 +66,18 @@ import type {
 } from "./spaces-middleware.js";
 import type { SyncCryptoInterface, TokenProvider } from "./types.js";
 import type { WSClient } from "./ws-client.js";
+import type { WSEpochKeyShareEntry } from "./ws-frames.js";
+
+/** A member's key-delivery info for fresh-key distribution (AUD-024). */
+interface MemberContact {
+  did: string;
+  publicKeyJwk?: JsonWebKey;
+}
+
+/** Generate a fresh random 32-byte epoch key (never derived — AUD-024). */
+function freshSpaceKey(): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(32));
+}
 
 /** Read type for a space record. */
 export type SpaceRecord = CollectionRead<(typeof spaces)["schema"]>;
@@ -777,17 +790,26 @@ export class SpaceManager {
     const decrypted = this.decryptLogEntries(log.entries, syncCrypto, spaceId);
     const ucanCIDs: string[] = [];
     const remainingEntries: string[] = [];
+    const remainingContacts: MemberContact[] = []; // fresh-key recipients
     const ucansToRevoke: string[] = []; // UCANs needing revocation log entries
+    // DIDs whose delegations were revoked by earlier removals — they must
+    // not receive fresh-key shares (AUD-024).
+    const previouslyRevoked = new Set<string>();
     let memberContact:
       | { mailboxId: string; publicKeyJwk: JsonWebKey }
       | undefined;
     const nowSeconds = Math.floor(Date.now() / 1000);
 
     for (const { payloadStr, entry: memberEntry } of decrypted) {
+      const parsed = parseUCANPayload(memberEntry.ucan);
+
+      // Revocation entries deactivate their audience for key distribution.
+      if (memberEntry.type === "r") {
+        previouslyRevoked.add(parsed.audienceDID);
+        continue;
+      }
       // Only process delegation entries for member discovery
       if (memberEntry.type !== "d") continue;
-
-      const parsed = parseUCANPayload(memberEntry.ucan);
 
       // Skip expired UCANs entirely
       if (parsed.expiresAt > 0 && parsed.expiresAt < nowSeconds) continue;
@@ -808,6 +830,17 @@ export class SpaceManager {
       } else {
         // Preserve the full serialized entry (including contact info)
         remainingEntries.push(payloadStr);
+        // Collect the remaining member's delivery info for fresh-key
+        // distribution (AUD-024): the replacement key must reach them.
+        if (
+          memberEntry.publicKeyJwk &&
+          !previouslyRevoked.has(parsed.audienceDID)
+        ) {
+          remainingContacts.push({
+            did: parsed.audienceDID,
+            publicKeyJwk: memberEntry.publicKeyJwk,
+          });
+        }
       }
     }
 
@@ -815,16 +848,25 @@ export class SpaceManager {
       throw new Error(`Member ${memberDID} not found in space ${spaceId}`);
     }
 
-    // 1c. Revoke all UCANs for this member
+    // 1c. Revoke all UCANs for this member, naming the DID so the server
+    // drops their subscriptions and closes their open connections (AUD-024).
     for (const cid of ucanCIDs) {
-      await this.membershipClient.revokeUCAN(spaceId, cid, spaceUCAN);
+      await this.membershipClient.revokeUCAN(
+        spaceId,
+        cid,
+        spaceUCAN,
+        memberDID,
+      );
     }
 
-    // 1d. Advance epoch with setMinKeyGeneration (revokes grace period).
-    // If another admin already advanced, help complete their rewrap then retry
-    // our own advance with setMinKeyGeneration (critical for revocation security).
+    // 1d. Advance epoch with setMinKeyGeneration (revokes grace period),
+    // then distribute wrapped fresh-key shares to all remaining members
+    // BEFORE any DEK rewrap (crash safety per D-005: nothing is ever
+    // encrypted under a key that has not already been distributed).
+    // The replacement key is a fresh random secret — never derived from the
+    // old key, so the removed member cannot compute it (AUD-024).
     let newEpoch = currentEpoch + 1;
-    let newKey = deriveForward(currentKey, spaceId, currentEpoch, newEpoch);
+    let newKey = freshSpaceKey();
     let advanceCurrentKey = currentKey;
     let advanceCurrentEpoch = currentEpoch;
 
@@ -840,38 +882,16 @@ export class SpaceManager {
       );
     } catch (err) {
       if (err instanceof EpochMismatchError && err.rewrapEpoch !== null) {
-        // Another admin already advanced — help complete the rewrap first
-        const helpKey = deriveForward(
-          currentKey,
-          spaceId,
-          currentEpoch,
-          err.rewrapEpoch,
-        );
-        await rewrapAllDEKs({
-          ws: this.ws,
-          spaceId,
-          ucan: spaceUCAN,
-          currentEpoch,
-          currentKey,
-          newEpoch: err.rewrapEpoch,
-          newKey: helpKey,
-        });
-        await this.ws.epochComplete({
-          space: spaceId,
-          ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
-          epoch: err.rewrapEpoch,
-        });
+        // Another admin already advanced — help complete their rewrap first
+        // (share-aware: fetches their distributed key, falls back to
+        // derivation for legacy pre-fresh-key epochs).
+        await this.completeInterruptedRewrap(spaceId, err.rewrapEpoch);
 
         // Now retry our revocation advance on top of the completed epoch
-        advanceCurrentKey = helpKey;
-        advanceCurrentEpoch = err.rewrapEpoch;
+        advanceCurrentKey = this.spaceKeys.get(spaceId)!;
+        advanceCurrentEpoch = this.spaceEpochs.get(spaceId) ?? err.rewrapEpoch;
         newEpoch = advanceCurrentEpoch + 1;
-        newKey = deriveForward(
-          advanceCurrentKey,
-          spaceId,
-          advanceCurrentEpoch,
-          newEpoch,
-        );
+        newKey = freshSpaceKey();
 
         await advanceEpoch(
           {
@@ -890,7 +910,25 @@ export class SpaceManager {
       }
     }
 
-    // 1e. Rewrap all DEKs under new epoch key.
+    // 1d-bis. Distribute wrapped shares of the fresh key (self + remaining
+    // members). Must precede the rewrap so an aborted rotation never leaves
+    // ciphertext under an undistributed key.
+    try {
+      const shares = this.buildEpochKeyShares(newKey, remainingContacts);
+      await this.ws.epochKeysPut({
+        space: spaceId,
+        ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
+        epoch: newEpoch,
+        keys: shares,
+      });
+    } catch (err) {
+      throw new Error(
+        `Member revoked but fresh-key distribution failed. ` +
+          `Original error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // 1e. Rewrap all DEKs under the fresh epoch key.
     try {
       await rewrapAllDEKs({
         ws: this.ws,
@@ -900,6 +938,7 @@ export class SpaceManager {
         currentKey: advanceCurrentKey,
         newEpoch,
         newKey,
+        freshKey: true,
       });
     } catch (err) {
       throw new Error(
@@ -1058,7 +1097,14 @@ export class SpaceManager {
     const currentEpoch =
       this.spaceEpochs.get(spaceId) ?? spaceRecord.epoch ?? 1;
     const newEpoch = currentEpoch + 1;
-    const newKey = deriveForward(currentKey, spaceId, currentEpoch, newEpoch);
+
+    // Shared spaces rotate to a FRESH random key distributed to every active
+    // member (AUD-024). Personal spaces keep the derived chain (no members
+    // to exclude; derivation is harmless there).
+    const isShared = !!spaceUCAN;
+    const newKey = isShared
+      ? freshSpaceKey()
+      : deriveForward(currentKey, spaceId, currentEpoch, newEpoch);
 
     // 1. Advance epoch on server (CAS — sets rewrap_epoch)
     try {
@@ -1078,7 +1124,21 @@ export class SpaceManager {
       throw err;
     }
 
-    // 2. Rewrap all DEKs (idempotent)
+    // 2. Distribute wrapped shares BEFORE any rewrap (D-005 crash safety).
+    let memberEntryPayloads: string[] = [];
+    if (isShared) {
+      const { contacts, entryPayloads } =
+        await this.collectMemberState(spaceId);
+      memberEntryPayloads = entryPayloads;
+      await this.ws.epochKeysPut({
+        space: spaceId,
+        ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
+        epoch: newEpoch,
+        keys: this.buildEpochKeyShares(newKey, contacts),
+      });
+    }
+
+    // 3. Rewrap all DEKs (idempotent)
     await rewrapAllDEKs({
       ws: this.ws,
       spaceId,
@@ -1087,17 +1147,33 @@ export class SpaceManager {
       currentKey,
       newEpoch,
       newKey,
+      freshKey: isShared,
     });
 
-    // 3. Signal completion (server clears rewrap_epoch)
+    // 4. Signal completion (server clears rewrap_epoch)
     await this.ws.epochComplete({
       space: spaceId,
       ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
       epoch: newEpoch,
     });
 
-    // 4. Update local state
+    // 5. Update local state
     await this.updateLocalEpochState(spaceId, spaceRecord, newKey, newEpoch);
+
+    // 6. Re-encrypt the membership log under the new key so the NEXT
+    // rotation (or another admin's contact collection) can still read it.
+    // Entries keep their original signatures.
+    if (isShared && memberEntryPayloads.length > 0) {
+      const newCrypto = new SyncCrypto(this.spaceKeys.get(spaceId) ?? newKey);
+      for (const entryPayload of memberEntryPayloads) {
+        await this.appendMembershipEntryWithRetry(
+          spaceId,
+          newCrypto,
+          entryPayload,
+          spaceUCAN,
+        );
+      }
+    }
   }
 
   /**
@@ -1119,39 +1195,15 @@ export class SpaceManager {
     const currentEpoch = this.spaceEpochs.get(spaceId) ?? 1;
 
     if (err.rewrapEpoch !== null) {
-      // Prior advance isn't complete — help finish it
-      const targetEpoch = err.rewrapEpoch;
-      const targetKey = deriveForward(
-        currentKey,
-        spaceId,
-        currentEpoch,
-        targetEpoch,
-      );
-      const spaceUCAN = this.spaceUCANs.get(spaceId);
-      await rewrapAllDEKs({
-        ws: this.ws,
-        spaceId,
-        ucan: spaceUCAN,
-        currentEpoch,
-        currentKey,
-        newEpoch: targetEpoch,
-        newKey: targetKey,
-      });
-      await this.ws.epochComplete({
-        space: spaceId,
-        ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
-        epoch: targetEpoch,
-      });
-      await this.updateLocalEpochState(spaceId, record, targetKey, targetEpoch);
+      // Prior advance isn't complete — help finish it (share-aware)
+      await this.completeInterruptedRewrap(spaceId, err.rewrapEpoch);
     } else {
-      // Another device completed everything. Just adopt the new epoch.
+      // Another device completed everything. Adopt the new epoch
+      // (share-first, derivation fallback for legacy chains).
       const serverEpoch = err.currentEpoch;
-      const serverKey = deriveForward(
-        currentKey,
-        spaceId,
-        currentEpoch,
-        serverEpoch,
-      );
+      const serverKey =
+        (await this.resolveEpochKeyOrNull(spaceId, serverEpoch)) ??
+        deriveForward(currentKey, spaceId, currentEpoch, serverEpoch);
       await this.updateLocalEpochState(spaceId, record, serverKey, serverEpoch);
     }
   }
@@ -1172,13 +1224,19 @@ export class SpaceManager {
     const spaceRecord = await this.findBySpaceId(spaceId);
     if (!spaceRecord) return;
 
-    const newKey = deriveForward(
-      currentKey,
-      spaceId,
-      currentEpoch,
-      rewrapEpoch,
-    );
     const spaceUCAN = this.spaceUCANs.get(spaceId);
+    // Collect the membership-log payloads with the OLD key (needed to
+    // re-encrypt the log under the new key after completion).
+    const { entryPayloads } = spaceUCAN
+      ? await this.collectMemberState(spaceId)
+      : { entryPayloads: [] as string[] };
+
+    // Share-first: a fresh-key rotation's key is only known via the
+    // distributed shares (every admin holds one). Derivation fallback covers
+    // legacy chains created before fresh-key rotation.
+    const share = await this.resolveEpochKeyOrNull(spaceId, rewrapEpoch);
+    const newKey =
+      share ?? deriveForward(currentKey, spaceId, currentEpoch, rewrapEpoch);
     await rewrapAllDEKs({
       ws: this.ws,
       spaceId,
@@ -1187,6 +1245,7 @@ export class SpaceManager {
       currentKey,
       newEpoch: rewrapEpoch,
       newKey,
+      freshKey: true,
     });
     await this.ws.epochComplete({
       space: spaceId,
@@ -1194,6 +1253,32 @@ export class SpaceManager {
       epoch: rewrapEpoch,
     });
     await this.updateLocalEpochState(spaceId, spaceRecord, newKey, rewrapEpoch);
+
+    // Re-encrypt the membership log under the completed epoch's key so the
+    // next rotation can still read member contacts.
+    if (spaceUCAN && entryPayloads.length > 0) {
+      const newCrypto = new SyncCrypto(this.spaceKeys.get(spaceId) ?? newKey);
+      for (const entryPayload of entryPayloads) {
+        await this.appendMembershipEntryWithRetry(
+          spaceId,
+          newCrypto,
+          entryPayload,
+          spaceUCAN,
+        );
+      }
+    }
+
+    // If the completed epoch had no distributed share (orphaned pre-
+    // distribution advance), its key is derivable by removed members —
+    // immediately schedule a fresh re-rotation for shared spaces (D-005).
+    if (spaceUCAN && share === null) {
+      await this.rotateSpaceKey(spaceId).catch((err) => {
+        console.error(
+          `[betterbase-sync] Fresh re-rotation after derived completion failed for ${spaceId}:`,
+          err,
+        );
+      });
+    }
   }
 
   /**
@@ -1208,12 +1293,10 @@ export class SpaceManager {
     const spaceRecord = await this.findBySpaceId(spaceId);
     if (!spaceRecord) return;
 
-    const newKey = deriveForward(
-      currentKey,
-      spaceId,
-      currentEpoch,
-      serverEpoch,
-    );
+    // Share-first (fresh-key rotations), derivation fallback (legacy chains).
+    const newKey =
+      (await this.resolveEpochKeyOrNull(spaceId, serverEpoch)) ??
+      deriveForward(currentKey, spaceId, currentEpoch, serverEpoch);
     await this.updateLocalEpochState(spaceId, spaceRecord, newKey, serverEpoch);
   }
 
@@ -1561,6 +1644,121 @@ export class SpaceManager {
       epoch: newEpoch,
       epochAdvancedAt: Date.now(),
     } as never);
+  }
+
+  // ─── Fresh-key rotation helpers (AUD-024 / D-005) ──────────────────────────
+
+  /**
+   * Fetch and decrypt this device's share of an epoch key. Returns null ONLY
+   * when the server definitively has no share for this member (legacy
+   * derived-key epochs) — transient failures (network, WS drop, decrypt
+   * error) rethrow so callers never fall back to deriving a fresh-rotation
+   * epoch key (which would produce a wrong key and, in rewrap paths,
+   * irrecoverably rewrite DEKs under it).
+   */
+  async resolveEpochKey(
+    spaceId: string,
+    epoch: number,
+  ): Promise<Uint8Array | null> {
+    const spaceUCAN = this.spaceUCANs.get(spaceId);
+    const result = await this.ws.epochKeysGet({
+      space: spaceId,
+      ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
+      epoch,
+    });
+    const jwe = new TextDecoder().decode(result.wrapped_key);
+    return decryptJwe(jwe, this.config.keypair.privateKeyJwk);
+  }
+
+  /**
+   * Share-or-null: maps a definitive "no share for this member" (legacy
+   * derived-key epoch) to null; every other failure rethrows so callers
+   * never derive a fresh-rotation key from transient errors.
+   */
+  private async resolveEpochKeyOrNull(
+    spaceId: string,
+    epoch: number,
+  ): Promise<Uint8Array | null> {
+    try {
+      return await this.resolveEpochKey(spaceId, epoch);
+    } catch (err) {
+      if (err instanceof RPCCallError && err.code === "not_found") {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Wrap a fresh epoch key for self plus the given members (same mechanism
+   * and trust model as invitations: ECDH JWE to each recipient's public key).
+   */
+  private buildEpochKeyShares(
+    newKey: Uint8Array,
+    contacts: readonly MemberContact[],
+  ): WSEpochKeyShareEntry[] {
+    const shares: WSEpochKeyShareEntry[] = [];
+    const seen = new Set<string>();
+    const recipients: readonly MemberContact[] = [
+      {
+        did: this.config.selfDID,
+        publicKeyJwk: this.config.keypair.publicKeyJwk,
+      },
+      ...contacts,
+    ];
+    for (const { did, publicKeyJwk } of recipients) {
+      if (!did || !publicKeyJwk || seen.has(did)) continue;
+      seen.add(did);
+      const jwe = encryptJwe(newKey, publicKeyJwk);
+      shares.push({
+        member_did: did,
+        wrapped_key: new TextEncoder().encode(jwe),
+      });
+    }
+    return shares;
+  }
+
+  /**
+   * Collect the decrypted membership-log state: delivery contacts for ACTIVE
+   * members (latest delegation wins; revocation entries deactivate) and the
+   * serialized entry payloads (for re-encryption under a new epoch key).
+   */
+  private async collectMemberState(
+    spaceId: string,
+  ): Promise<{ contacts: MemberContact[]; entryPayloads: string[] }> {
+    const syncCrypto = this.syncCryptos.get(spaceId);
+    const spaceUCAN = this.spaceUCANs.get(spaceId);
+    if (!syncCrypto) return { contacts: [], entryPayloads: [] };
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const log = await this.membershipClient.getEntries(
+      spaceId,
+      undefined,
+      spaceUCAN,
+    );
+    const decrypted = this.decryptLogEntries(log.entries, syncCrypto, spaceId);
+    const active = new Map<string, MemberContact>();
+    const payloads = new Map<string, string>();
+    for (const { payloadStr, entry } of decrypted) {
+      const parsed = parseUCANPayload(entry.ucan);
+      if (entry.type === "d") {
+        if (parsed.expiresAt > 0 && parsed.expiresAt < nowSeconds) continue;
+        active.set(parsed.audienceDID, {
+          did: parsed.audienceDID,
+          publicKeyJwk: entry.publicKeyJwk,
+        });
+        payloads.set(parsed.audienceDID, payloadStr);
+      } else if (entry.type === "r") {
+        active.delete(parsed.audienceDID);
+        payloads.delete(parsed.audienceDID);
+      }
+    }
+    return {
+      contacts: [...active.values()].filter(
+        (contact): contact is MemberContact & { publicKeyJwk: JsonWebKey } =>
+          !!contact.publicKeyJwk,
+      ),
+      entryPayloads: [...payloads.values()],
+    };
   }
 
   /**

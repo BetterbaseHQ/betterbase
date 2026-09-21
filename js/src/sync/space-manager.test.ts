@@ -6,7 +6,7 @@ import {
   stubWebSocket,
   resetFakeWebSocket,
 } from "./test-helpers.js";
-import { bytesToBase64, bytesToBase64Url } from "./encoding.js";
+import { bytesToBase64, bytesToBase64Url, base64ToBytes } from "./encoding.js";
 import {
   serializeMembershipEntry,
   type MembershipEntryPayload,
@@ -290,6 +290,19 @@ describe("SpaceManager", () => {
     server.handle("membership.revoke", () => ({}));
     server.handle("epoch.complete", () => ({}));
     server.handle("invitation.delete", () => ({}));
+    // Fresh-key rotation (AUD-024): the server stores/replaces wrapped
+    // shares; gets return not-found (tests fall back to derivation).
+    server.handle("epochKeys.put", () => ({ count: 1 }));
+    server.handle("epochKeys.get", (_params, reply) => {
+      const req = reply.socket.sentFrames
+        .filter((f) => f.method === "epochKeys.get")
+        .pop();
+      reply.socket.serverMessage({
+        type: 1,
+        id: req!.id as string,
+        error: { code: "not_found", message: "no key share for this member" },
+      });
+    });
 
     manager = new SpaceManager({
       db: db as never,
@@ -695,19 +708,30 @@ describe("SpaceManager", () => {
         2,
       );
       expect(vi.mocked(rewrapAllDEKs)).toHaveBeenCalledWith(
-        expect.objectContaining({ currentEpoch: 1, newEpoch: 2 }),
+        expect.objectContaining({
+          currentEpoch: 1,
+          newEpoch: 2,
+          freshKey: true,
+        }),
       );
+      // Fresh-key distribution precedes the rewrap (AUD-024 / D-005)
+      const puts = server.sent.filter((f) => f.method === "epochKeys.put");
+      expect(puts).toHaveLength(1);
       // epoch.complete sent over the wire
       const completes = server.sent.filter(
         (f) => f.method === "epoch.complete",
       );
       expect(completes).toHaveLength(1);
-      // Local state swapped and persisted
+      // Local state swapped and persisted: the new key is a FRESH random
+      // secret, not the derived chain value.
       expect(manager.getSpaceEpoch("s1")).toBe(2);
-      expect(db.records.get("rec-1")!).toMatchObject({
-        epoch: 2,
-        spaceKey: bytesToBase64(new Uint8Array(32).fill(2)),
-      });
+      const persisted = db.records.get("rec-1")!;
+      expect(persisted.epoch).toBe(2);
+      expect(persisted.spaceKey).not.toBe(SPACE_KEY_B64);
+      expect(persisted.spaceKey).not.toBe(
+        bytesToBase64(new Uint8Array(32).fill(2)),
+      );
+      expect(base64ToBytes(persisted.spaceKey as string)).toHaveLength(32);
       expect(state.destroyedCryptos.length).toBeGreaterThan(destroyedBefore);
     });
 
@@ -723,7 +747,13 @@ describe("SpaceManager", () => {
       expect(vi.mocked(rewrapAllDEKs)).toHaveBeenCalledWith(
         expect.objectContaining({ newEpoch: 2 }),
       );
-      expect(manager.getSpaceEpoch("s1")).toBe(2);
+      // No share exists for epoch 2 (legacy simulation) → the derived
+      // completion is immediately followed by a fresh re-rotation (D-005):
+      // final epoch 3, second rewrap with a fresh key.
+      expect(manager.getSpaceEpoch("s1")).toBe(3);
+      expect(vi.mocked(rewrapAllDEKs)).toHaveBeenCalledWith(
+        expect.objectContaining({ newEpoch: 3, freshKey: true }),
+      );
     });
 
     it("adopts a completed server epoch without rewrapping", async () => {
@@ -738,6 +768,77 @@ describe("SpaceManager", () => {
       expect(vi.mocked(rewrapAllDEKs)).not.toHaveBeenCalled();
       expect(manager.getSpaceEpoch("s1")).toBe(4);
       expect(db.records.get("rec-1")!.epoch).toBe(4);
+    });
+  });
+
+  describe("removeMember (fresh-key rotation, AUD-024)", () => {
+    it("names the member DID on revoke, distributes shares to remaining members only, and rewraps with a fresh key", async () => {
+      await activate();
+
+      const memberEntry = (aud: string) => ({
+        ucan: ucan(SELF_DID, aud, "/space/write", { with: "space:s1" }),
+        type: "d" as const,
+        signature: new Uint8Array([1, 2, 3, 4]),
+        signerPublicKey: jwkFor(SELF_DID),
+        epoch: 1,
+        mailboxId: `mbx-${aud}`,
+        publicKeyJwk: jwkFor(aud),
+      });
+      membershipLog.entries = [
+        {
+          chain_seq: 1,
+          prev_hash: new Uint8Array(0),
+          entry_hash: new Uint8Array(0),
+          payload: new TextEncoder().encode(
+            serializeMembershipEntry(memberEntry("did:key:victim")),
+          ),
+        },
+        {
+          chain_seq: 2,
+          prev_hash: new Uint8Array(0),
+          entry_hash: new Uint8Array(0),
+          payload: new TextEncoder().encode(
+            serializeMembershipEntry(memberEntry("did:key:friend")),
+          ),
+        },
+      ];
+      const order: string[] = [];
+      server.handle("membership.revoke", (params) => {
+        order.push("revoke");
+        expect((params as { member_did?: string }).member_did).toBe(
+          "did:key:victim",
+        );
+        return {};
+      });
+      let shareRecipients: string[] = [];
+      server.handle("epochKeys.put", (params) => {
+        order.push("epochKeys.put");
+        shareRecipients = (
+          params as { keys: Array<{ member_did: string }> }
+        ).keys.map((k) => k.member_did);
+        return { count: shareRecipients.length };
+      });
+      server.handle("invitation.create", () => {
+        order.push("notice");
+        return { id: "inv-notice" };
+      });
+
+      await manager.removeMember("s1", "did:key:victim");
+
+      // Shares cover self + the remaining member — never the removed member.
+      expect(shareRecipients.sort()).toEqual(["did:key:friend", SELF_DID]);
+      // Distribution happens before the rewrap (crash safety, D-005) and
+      // before completion.
+      expect(order.indexOf("epochKeys.put")).toBeGreaterThan(0);
+      expect(vi.mocked(rewrapAllDEKs)).toHaveBeenCalledWith(
+        expect.objectContaining({ freshKey: true, newEpoch: 2 }),
+      );
+      // The persisted replacement key is fresh, not the derived chain value.
+      const persisted = db.records.get("rec-1")!;
+      expect(persisted.epoch).toBe(2);
+      expect(persisted.spaceKey).not.toBe(
+        bytesToBase64(new Uint8Array(32).fill(2)),
+      );
     });
   });
 
@@ -1032,6 +1133,52 @@ describe("SpaceManager", () => {
       expect(deleted).toEqual(["inv-rev"]);
       expect(db.records.get("rec-1")!.status).toBe("removed");
       expect(manager.hasSpace("s1")).toBe(false);
+    });
+  });
+
+  describe("resolveEpochKey fallback semantics (AUD-024)", () => {
+    it("maps a definitive not_found to null and rethrows transient failures", async () => {
+      await activate();
+      // Replace the default not_found handler with per-case behavior.
+      const respondWith = async (code: string, message: string) => {
+        server.handle("epochKeys.get", (_params, reply) => {
+          const req = reply.socket.sentFrames
+            .filter((f) => f.method === "epochKeys.get")
+            .pop();
+          reply.socket.serverMessage({
+            type: 1,
+            id: req!.id as string,
+            error: { code, message },
+          });
+        });
+      };
+
+      // Not-found is definitive: legacy epoch, derivation fallback is correct.
+      await respondWith("not_found", "no key share for this member");
+      expect(
+        await (
+          manager as unknown as {
+            resolveEpochKeyOrNull: (
+              s: string,
+              e: number,
+            ) => Promise<Uint8Array | null>;
+          }
+        ).resolveEpochKeyOrNull("s1", 2),
+      ).toBeNull();
+
+      // Any other failure is transient: must rethrow, never fall back to
+      // deriving a fresh-rotation key (wrong-key DEK rewrites).
+      await respondWith("internal", "boom");
+      await expect(
+        (
+          manager as unknown as {
+            resolveEpochKeyOrNull: (
+              s: string,
+              e: number,
+            ) => Promise<Uint8Array | null>;
+          }
+        ).resolveEpochKeyOrNull("s1", 2),
+      ).rejects.toThrow(/internal: boom/);
     });
   });
 });

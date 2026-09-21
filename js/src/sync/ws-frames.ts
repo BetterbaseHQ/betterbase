@@ -285,6 +285,9 @@ export interface WSMembershipRevokeParams {
   space: string;
   ucan?: string;
   ucan_cid: string;
+  /** Removed member's DID — the server detaches their subscriptions for
+   * this space (connection stays open; re-subscribe is rejected) (AUD-024). */
+  member_did?: string;
 }
 
 // --- Epoch RPC ---
@@ -310,6 +313,35 @@ export interface WSEpochCompleteParams {
   space: string;
   ucan?: string;
   epoch: number;
+}
+
+// --- Epoch key share RPC (fresh-key rotation, AUD-024) ---
+
+export interface WSEpochKeyShareEntry {
+  member_did: string;
+  /** JWE (UTF-8 bytes) wrapping the fresh epoch key to the member's key. */
+  wrapped_key: Uint8Array;
+}
+
+export interface WSEpochKeysPutParams {
+  space: string;
+  ucan?: string;
+  epoch: number;
+  keys: WSEpochKeyShareEntry[];
+}
+
+export interface WSEpochKeysPutResult {
+  count: number;
+}
+
+export interface WSEpochKeysGetParams {
+  space: string;
+  ucan?: string;
+  epoch: number;
+}
+
+export interface WSEpochKeysGetResult {
+  wrapped_key: Uint8Array;
 }
 
 // --- DEK RPC ---

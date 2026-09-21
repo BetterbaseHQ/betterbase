@@ -40,6 +40,10 @@ import {
   type WSEpochBeginResult,
   type WSEpochConflictResult,
   type WSEpochCompleteParams,
+  type WSEpochKeysGetParams,
+  type WSEpochKeysGetResult,
+  type WSEpochKeysPutParams,
+  type WSEpochKeysPutResult,
   type WSDEKRecord,
   type WSDEKsGetParams,
   type WSDEKsGetResult,
@@ -307,6 +311,20 @@ export class WSClient {
 
   async epochComplete(params: WSEpochCompleteParams): Promise<void> {
     await this.rpc.call<Record<string, unknown>>("epoch.complete", params);
+  }
+
+  /** Store per-member wrapped copies of a fresh epoch key (admin, AUD-024). */
+  async epochKeysPut(
+    params: WSEpochKeysPutParams,
+  ): Promise<WSEpochKeysPutResult> {
+    return this.rpc.call<WSEpochKeysPutResult>("epochKeys.put", params);
+  }
+
+  /** Fetch this member's own wrapped copy of an epoch key. */
+  async epochKeysGet(
+    params: WSEpochKeysGetParams,
+  ): Promise<WSEpochKeysGetResult> {
+    return this.rpc.call<WSEpochKeysGetResult>("epochKeys.get", params);
   }
 
   // --- DEK RPC ---

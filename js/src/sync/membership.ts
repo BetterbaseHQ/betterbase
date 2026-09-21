@@ -154,12 +154,14 @@ export class MembershipClient {
     spaceId: string,
     ucanCID: string,
     ucan?: string,
+    memberDID?: string,
   ): Promise<void> {
     try {
       await this.config.ws.revokeUCAN({
         space: spaceId,
         ...(ucan ? { ucan } : {}),
         ucan_cid: ucanCID,
+        ...(memberDID ? { member_did: memberDID } : {}),
       });
     } catch (err) {
       if (err instanceof RPCCallError) {

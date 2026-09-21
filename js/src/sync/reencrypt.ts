@@ -110,6 +110,12 @@ export interface RewrapAllDEKsConfig {
   newKey: Uint8Array | CryptoKey;
   /** Whether to also rewrap file DEKs (default: true). */
   includeFiles?: boolean;
+  /**
+   * Fresh-key rotation (AUD-024): newKey is a random secret, NOT derived
+   * from currentKey. The key cache then holds exactly {currentEpoch,
+   * currentKey} and {newEpoch, newKey} — no forward derivation.
+   */
+  freshKey?: boolean;
 }
 
 export interface RewrapResult {
@@ -152,13 +158,18 @@ export async function rewrapAllDEKs(
   // Raw bytes path: use WASM
   const rawNewKey = newKey as Uint8Array;
 
-  // Build key cache for unwrapping DEKs at any epoch in [currentEpoch, newEpoch]
+  // Build key cache for unwrapping DEKs. Legacy rotation derives the chain
+  // forward; fresh-key rotation (AUD-024) holds exactly the old and new keys.
   const keyCache = new Map<number, Uint8Array>();
   keyCache.set(currentEpoch, currentKey);
-  let derivedKey: Uint8Array = currentKey;
-  for (let e = currentEpoch + 1; e <= newEpoch; e++) {
-    derivedKey = deriveNextEpochKey(derivedKey, spaceId, e);
-    keyCache.set(e, derivedKey);
+  if (config.freshKey) {
+    keyCache.set(newEpoch, rawNewKey);
+  } else {
+    let derivedKey: Uint8Array = currentKey;
+    for (let e = currentEpoch + 1; e <= newEpoch; e++) {
+      derivedKey = deriveNextEpochKey(derivedKey, spaceId, e);
+      keyCache.set(e, derivedKey);
+    }
   }
 
   try {
@@ -266,9 +277,10 @@ export async function rewrapAllDEKs(
 
     return { dekCount: rewrapped.length, fileDekCount };
   } finally {
-    // Zero all derived intermediate keys (not currentKey — caller owns it)
+    // Zero derived intermediate keys only — the caller owns currentKey and,
+    // for fresh-key rotation, newKey as well.
     for (const [epoch, key] of keyCache) {
-      if (epoch !== currentEpoch) {
+      if (epoch !== currentEpoch && !(config.freshKey && epoch === newEpoch)) {
         key.fill(0);
       }
     }
