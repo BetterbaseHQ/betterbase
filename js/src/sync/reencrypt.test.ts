@@ -85,6 +85,19 @@ vi.mock("../crypto/internals.js", () => ({
     return out;
   },
 }));
+// Web Crypto stubs for the CryptoKey path: identity unwrap/wrap with the
+// epoch prefix preserved through the (opaque) CryptoKey.
+vi.mock("../crypto/webcrypto.js", () => ({
+  webcryptoUnwrapDEK: async (wrapped: Uint8Array) => ({
+    dek: wrapped.slice(4),
+  }),
+  webcryptoWrapDEK: async (dek: Uint8Array, _key: CryptoKey, epoch: number) => {
+    const out = new Uint8Array(4 + dek.length);
+    new DataView(out.buffer).setUint32(0, epoch, false);
+    out.set(dek, 4);
+    return out;
+  },
+}));
 
 const dekAt = (epoch: number, fill: number) => {
   const out = new Uint8Array(44);
@@ -207,5 +220,94 @@ describe2("rewrapAllDEKs compare-and-set (AUD-026)", () => {
       }),
     ).rejects.toThrow(/forbidden/);
     expect2(submissions).toBe(1);
+  });
+});
+
+describe2("rewrapAllDEKs CryptoKey path compare-and-set (AUD-026)", () => {
+  // Any real CryptoKey instance dispatches rewrapAllDEKs onto the Web Crypto
+  // path; the stubbed wrap/unwrap ignore its value.
+  const stubKey = () =>
+    crypto.subtle.generateKey({ name: "AES-KW", length: 256 }, false, [
+      "wrapKey",
+      "unwrapKey",
+    ]) as Promise<CryptoKey>;
+
+  it2("submits the observed wrapper and retries on conflict", async () => {
+    const calls: Array<
+      Array<{ id: string; dek: Uint8Array; observed_dek?: Uint8Array }>
+    > = [];
+    let serverDek = dekAt(1, 0x11);
+    const ws = {
+      getDEKs: vi.fn(async () => [{ id: "r1", dek: serverDek, seq: 1 }]),
+      getFileDEKs: vi.fn(async () => []),
+      rewrapDEKs: vi.fn(
+        async (_params: {
+          deks: Array<{
+            id: string;
+            dek: Uint8Array;
+            observed_dek?: Uint8Array;
+          }>;
+        }) => {
+          calls.push(
+            _params.deks.map((d) => ({
+              ...d,
+              dek: d.dek.slice(),
+              observed_dek: d.observed_dek?.slice(),
+            })),
+          );
+          if (calls.length === 1) {
+            serverDek = dekAt(1, 0x33);
+            throw new RPCCallError({
+              code: "conflict",
+              message: "DEK concurrently replaced",
+            });
+          }
+          return { ok: true, count: _params.deks.length };
+        },
+      ),
+      rewrapFileDEKs: vi.fn(async () => ({ ok: true, count: 0 })),
+    } as unknown as WSClient;
+
+    const result = await rewrapAllDEKs({
+      ws,
+      spaceId: "s1",
+      currentEpoch: 1,
+      currentKey: await stubKey(),
+      newEpoch: 2,
+      newKey: await stubKey(),
+    });
+
+    expect2(result.dekCount).toBe(1);
+    expect2(calls.length).toBe(2);
+    expect2(calls[0]![0]!.observed_dek).toEqual(dekAt(1, 0x11));
+    expect2(calls[1]![0]!.observed_dek).toEqual(dekAt(1, 0x33));
+  });
+
+  it2("throws after exhausting retries on persistent conflict", async () => {
+    let submissions = 0;
+    const ws = {
+      getDEKs: vi.fn(async () => [{ id: "r1", dek: dekAt(1, 0x11), seq: 1 }]),
+      getFileDEKs: vi.fn(async () => []),
+      rewrapDEKs: vi.fn(async () => {
+        submissions += 1;
+        throw new RPCCallError({
+          code: "conflict",
+          message: "DEK concurrently replaced",
+        });
+      }),
+      rewrapFileDEKs: vi.fn(async () => ({ ok: true, count: 0 })),
+    } as unknown as WSClient;
+
+    await expect2(
+      rewrapAllDEKs({
+        ws,
+        spaceId: "s1",
+        currentEpoch: 1,
+        currentKey: await stubKey(),
+        newEpoch: 2,
+        newKey: await stubKey(),
+      }),
+    ).rejects.toBeInstanceOf(RPCCallError);
+    expect2(submissions).toBe(4);
   });
 });

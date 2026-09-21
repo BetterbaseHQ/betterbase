@@ -9,6 +9,8 @@ import {
 import { bytesToBase64, bytesToBase64Url, base64ToBytes } from "./encoding.js";
 import {
   serializeMembershipEntry,
+  parseMembershipEntry,
+  parseUCANPayload,
   type MembershipEntryPayload,
 } from "./membership.js";
 import { advanceEpoch, rewrapAllDEKs } from "./reencrypt.js";
@@ -775,6 +777,55 @@ describe("SpaceManager", () => {
       expect(manager.getSpaceEpoch("s1")).toBe(4);
       expect(db.records.get("rec-1")!.epoch).toBe(4);
     });
+
+    it("runs exactly one deferred follow-up when a completion lands during one (D-005)", async () => {
+      await activate();
+      const { EpochMismatchError } = await import("./reencrypt.js");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        // First advance conflicts and points at an orphaned epoch 2 (no
+        // share → derived completion). The follow-up rotation's OWN advance
+        // conflicts again toward epoch 3 with another derived completion —
+        // suppressed while the first follow-up is in flight, then run
+        // exactly once more. The second suppression gives up loudly: a
+        // persistently conflicting server must not spin the loop.
+        vi.mocked(advanceEpoch)
+          .mockRejectedValueOnce(new EpochMismatchError(2, 2))
+          .mockRejectedValueOnce(new EpochMismatchError(3, 3))
+          .mockRejectedValue(new EpochMismatchError(4, 4));
+        // No shares for epochs 2/3/4 (derived completions all the way).
+        server.handle("epochKeys.get", (_params, reply) => {
+          const req = reply.socket.sentFrames
+            .filter((f) => f.method === "epochKeys.get")
+            .pop();
+          reply.socket.serverMessage({
+            type: 1,
+            id: req!.id as string,
+            error: { code: "not_found", message: "no key share" },
+          });
+        });
+
+        await manager.rotateSpaceKey("s1");
+
+        // Advance attempts: initial + follow-up pass + exactly one deferred
+        // pass for the suppressed completion — then the loop stops even
+        // though the server would keep conflicting.
+        expect(vi.mocked(advanceEpoch)).toHaveBeenCalledTimes(3);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]![0]).toContain(
+          "deferring a fresh re-rotation",
+        );
+        expect(error).toHaveBeenCalledTimes(1);
+        expect(error.mock.calls[0]![0]).toContain("giving up this cycle");
+      } finally {
+        warn.mockRestore();
+        error.mockRestore();
+        // The persistent rejection must not leak into later tests.
+        vi.mocked(advanceEpoch).mockReset();
+        vi.mocked(advanceEpoch).mockImplementation(async () => {});
+      }
+    });
   });
 
   describe("removeMember (fresh-key rotation, AUD-024)", () => {
@@ -818,7 +869,18 @@ describe("SpaceManager", () => {
       ];
 
       let shareRecipients: string[] = [];
+      const appendedPayloads: Uint8Array[] = [];
       server.handle("membership.revoke", () => ({}));
+      server.handle("membership.append", (params) => {
+        appendedPayloads.push(
+          (params as { payload: Uint8Array }).payload.slice(),
+        );
+        membershipLog.metadataVersion += 1;
+        return {
+          chain_seq: membershipLog.entries.length + 1,
+          metadata_version: membershipLog.metadataVersion,
+        };
+      });
       server.handle("epochKeys.put", (params) => {
         shareRecipients = (
           params as { keys: Array<{ member_did: string }> }
@@ -836,6 +898,21 @@ describe("SpaceManager", () => {
         "did:key:mock-self",
         "did:key:reinvite",
       ]);
+
+      // The rebuilt log carries only active members' delegations: the
+      // ghost's stale pre-revocation entry and the victim's delegations
+      // must not be resurrected.
+      const appendedAudiences = appendedPayloads
+        .map(
+          (payload) =>
+            parseUCANPayload(
+              parseMembershipEntry(new TextDecoder().decode(payload)).ucan,
+            ).audienceDID,
+        )
+        .sort();
+      expect(appendedAudiences).toEqual(["did:key:friend", "did:key:reinvite"]);
+      expect(appendedAudiences).not.toContain("did:key:ghost");
+      expect(appendedAudiences).not.toContain("did:key:victim");
     });
 
     it("names the member DID on revoke, distributes shares to remaining members only, and rewraps with a fresh key", async () => {
@@ -905,6 +982,45 @@ describe("SpaceManager", () => {
       expect(persisted.spaceKey).not.toBe(
         bytesToBase64(new Uint8Array(32).fill(2)),
       );
+    });
+  });
+
+  describe("invite", () => {
+    it("labels the invitation payload with the current key generation (AUD-034, sender side)", async () => {
+      // After rotations brought the space to epoch 3, a NEW invitation
+      // must embed generation: 3 — invitees derive keys from the right base.
+      await activate({ epoch: 3 });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                handle: "friend@accounts.test",
+                client_id: "client-1",
+                public_key: jwkFor("did:key:friend"),
+                did: "did:key:friend",
+                issuer: "https://accounts.test",
+                user_id: "user-friend",
+                mailbox_id: "ab".repeat(32),
+              }),
+              { status: 200 },
+            ),
+        ),
+      );
+
+      let sentPayload: string | undefined;
+      server.handle("invitation.create", (params) => {
+        sentPayload = (params as { payload: string }).payload;
+        return { id: "inv-1" };
+      });
+
+      await manager.invite("s1", "friend@accounts.test");
+
+      // encryptJwe is mocked as "jwe:" + plaintext JSON.
+      expect(sentPayload).toBeDefined();
+      const payload = JSON.parse(sentPayload!.slice(4));
+      expect(payload.metadata.generation).toBe(3);
     });
   });
 

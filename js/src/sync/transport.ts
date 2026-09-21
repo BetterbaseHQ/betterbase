@@ -150,14 +150,6 @@ export interface SyncTransportConfig {
 }
 
 /**
- * Bridges betterbase/db's SyncTransport interface to the betterbase-sync server.
- *
- * On push: OutboundRecord -> CRDT binary -> BlobEnvelope -> CBOR -> pad -> encrypt(DEK) -> Change{blob, dek}
- * On pull: Change{blob, dek} -> unwrap DEK -> decrypt(DEK) -> unpad -> CBOR -> BlobEnvelope -> RemoteRecord
- *
- * Pull accepts pre-pulled changes from the outer transport for decryption.
- */
-/**
  * A fresh-epoch key share could not be fetched due to a transient failure
  * (network, WS drop). Records failing decryption for this reason are
  * retryable — the next pull re-attempts resolution.
@@ -172,6 +164,14 @@ export class TransientKeyResolutionError extends Error {
   }
 }
 
+/**
+ * Bridges betterbase/db's SyncTransport interface to the betterbase-sync server.
+ *
+ * On push: OutboundRecord -> CRDT binary -> BlobEnvelope -> CBOR -> pad -> encrypt(DEK) -> Change{blob, dek}
+ * On pull: Change{blob, dek} -> unwrap DEK -> decrypt(DEK) -> unpad -> CBOR -> BlobEnvelope -> RemoteRecord
+ *
+ * Pull accepts pre-pulled changes from the outer transport for decryption.
+ */
 export class SyncTransport implements SyncTransportInterface {
   private pushFn: (changes: Change[]) => Promise<PushResult>;
   private spaceId?: string;
@@ -790,16 +790,13 @@ export class SyncTransport implements SyncTransportInterface {
           change.dek,
         );
       } catch (err) {
-        const message =
-          err instanceof Error
-            ? err.message
-            : typeof err === "string"
-              ? err
-              : `Unknown error: ${JSON.stringify(err)}`;
+        // Preserve the original instance: TransientKeyResolutionError (and
+        // any future typed error) must survive this boundary so pull() can
+        // classify failures as retryable.
         failures.push({
           id: change.id,
           sequence: change.sequence,
-          error: new Error(message),
+          error: err instanceof Error ? err : new Error(String(err)),
         });
         continue;
       }

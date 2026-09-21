@@ -6,7 +6,27 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { SyncTransport, PushRejectedError } from "./transport.js";
+import {
+  SyncTransport,
+  PushRejectedError,
+  TransientKeyResolutionError,
+} from "./transport.js";
+
+vi.mock("../crypto/index.js", () => ({
+  deriveNextEpochKey: () => new Uint8Array(32).fill(7),
+  DEFAULT_EPOCH_ADVANCE_INTERVAL_MS: 60_000,
+}));
+vi.mock("../crypto/internals.js", () => ({
+  generateDEK: () => new Uint8Array(44),
+  wrapDEK: (dek: Uint8Array) => dek,
+  unwrapDEK: () => {
+    throw new Error("unwrap failed (garbage wrapped DEK)");
+  },
+  encryptV4: (data: Uint8Array) => data,
+  decryptV4: () => {
+    throw new Error("decrypt failed");
+  },
+}));
 
 function tombstoneRecord(id: string, sequence: number) {
   return {
@@ -85,5 +105,64 @@ describe("SyncTransport.push", () => {
     const acks = await transport.push("notes", []);
     expect(acks).toEqual([]);
     expect(push).not.toHaveBeenCalled();
+  });
+});
+
+describe("SyncTransport.pull failure classification (AUD-024)", () => {
+  const epochPrefixedDek = (epoch: number) => {
+    const dek = new Uint8Array(44);
+    new DataView(dek.buffer).setUint32(0, epoch, false);
+    return dek;
+  };
+
+  function makeTransport(
+    resolveEpochKey: (epoch: number) => Promise<Uint8Array | null>,
+  ) {
+    const transport = new SyncTransport({
+      push: async () => ({ ok: true, sequence: 1 }),
+      spaceId: "space-1",
+      epochConfig: { epoch: 1, epochKey: new Uint8Array(32).fill(3) },
+      resolveEpochKey,
+    });
+    transport.setPrepulledChanges(
+      [
+        {
+          id: "r1",
+          sequence: 7,
+          blob: new Uint8Array([9, 9, 9]),
+          dek: epochPrefixedDek(5),
+          deleted: false,
+        },
+      ],
+      7,
+    );
+    return transport;
+  }
+
+  it("classifies transient epoch-key resolution failures as retryable", async () => {
+    const transport = makeTransport(async () => {
+      throw new Error("WebSocket not connected");
+    });
+
+    const result = await transport.pull("notes", 0);
+
+    expect(result.failures).toHaveLength(1);
+    const failure = result.failures![0]!;
+    expect(failure.error).toBeInstanceOf(TransientKeyResolutionError);
+    expect(failure.retryable).toBe(true);
+  });
+
+  it("classifies definitive key mismatches as permanent (not retryable)", async () => {
+    // Resolver reports a definitive miss (legacy epoch): the transport falls
+    // back to forward derivation, which cannot unwrap this garbage DEK —
+    // a plain permanent failure.
+    const transport = makeTransport(async () => null);
+
+    const result = await transport.pull("notes", 0);
+
+    expect(result.failures).toHaveLength(1);
+    const failure = result.failures![0]!;
+    expect(failure.error).not.toBeInstanceOf(TransientKeyResolutionError);
+    expect(failure.retryable).toBe(false);
   });
 });

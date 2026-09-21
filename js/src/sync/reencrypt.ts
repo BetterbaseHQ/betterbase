@@ -340,8 +340,12 @@ async function rewrapAllDEKsCryptoKey(
 
   async function rewrapDEKList(
     deks: Array<{ id: string; dek: Uint8Array }>,
-  ): Promise<Array<{ id: string; dek: Uint8Array }>> {
-    const rewrapped: Array<{ id: string; dek: Uint8Array }> = [];
+  ): Promise<Array<{ id: string; dek: Uint8Array; observed_dek: Uint8Array }>> {
+    const rewrapped: Array<{
+      id: string;
+      dek: Uint8Array;
+      observed_dek: Uint8Array;
+    }> = [];
     for (const { id, dek: wrappedDEK } of deks) {
       const dekEpoch = peekEpoch(wrappedDEK);
       if (dekEpoch === newEpoch) continue;
@@ -352,6 +356,7 @@ async function rewrapAllDEKsCryptoKey(
         rewrapped.push({
           id,
           dek: await webcryptoWrapDEK(dek, newKey, newEpoch),
+          observed_dek: wrappedDEK,
         });
       } finally {
         dek.fill(0);
@@ -361,39 +366,72 @@ async function rewrapAllDEKsCryptoKey(
   }
 
   try {
-    // Re-wrap record DEKs
-    const deks = await ws.getDEKs({
-      space: spaceId,
-      ...(ucan ? { ucan } : {}),
-      since: 0,
-    });
-    const rewrapped = await rewrapDEKList(deks);
-    if (rewrapped.length > 0) {
-      const result = await ws.rewrapDEKs({
-        space: spaceId,
-        ...(ucan ? { ucan } : {}),
-        deks: rewrapped,
-      });
-      if (!result.ok) throw new Error("DEK re-wrapping failed on server");
-    }
-
-    // Re-wrap file DEKs
-    let fileDekCount = 0;
-    if (includeFiles) {
-      const fileDeks = await ws.getFileDEKs({
+    // Re-wrap record DEKs with the same compare-and-set discipline as the
+    // raw-key path: each entry carries the observed wrapper, and a conflict
+    // refetches and retries instead of clobbering (AUD-026).
+    const rewrapped: Array<{
+      id: string;
+      dek: Uint8Array;
+      observed_dek: Uint8Array;
+    }> = [];
+    for (let attempt = 0; ; attempt++) {
+      const deks = await ws.getDEKs({
         space: spaceId,
         ...(ucan ? { ucan } : {}),
         since: 0,
       });
-      const rewrappedFiles = await rewrapDEKList(fileDeks);
-      if (rewrappedFiles.length > 0) {
-        const result = await ws.rewrapFileDEKs({
+      rewrapped.length = 0;
+      rewrapped.push(...(await rewrapDEKList(deks)));
+      if (rewrapped.length === 0) break;
+      try {
+        const result = await ws.rewrapDEKs({
           space: spaceId,
           ...(ucan ? { ucan } : {}),
-          deks: rewrappedFiles,
+          deks: rewrapped,
         });
-        if (!result.ok)
-          throw new Error("File DEK re-wrapping failed on server");
+        if (!result.ok) throw new Error("DEK re-wrapping failed on server");
+        break;
+      } catch (err) {
+        if (!isRetryableRewrapConflict(err) || attempt >= REWRAP_MAX_RETRIES) {
+          throw err;
+        }
+      }
+    }
+
+    // Re-wrap file DEKs (same compare-and-set discipline)
+    let fileDekCount = 0;
+    if (includeFiles) {
+      const rewrappedFiles: Array<{
+        id: string;
+        dek: Uint8Array;
+        observed_dek: Uint8Array;
+      }> = [];
+      for (let attempt = 0; ; attempt++) {
+        const fileDeks = await ws.getFileDEKs({
+          space: spaceId,
+          ...(ucan ? { ucan } : {}),
+          since: 0,
+        });
+        rewrappedFiles.length = 0;
+        rewrappedFiles.push(...(await rewrapDEKList(fileDeks)));
+        if (rewrappedFiles.length === 0) break;
+        try {
+          const result = await ws.rewrapFileDEKs({
+            space: spaceId,
+            ...(ucan ? { ucan } : {}),
+            deks: rewrappedFiles,
+          });
+          if (!result.ok)
+            throw new Error("File DEK re-wrapping failed on server");
+          break;
+        } catch (err) {
+          if (
+            !isRetryableRewrapConflict(err) ||
+            attempt >= REWRAP_MAX_RETRIES
+          ) {
+            throw err;
+          }
+        }
       }
       fileDekCount = rewrappedFiles.length;
     }

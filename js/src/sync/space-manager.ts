@@ -142,6 +142,14 @@ export class SpaceManager {
   private activeRemovalSpaces = new Set<string>();
   /** Spaces with a fresh re-rotation follow-up in flight (recursion bound). */
   private freshFollowupActive = new Set<string>();
+  /**
+   * Spaces whose follow-up rotation was suppressed because another one is
+   * in flight; re-armed for exactly one deferred pass when it finishes, so
+   * a derivable epoch is never left in place silently (D-005).
+   */
+  private freshFollowupPending = new Set<string>();
+  /** Spaces currently running that single deferred pass (give-up guard). */
+  private freshFollowupDeferred = new Set<string>();
 
   constructor(config: SpaceManagerConfig) {
     this.config = config;
@@ -335,7 +343,7 @@ export class SpaceManager {
       metadata: {
         space_name: options?.spaceName ?? spaceRecord.name,
         inviter_display_name: this.config.selfHandle,
-        generation: this.spaceEpochs.get(spaceId) ?? spaceRecord.epoch ?? 1,
+        generation: this.spaceEpochOf(spaceId, spaceRecord),
       },
     };
 
@@ -344,8 +352,7 @@ export class SpaceManager {
     // Contact info is stored so removeMember() can send revocation notices later.
     // Fall back to the persisted record epoch: inviting or rotating before this
     // session activated the space must not relabel keys as epoch 1 (AUD-034).
-    const currentEpoch =
-      this.spaceEpochs.get(spaceId) ?? spaceRecord.epoch ?? 1;
+    const currentEpoch = this.spaceEpochOf(spaceId, spaceRecord);
     const signedDelegation = this.signMembershipEntry(
       "d",
       spaceId,
@@ -775,8 +782,7 @@ export class SpaceManager {
     const spaceUCAN = this.spaceUCANs.get(spaceId);
     // Fall back to the persisted record epoch: inviting or rotating before this
     // session activated the space must not relabel keys as epoch 1 (AUD-034).
-    const currentEpoch =
-      this.spaceEpochs.get(spaceId) ?? spaceRecord.epoch ?? 1;
+    const currentEpoch = this.spaceEpochOf(spaceId, spaceRecord);
     const currentKey = this.spaceKeys.get(spaceId)!;
 
     // 1b. Find all UCAN CIDs for this member from membership log.
@@ -1051,6 +1057,18 @@ export class SpaceManager {
   }
 
   /**
+   * Current epoch for label/signing paths: the in-memory tracked epoch when
+   * this session activated the space, else the persisted record epoch —
+   * never relabel keys as epoch 1 (AUD-034).
+   */
+  private spaceEpochOf(
+    spaceId: string,
+    spaceRecord: { epoch?: number },
+  ): number {
+    return this.spaceEpochs.get(spaceId) ?? spaceRecord.epoch ?? 1;
+  }
+
+  /**
    * Get the epochAdvancedAt timestamp for a space. Returns undefined if not tracked.
    */
   getEpochAdvancedAt(spaceId: string): number | undefined {
@@ -1097,8 +1115,7 @@ export class SpaceManager {
 
     // Fall back to the persisted record epoch (AUD-034): rotating before this
     // session activated the space must not derive from epoch 1.
-    const currentEpoch =
-      this.spaceEpochs.get(spaceId) ?? spaceRecord.epoch ?? 1;
+    const currentEpoch = this.spaceEpochOf(spaceId, spaceRecord);
     const newEpoch = currentEpoch + 1;
 
     // Shared spaces rotate to a FRESH random key distributed to every active
@@ -1274,9 +1291,33 @@ export class SpaceManager {
     // If the completed epoch had no distributed share (orphaned pre-
     // distribution advance), its key is derivable by removed members —
     // immediately schedule a fresh re-rotation for shared spaces (D-005).
-    // Bounded: a follow-up already in flight for this space suppresses
-    // nested follow-ups (rotate → conflict → complete → follow-up ...).
-    if (spaceUCAN && share === null && !this.freshFollowupActive.has(spaceId)) {
+    // Bounded: suppressed while a follow-up is in flight (deferred to one
+    // pass when it finishes) and given up loudly during that deferred pass.
+    if (spaceUCAN && share === null) {
+      if (this.freshFollowupDeferred.has(spaceId)) {
+        console.error(
+          `[betterbase-sync] Epoch for ${spaceId} is still derivable after a deferred re-rotation; giving up this cycle — rotate again to repair (D-005).`,
+        );
+        this.freshFollowupPending.delete(spaceId);
+      } else if (this.freshFollowupActive.has(spaceId)) {
+        console.warn(
+          `[betterbase-sync] Derived completion for ${spaceId} during an in-flight follow-up rotation; deferring a fresh re-rotation.`,
+        );
+        this.freshFollowupPending.add(spaceId);
+      } else {
+        await this.runFreshFollowup(spaceId);
+      }
+    }
+  }
+
+  /**
+   * Run a fresh re-rotation, plus exactly one deferred pass for a
+   * completion suppressed while it was in flight. A suppression during the
+   * deferred pass gives up loudly instead of looping — a persistently
+   * conflicting server must not spin this machinery.
+   */
+  private async runFreshFollowup(spaceId: string): Promise<void> {
+    const runPass = async (): Promise<void> => {
       this.freshFollowupActive.add(spaceId);
       try {
         await this.rotateSpaceKey(spaceId);
@@ -1285,8 +1326,20 @@ export class SpaceManager {
           `[betterbase-sync] Fresh re-rotation after derived completion failed for ${spaceId}:`,
           err,
         );
+        this.freshFollowupPending.delete(spaceId);
       } finally {
         this.freshFollowupActive.delete(spaceId);
+      }
+    };
+
+    await runPass();
+    if (this.freshFollowupPending.delete(spaceId)) {
+      this.freshFollowupDeferred.add(spaceId);
+      try {
+        await runPass();
+      } finally {
+        this.freshFollowupDeferred.delete(spaceId);
+        this.freshFollowupPending.delete(spaceId);
       }
     }
   }
