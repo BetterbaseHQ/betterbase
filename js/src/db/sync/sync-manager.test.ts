@@ -74,6 +74,7 @@ function makeHarness(
   const transport = {
     push: vi.fn().mockResolvedValue([] as PushAck[]),
     pull: vi.fn().mockResolvedValue({ records: [] } as PullResult),
+    commitPersistedCursors: vi.fn(),
     ...over.transport,
   };
   const manager = new SyncManager({
@@ -398,6 +399,52 @@ describe("SyncManager.pull", () => {
       ["x", "permanent"],
       ["y", "transient"],
     ]);
+  });
+
+  it("commits staged space cursors after a successful pull (AUD-025)", async () => {
+    const { manager, transport } = makeHarness({
+      transport: {
+        pull: vi.fn().mockResolvedValue({ records: [makeRemote()] }),
+        commitPersistedCursors: vi.fn(),
+      },
+    });
+    await manager.pull(def);
+    expect(transport.commitPersistedCursors).toHaveBeenCalledWith("notes");
+  });
+
+  it("does not commit staged space cursors when application throws (AUD-025)", async () => {
+    const { manager, transport } = makeHarness({
+      adapter: {
+        applyRemoteChanges: vi.fn().mockRejectedValue(new Error("apply boom")),
+      },
+      transport: {
+        pull: vi.fn().mockResolvedValue({ records: [makeRemote()] }),
+        commitPersistedCursors: vi.fn(),
+      },
+    });
+    const result = await manager.pull(def);
+    expect(result.errors).toHaveLength(1);
+    expect(transport.commitPersistedCursors).not.toHaveBeenCalled();
+  });
+
+  it("commits staged space cursors even when the collection cursor write fails (AUD-025)", async () => {
+    const { manager, adapter, transport } = makeHarness({
+      adapter: {
+        setLastSequence: vi.fn().mockRejectedValue(new Error("store down")),
+      },
+      transport: {
+        pull: vi.fn().mockResolvedValue({
+          records: [makeRemote({ sequence: 4 })],
+          latestSequence: 4,
+        }),
+        commitPersistedCursors: vi.fn(),
+      },
+    });
+    const result = await manager.pull(def);
+    expect(adapter.setLastSequence).toHaveBeenCalled();
+    expect(result.errors.map((e) => e.kind)).toEqual(["transient"]);
+    // Application succeeded — space cursors still commit.
+    expect(transport.commitPersistedCursors).toHaveBeenCalledWith("notes");
   });
 
   it("applies remote changes with the resolved delete strategy", async () => {

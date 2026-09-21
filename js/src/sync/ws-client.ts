@@ -189,7 +189,11 @@ export class WSClient {
             const spaceResult: PullSpaceResult = {
               space: d.space,
               prev: d.prev,
-              cursor: d.cursor,
+              // AUD-025 (INV-02): keep the safe continuation point (prev)
+              // until entries arrive and pull.commit confirms the advertised
+              // head — a mid-stream error skips the commit, and the cursor
+              // must never advance past work that was not delivered.
+              cursor: d.prev,
               keyGeneration: d.key_generation,
               rewrapEpoch: d.rewrap_epoch,
               records: [],
@@ -202,19 +206,28 @@ export class WSClient {
           case "pull.record": {
             const d = data as WSPullRecordData;
             const target = result.spaces.get(d.space);
-            if (target) target.records.push(d);
+            if (target) {
+              target.records.push(d);
+              if (d.cursor > target.cursor) target.cursor = d.cursor;
+            }
             break;
           }
           case "pull.membership": {
             const d = data as WSMembershipData;
             const target = result.spaces.get(d.space);
-            if (target) target.membership.push(d);
+            if (target) {
+              target.membership.push(d);
+              if (d.cursor > target.cursor) target.cursor = d.cursor;
+            }
             break;
           }
           case "pull.file": {
             const d = data as WSPullFileData;
             const target = result.spaces.get(d.space);
-            if (target) target.files.push(d);
+            if (target) {
+              target.files.push(d);
+              if (d.cursor > target.cursor) target.cursor = d.cursor;
+            }
             break;
           }
           case "pull.commit": {
@@ -231,6 +244,9 @@ export class WSClient {
                     `server=${d.count}, received=${received}`,
                 );
               }
+              // The advertised head is authoritative only once the server
+              // confirms the full range was delivered (AUD-025).
+              if (d.cursor !== undefined) target.cursor = d.cursor;
             }
             break;
           }

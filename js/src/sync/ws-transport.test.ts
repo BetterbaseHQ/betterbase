@@ -169,11 +169,12 @@ describe("WSTransport", () => {
         reply.chunk(id, "pull.commit", {
           space: PERSONAL,
           count: records.length,
+          cursor: 5,
         });
         return { _chunks: records.length + 2 };
       });
 
-    it("returns tombstone records tagged with the space and persists cursors", async () => {
+    it("returns tombstone records tagged with the space and persists cursors only after commit", async () => {
       pullHandler([
         { id: "n1", cursor: 3 },
         { id: "n2", cursor: 4 },
@@ -188,6 +189,10 @@ describe("WSTransport", () => {
         true,
       );
       expect(result.latestSequence).toBe(5);
+      // AUD-025: the cursor is staged, not persisted — persistence waits
+      // for application confirmation.
+      expect(cursorStore.set).not.toHaveBeenCalled();
+      transport.commitPersistedCursors("notes");
       expect(cursorStore.set).toHaveBeenCalledWith("notes:space-personal", 5);
     });
 
@@ -204,7 +209,11 @@ describe("WSTransport", () => {
           cursor: 8,
           key_generation: 1,
         });
-        reply.chunk(id, "pull.commit", { space: PERSONAL, count: 0 });
+        reply.chunk(id, "pull.commit", {
+          space: PERSONAL,
+          count: 0,
+          cursor: 8,
+        });
         return { _chunks: 2 };
       });
       const cursorStore = {
@@ -217,7 +226,146 @@ describe("WSTransport", () => {
       await transport.pull("notes", 0);
 
       expect(sentSince).toBe(7);
+      transport.commitPersistedCursors("notes");
       expect(cursorStore.set).toHaveBeenCalledWith("notes:space-personal", 8);
+    });
+
+    it("does not advance the cursor past a decrypt failure and re-pulls the failed range (AUD-025)", async () => {
+      const pullRequests: number[] = [];
+      server.handle("pull", (params, reply) => {
+        const since = (
+          params as { spaces: Array<{ id: string; since: number }> }
+        ).spaces[0]!.since;
+        pullRequests.push(since);
+        const id = reply.socket.sentFrames
+          .filter((f) => f.method === "pull")
+          .pop()!.id as string;
+        reply.chunk(id, "pull.begin", {
+          space: PERSONAL,
+          prev: since,
+          cursor: 5,
+          key_generation: 1,
+        });
+        reply.chunk(id, "pull.record", {
+          space: PERSONAL,
+          id: "ok1",
+          blob: null,
+          cursor: 3,
+          deleted: true,
+        });
+        // Undecryptable record mid-stream (blob present, no usable key).
+        reply.chunk(id, "pull.record", {
+          space: PERSONAL,
+          id: "bad",
+          blob: new Uint8Array([0x04, 1, 2, 3, 4]),
+          cursor: 4,
+          deleted: false,
+        });
+        reply.chunk(id, "pull.record", {
+          space: PERSONAL,
+          id: "ok2",
+          blob: null,
+          cursor: 5,
+          deleted: true,
+        });
+        reply.chunk(id, "pull.commit", {
+          space: PERSONAL,
+          count: 3,
+        });
+        return { _chunks: 5 };
+      });
+      const { ws, transport, cursorStore } = makeHarness();
+      await connect(ws);
+
+      const result = await transport.pull("notes", 0);
+
+      // ok2 (after the failure) still decrypts and applies — but the
+      // cursor must gate at the failure so the whole range from "bad" on
+      // is re-attempted next cycle.
+      expect(result.records.map((r) => r.id)).toEqual(["ok1", "ok2"]);
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures![0]!.id).toBe("bad");
+      expect(result.failures![0]!.sequence).toBe(4);
+      expect(result.latestSequence).toBe(3);
+      transport.commitPersistedCursors("notes");
+      expect(cursorStore.set).toHaveBeenCalledWith("notes:space-personal", 3);
+
+      // Next pull resumes from the gated cursor (3), not the head (5).
+      await transport.pull("notes", 0);
+      expect(pullRequests[1]).toBe(3);
+    });
+
+    it("gates the cursor at the last delivered record when the stream ends without a commit (AUD-025)", async () => {
+      server.handle("pull", (_params, reply) => {
+        const id = reply.socket.sentFrames.find((f) => f.method === "pull")!
+          .id as string;
+        reply.chunk(id, "pull.begin", {
+          space: PERSONAL,
+          prev: 0,
+          cursor: 8,
+          key_generation: 1,
+        });
+        reply.chunk(id, "pull.record", {
+          space: PERSONAL,
+          id: "n1",
+          blob: null,
+          cursor: 3,
+          deleted: true,
+        });
+        reply.chunk(id, "pull.record", {
+          space: PERSONAL,
+          id: "n2",
+          blob: null,
+          cursor: 4,
+          deleted: true,
+        });
+        // Mid-stream error: the server skips pull.commit for this space
+        // and still reports the chunks it actually sent.
+        return { _chunks: 3 };
+      });
+      const { ws, transport, cursorStore } = makeHarness();
+      await connect(ws);
+
+      const result = await transport.pull("notes", 0);
+
+      expect(result.records.map((r) => r.id)).toEqual(["n1", "n2"]);
+      expect(result.latestSequence).toBe(4);
+      transport.commitPersistedCursors("notes");
+      expect(cursorStore.set).toHaveBeenCalledWith("notes:space-personal", 4);
+    });
+
+    it("drops staged cursors when the next pull supersedes an unapplied cycle (AUD-025)", async () => {
+      let cursor = 0;
+      server.handle("pull", (_params, reply) => {
+        const id = reply.socket.sentFrames
+          .filter((f) => f.method === "pull")
+          .pop()!.id as string;
+        reply.chunk(id, "pull.begin", {
+          space: PERSONAL,
+          prev: cursor,
+          cursor: cursor + 5,
+          key_generation: 1,
+        });
+        reply.chunk(id, "pull.commit", {
+          space: PERSONAL,
+          count: 0,
+          cursor: cursor + 5,
+        });
+        cursor += 5;
+        return { _chunks: 2 };
+      });
+      const { ws, transport, cursorStore } = makeHarness();
+      await connect(ws);
+
+      // First cycle stages 5 but is never committed (application failed).
+      await transport.pull("notes", 0);
+      // Second cycle stages 10 (recomputed from the un-advanced cursor).
+      await transport.pull("notes", 0);
+      transport.commitPersistedCursors("notes");
+
+      // Only the latest staged value is committed — no stale 5 survives.
+      expect(cursorStore.set).toHaveBeenCalledTimes(1);
+      expect(cursorStore.set).toHaveBeenCalledWith("notes:space-personal", 10);
     });
 
     it("flags revoked spaces from subscribe errors", async () => {
@@ -253,6 +401,7 @@ describe("WSTransport", () => {
         return { _chunks: 2 };
       });
       await transport.pull("notes", 0);
+      transport.commitPersistedCursors("notes");
 
       const result = await transport.applySyncEvent(
         { space: PERSONAL, records: [], prev: 9, seq: 10 },
@@ -278,7 +427,8 @@ describe("WSTransport", () => {
       });
       const { ws, transport } = makeHarness();
       await connect(ws);
-      await transport.pull("notes", 0); // cursor now 12
+      await transport.pull("notes", 0);
+      transport.commitPersistedCursors("notes"); // cursor now 12
 
       // Event claims prev=5 but our cursor is 12 → different → gap → full pull
       server.handle("pull", (_params, reply) => {

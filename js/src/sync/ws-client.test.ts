@@ -109,7 +109,7 @@ describe("WSClient", () => {
       });
       reply.chunk(id, "pull.file", { space: "s1", id: "f1" });
       reply.chunk(id, "pull.membership", { space: "s1", member: "m1" });
-      reply.chunk(id, "pull.commit", { space: "s1", count: 4 });
+      reply.chunk(id, "pull.commit", { space: "s1", count: 4, cursor: 9 });
       return { _chunks: 6 };
     });
     await connect();
@@ -127,6 +127,55 @@ describe("WSClient", () => {
     expect(s1!.membership).toHaveLength(1);
   });
 
+  it("keeps the cursor at the last delivered entry when a stream ends without commit (AUD-025)", async () => {
+    // Mid-stream error: the server skips pull.commit but still reports the
+    // chunks it sent — the space cursor must not adopt the advertised head.
+    server.handle("pull", (_params, reply) => {
+      const id = reply.socket.sentFrames.find((f) => f.method === "pull")!
+        .id as string;
+      reply.chunk(id, "pull.begin", {
+        space: "s1",
+        prev: 3,
+        cursor: 9,
+        key_generation: 2,
+      });
+      reply.chunk(id, "pull.record", { space: "s1", id: "r1", cursor: 7 });
+      reply.chunk(id, "pull.file", { space: "s1", id: "f1", cursor: 8 });
+      reply.chunk(id, "pull.membership", {
+        space: "s1",
+        cursor: 8,
+        entries: [],
+      });
+      return { _chunks: 4 };
+    });
+    await connect();
+
+    const result = await client.pull([{ id: "s1", since: 3 }]);
+
+    const s1 = result.spaces.get("s1");
+    expect(s1!.cursor).toBe(8);
+    expect(s1!.prev).toBe(3);
+  });
+
+  it("falls back to prev when nothing is delivered from a partial stream (AUD-025)", async () => {
+    server.handle("pull", (_params, reply) => {
+      const id = reply.socket.sentFrames.find((f) => f.method === "pull")!
+        .id as string;
+      reply.chunk(id, "pull.begin", {
+        space: "s1",
+        prev: 5,
+        cursor: 9,
+        key_generation: 1,
+      });
+      return { _chunks: 1 };
+    });
+    await connect();
+
+    const result = await client.pull([{ id: "s1", since: 5 }]);
+
+    expect(result.spaces.get("s1")!.cursor).toBe(5);
+  });
+
   it("keeps spaces separate in a multi-space pull", async () => {
     server.handle("pull", (_params, reply) => {
       const id = reply.socket.sentFrames.find((f) => f.method === "pull")!
@@ -138,14 +187,14 @@ describe("WSClient", () => {
         key_generation: 1,
       });
       reply.chunk(id, "pull.record", { space: "a", id: "ra", cursor: 1 });
-      reply.chunk(id, "pull.commit", { space: "a", count: 1 });
+      reply.chunk(id, "pull.commit", { space: "a", count: 1, cursor: 1 });
       reply.chunk(id, "pull.begin", {
         space: "b",
         prev: 0,
         cursor: 1,
         key_generation: 1,
       });
-      reply.chunk(id, "pull.commit", { space: "b", count: 0 });
+      reply.chunk(id, "pull.commit", { space: "b", count: 0, cursor: 1 });
       return { _chunks: 5 };
     });
     await connect();
@@ -192,7 +241,7 @@ describe("WSClient", () => {
         cursor: 1,
         key_generation: 1,
       });
-      reply.chunk(id, "pull.commit", { space: "s1", count: 0 });
+      reply.chunk(id, "pull.commit", { space: "s1", count: 0, cursor: 1 });
       return { _chunks: 3 };
     });
     await connect();

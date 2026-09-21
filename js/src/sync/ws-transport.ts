@@ -101,6 +101,14 @@ export class WSTransport implements SyncTransportInterface {
 
   /** Per-space cursors. Key: `${collection}:${spaceId}`, Value: cursor number. */
   private cursors = new Map<string, number>();
+  /**
+   * Cursor advances staged by pull() awaiting application confirmation
+   * (keyed by cursorKey → staged value). AUD-025.
+   */
+  private pendingCursorCommits = new Map<
+    string,
+    { collection: string; spaceId: string; cursor: number }
+  >();
 
   constructor(config: WSTransportConfig) {
     this.config = config;
@@ -269,7 +277,12 @@ export class WSTransport implements SyncTransportInterface {
    */
   async pull(collection: string, _since: number): Promise<PullResult> {
     const allRecords: RemoteRecord[] = [];
+    const allFailures: PullResult["failures"] = [];
     let maxSequence = 0;
+
+    // A new pull for this collection supersedes any staged-but-uncommitted
+    // cursors from a previous cycle whose application failed (AUD-025).
+    this.dropStagedCursors(collection);
 
     // Build space list for pull.
     const spaces: WSPullSpace[] = [];
@@ -363,9 +376,28 @@ export class WSTransport implements SyncTransportInterface {
         allRecords.push(record);
       }
 
-      if (transportPullResult.latestSequence !== undefined) {
-        this.setCursor(collection, spaceId, transportPullResult.latestSequence);
-        maxSequence = Math.max(maxSequence, transportPullResult.latestSequence);
+      // AUD-025 (INV-02): the space cursor is the durable re-pull gate —
+      // it must never advance past work that was not delivered and
+      // decrypted. Partial streams already gate spaceResult.cursor at the
+      // last delivered sequence (WSClient waits for pull.commit); a decrypt
+      // failure at sequence N further gates it at N-1 so the record (and
+      // everything after it) is re-pulled next cycle — CRDT merge makes
+      // re-application idempotent.
+      let safeSequence = spaceResult.cursor;
+      if (transportPullResult.failures !== undefined) {
+        for (const failure of transportPullResult.failures) {
+          allFailures.push(failure);
+        }
+        const firstFailed = Math.min(
+          ...transportPullResult.failures.map((f) => f.sequence),
+        );
+        safeSequence = Math.min(safeSequence, Math.max(firstFailed - 1, 0));
+      }
+      if (safeSequence > 0) {
+        // Staged, not set: the durable commit happens once the records are
+        // applied locally (see commitPersistedCursors).
+        this.stageCursor(collection, spaceId, safeSequence);
+        maxSequence = Math.max(maxSequence, safeSequence);
       }
     }
 
@@ -433,6 +465,7 @@ export class WSTransport implements SyncTransportInterface {
     return {
       records: allRecords,
       latestSequence: maxSequence,
+      failures: allFailures.length > 0 ? allFailures : undefined,
     };
   }
 
@@ -588,6 +621,45 @@ export class WSTransport implements SyncTransportInterface {
 
   private cursorKey(collection: string, spaceId: string): string {
     return `${collection}:${spaceId}`;
+  }
+
+  /**
+   * Commit staged per-space cursors for a collection after its pulled
+   * records were applied (SyncTransport.commitPersistedCursors, AUD-025).
+   */
+  commitPersistedCursors(collection: string): void {
+    for (const [key, staged] of this.pendingCursorCommits) {
+      if (!key.startsWith(`${collection}:`)) continue;
+      this.pendingCursorCommits.delete(key);
+      this.setCursor(staged.collection, staged.spaceId, staged.cursor);
+    }
+  }
+
+  /**
+   * Stage a cursor advance without committing it. Neither memory nor the
+   * durable store advance until the records are applied — a crash or an
+   * apply failure between pull and application must re-pull the range
+   * (INV-02).
+   */
+  private stageCursor(
+    collection: string,
+    spaceId: string,
+    cursor: number,
+  ): void {
+    this.pendingCursorCommits.set(this.cursorKey(collection, spaceId), {
+      collection,
+      spaceId,
+      cursor,
+    });
+  }
+
+  /** Drop uncommitted staged cursors for a collection (superseded pull). */
+  private dropStagedCursors(collection: string): void {
+    for (const key of this.pendingCursorCommits.keys()) {
+      if (key.startsWith(`${collection}:`)) {
+        this.pendingCursorCommits.delete(key);
+      }
+    }
   }
 
   private async loadCursor(

@@ -416,6 +416,14 @@ export interface PullFailure {
 export interface SyncTransport {
   push(collection: string, records: OutboundRecord[]): Promise<PushAck[]>;
   pull(collection: string, since: number): Promise<PullResult>;
+  /**
+   * Commit per-space pull cursors staged during the last pull for this
+   * collection. Transports that stage cursors (INV-02: a cursor must not
+   * advance past unapplied work) persist them only when this is called
+   * after the records were successfully applied. Optional: transports
+   * that apply synchronously need not implement it.
+   */
+  commitPersistedCursors?(collection: string): void;
 }
 
 // ============================================================================

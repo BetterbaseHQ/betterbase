@@ -406,6 +406,11 @@ export class SyncManager {
       }
     }
 
+    // Records applied (per-record failures are surfaced above): commit the
+    // staged per-space cursors. On the apply-throw path above we returned
+    // early — the staged cursors are dropped by the next pull (AUD-025).
+    this.transport.commitPersistedCursors?.(collection);
+
     return result;
   }
 
