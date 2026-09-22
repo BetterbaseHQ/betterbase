@@ -31,6 +31,8 @@ import { DatabaseProvider, useQuery as useQueryBase } from "../db/react.js";
 // behavior, driven by setSyncState() + navigator.onLine.
 import { deriveConnectionStatus } from "../sync/connection-status.js";
 export type { EditHistoryEntry } from "../sync/react.js";
+import type { Member } from "../sync/space-manager.js";
+export type { Member };
 
 /**
  * The sync layer's useQuery differs from the raw db one in two ways app
@@ -298,8 +300,27 @@ export function usePeers<T = unknown>(
   return [];
 }
 
-export function useMembers(_spaceId: string | null | undefined) {
-  return { members: [] as Array<{ id: string; handle: string }> };
+let spaceMembers = new Map<string, Member[]>();
+
+/**
+ * Stub member lists for `useMembers(spaceId)` — the membership-derived
+ * did→handle mapping that attribution UIs (e.g. chat sender verification)
+ * resolve edit-chain authors against.
+ */
+export function setSpaceMembers(spaceId: string, members: Member[]) {
+  spaceMembers.set(spaceId, members);
+}
+
+export function useMembers(spaceId: string | null | undefined): {
+  members: Member[];
+  loading: boolean;
+  error: Error | null;
+} {
+  return {
+    members: (spaceId ? spaceMembers.get(spaceId) : undefined) ?? [],
+    loading: false,
+    error: null,
+  };
 }
 
 let fileUrls = new Map<string, string>();
@@ -389,6 +410,7 @@ export function resetSyncMocks(): void {
   for (const fn of Object.values(spaceOps)) fn.mockClear();
   for (const key of Object.keys(spaceOps)) delete spaceOps[key];
   fileUrls = new Map();
+  spaceMembers = new Map();
   pendingInvitations = [];
   dbAdapter = null;
 }
