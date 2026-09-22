@@ -136,6 +136,8 @@ export class SpaceManager {
   private spaceRoles = new Map<string, SpaceRole>();
   /** Promise-based lock for serializing checkInvitations() calls. */
   private checkInvitationsPromise: Promise<number> | null = null;
+  /** Mailbox items that failed processing this session (AUD-035). */
+  private undecryptableInvitationIds = new Set<string>();
   /** Per-space dedup lock for member refresh — prevents redundant concurrent fetches. */
   private memberRefreshPromises = new Map<string, Promise<Member[]>>();
   /** Spaces currently undergoing admin-initiated removal (suppresses self-revocation). */
@@ -419,6 +421,7 @@ export class SpaceManager {
       spaceKeyBytes,
       serializeMembershipEntry(acceptEntry),
       spaceRecord.ucanChain,
+      "accept",
     );
 
     // Update status to active
@@ -477,6 +480,7 @@ export class SpaceManager {
       spaceKeyBytes,
       serializeMembershipEntry(declineEntry),
       spaceRecord.ucanChain,
+      "decline",
     );
 
     // Delete the space record
@@ -1444,88 +1448,128 @@ export class SpaceManager {
     const invitations = await this.invitationClient.listInvitations();
     let count = 0;
 
+    // Prune session-level poison tracking of ids the server no longer
+    // returns (expiry/deletion) so the set cannot outgrow the mailbox.
+    const liveIds = new Set(invitations.map((i) => i.id));
+    for (const id of this.undecryptableInvitationIds) {
+      if (!liveIds.has(id)) this.undecryptableInvitationIds.delete(id);
+    }
+
     for (const invitation of invitations) {
-      // Decrypt the raw JWE payload first
-      const plaintext = decryptJwe(invitation.payload, privateKeyJwk);
-      let rawPayload: unknown;
+      // AUD-035: one undecryptable or malformed item must not abort the
+      // whole mailbox pass — later invitations and revocation notices
+      // still need processing. Failures are skipped (never deleted: a
+      // decrypt failure may be a transient key mismatch) and quarantined
+      // in memory for this session.
+      if (this.undecryptableInvitationIds.has(invitation.id)) continue;
+
       try {
-        rawPayload = JSON.parse(new TextDecoder().decode(plaintext));
-      } catch {
-        // Not valid JSON — skip this message
-        await this.invitationClient
-          .deleteInvitation(invitation.id)
-          .catch((err) => {
-            console.error(
-              "[betterbase-sync] Failed to delete invalid invitation:",
-              err,
-            );
-          });
-        continue;
-      }
-
-      // Check if this is a revocation notice
-      if (isRevocationNotice(rawPayload)) {
-        const verified = await this.verifyRevocation(
-          rawPayload.space_id,
-          rawPayload.epoch,
+        const processed = await this.processInvitation(
+          invitation,
+          privateKeyJwk,
         );
-        if (verified) {
-          await this.handleRevocation(rawPayload.space_id);
-        }
-        // Delete notice regardless (verified or stale)
-        await this.invitationClient
-          .deleteInvitation(invitation.id)
-          .catch((err) => {
-            console.error(
-              "[betterbase-sync] Failed to delete revocation notice:",
-              err,
-            );
-          });
-        continue;
+        if (processed) count++;
+      } catch (err) {
+        this.undecryptableInvitationIds.add(invitation.id);
+        console.warn(
+          "[betterbase-sync] Skipping unprocessable invitation:",
+          err instanceof Error ? err.message : err,
+        );
       }
-
-      // Parse as invitation payload
-      const payload = parseInvitationWirePayload(rawPayload);
-
-      // Dedup by spaceId field — skip if we already have an active/invited record
-      const existing = await this.findBySpaceId(payload.space_id);
-      if (existing && (existing.status as SpaceStatus) !== "removed") continue;
-      // If existing is "removed", delete the stale record so we can create a fresh one
-      if (existing) {
-        await this.config.db.delete(spaces, existing.id);
-      }
-
-      // Write space record with "invited" status (auto-generated record ID)
-      const spaceKey = bytesToBase64(payload.space_key);
-      // Use the leaf UCAN (first in chain) as the ucanChain value
-      const ucanChain = payload.ucan_chain[0];
-      if (!ucanChain) throw new Error("Invitation has empty UCAN chain");
-
-      await this.config.db.put(
-        spaces,
-        {
-          spaceId: payload.space_id,
-          name:
-            payload.metadata.space_name ??
-            `Space ${payload.space_id.slice(0, 8)}`,
-          status: "invited" satisfies SpaceStatus,
-          role: permissionToRole(payload),
-          invitedBy: payload.metadata.inviter_display_name,
-          spaceKey,
-          ucanChain,
-          rootPublicKey: "", // Will be populated on accept if needed
-          // The epoch the delivered key belongs to (AUD-034): invitations
-          // after rotation must not relabel the current key as epoch 1.
-          epoch: payload.metadata.generation ?? 1,
-          serverInvitationId: invitation.id,
-        } as never,
-        { space: this.config.personalSpaceId },
-      );
-
-      count++;
     }
 
     return count;
+  }
+
+  /**
+   * Handle a single mailbox item. Returns true when a new space record was
+   * created. Invalid-JSON payloads are deleted server-side (pre-existing
+   * behavior); everything else that fails throws to the caller's quarantine.
+   */
+  private async processInvitation(
+    invitation: { id: string; payload: string },
+    privateKeyJwk: JsonWebKey,
+  ): Promise<boolean> {
+    // Decrypt the raw JWE payload first
+    const plaintext = decryptJwe(invitation.payload, privateKeyJwk);
+    let rawPayload: unknown;
+    try {
+      rawPayload = JSON.parse(new TextDecoder().decode(plaintext));
+    } catch {
+      // Not valid JSON — skip this message
+      await this.invitationClient
+        .deleteInvitation(invitation.id)
+        .catch((err) => {
+          console.error(
+            "[betterbase-sync] Failed to delete invalid invitation:",
+            err,
+          );
+        });
+      return false;
+    }
+
+    // Check if this is a revocation notice
+    if (isRevocationNotice(rawPayload)) {
+      const verified = await this.verifyRevocation(
+        rawPayload.space_id,
+        rawPayload.epoch,
+      );
+      if (verified) {
+        await this.handleRevocation(rawPayload.space_id);
+      }
+      // Delete notice regardless (verified or stale)
+      await this.invitationClient
+        .deleteInvitation(invitation.id)
+        .catch((err) => {
+          console.error(
+            "[betterbase-sync] Failed to delete revocation notice:",
+            err,
+          );
+        });
+      return false;
+    }
+
+    // Parse as invitation payload
+    const payload = parseInvitationWirePayload(rawPayload);
+
+    // Dedup by spaceId field — skip if we already have an active/invited record
+    const existing = await this.findBySpaceId(payload.space_id);
+    if (existing && (existing.status as SpaceStatus) !== "removed") {
+      return false;
+    }
+    // If existing is "removed", delete the stale record so we can create a fresh one
+    if (existing) {
+      await this.config.db.delete(spaces, existing.id);
+    }
+
+    // Write space record with "invited" status (auto-generated record ID)
+    const spaceKey = bytesToBase64(payload.space_key);
+    // Use the leaf UCAN (first in chain) as the ucanChain value
+    const ucanChain = payload.ucan_chain[0];
+    if (!ucanChain) throw new Error("Invitation has empty UCAN chain");
+
+    await this.config.db.put(
+      spaces,
+      {
+        spaceId: payload.space_id,
+        name:
+          payload.metadata.space_name ??
+          `Space ${payload.space_id.slice(0, 8)}`,
+        status: "invited" satisfies SpaceStatus,
+        role: permissionToRole(payload),
+        invitedBy: payload.metadata.inviter_display_name,
+        spaceKey,
+        ucanChain,
+        rootPublicKey: "", // Will be populated on accept if needed
+        // The epoch the delivered key belongs to (AUD-034): invitations
+        // after rotation must not relabel the current key as epoch 1.
+        epoch: payload.metadata.generation ?? 1,
+        serverInvitationId: invitation.id,
+      } as never,
+      { space: this.config.personalSpaceId },
+    );
+
+    return true;
   }
 
   /**
@@ -1907,6 +1951,7 @@ export class SpaceManager {
     prevHash: Uint8Array | null,
     seq: number,
     ucan?: string,
+    kind?: "accept" | "decline",
   ): Promise<void> {
     const payload = encryptMembershipPayload(
       entryPayload,
@@ -1923,6 +1968,7 @@ export class SpaceManager {
         prev_hash: prevHash,
         entry_hash: entryHash,
         payload,
+        kind,
       },
       ucan ?? this.spaceUCANs.get(spaceId),
     );
@@ -1942,6 +1988,7 @@ export class SpaceManager {
     cryptoOrKey: SyncCryptoInterface | Uint8Array,
     entryPayload: string,
     ucan?: string,
+    kind?: "accept" | "decline",
   ): Promise<void> {
     const spaceUCAN = ucan ?? this.spaceUCANs.get(spaceId);
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -1963,6 +2010,7 @@ export class SpaceManager {
           prevHash,
           nextSeq,
           spaceUCAN,
+          kind,
         );
         return;
       } catch (err) {

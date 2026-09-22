@@ -1261,6 +1261,48 @@ describe("SpaceManager", () => {
       expect(count).toBe(0);
     });
 
+    it("continues past an undecryptable invitation (AUD-035)", async () => {
+      // A poison item at the head of the mailbox must not abort the pass:
+      // later invitations and revocation notices still process, and the
+      // poison id is quarantined for the session instead of re-attempted.
+      server.handle("invitation.list", () => ({
+        invitations: [
+          {
+            id: "inv-poison",
+            payload: "jwe-poison",
+            created_at: 0,
+            expires_at: 0,
+          },
+          { id: "inv-good", payload: "jwe-good", created_at: 0, expires_at: 0 },
+        ],
+      }));
+      let poisonAttempts = 0;
+      vi.mocked(decryptJwe).mockImplementation((payload: unknown) => {
+        const jwe = payload as string;
+        if (jwe === "jwe-poison") {
+          poisonAttempts++;
+          throw new Error("decrypt failed");
+        }
+        return new TextEncoder().encode(wireInvitation("s-after-poison"));
+      });
+
+      const count = await manager.checkInvitations(jwkFor(SELF_DID));
+
+      expect(count).toBe(1);
+      const record = [...db.records.values()].find(
+        (r) => r.spaceId === "s-after-poison",
+      );
+      expect(record).toMatchObject({
+        status: "invited",
+        serverInvitationId: "inv-good",
+      });
+
+      // Second poll: the quarantined id is skipped without another
+      // decryption attempt.
+      await manager.checkInvitations(jwkFor(SELF_DID));
+      expect(poisonAttempts).toBe(1);
+    });
+
     it("deletes messages that are not valid JSON", async () => {
       const deleted: string[] = [];
       server.handle("invitation.list", () => ({

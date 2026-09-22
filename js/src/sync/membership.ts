@@ -99,6 +99,8 @@ export class MembershipClient {
       prev_hash: Uint8Array | null;
       entry_hash: Uint8Array;
       payload: Uint8Array;
+      /** Self statements (accept/decline) are appendable with read access. */
+      kind?: "accept" | "decline";
     },
     ucan?: string,
   ): Promise<AppendMemberResponse> {
@@ -110,6 +112,7 @@ export class MembershipClient {
         ...(entry.prev_hash ? { prev_hash: entry.prev_hash } : {}),
         entry_hash: entry.entry_hash,
         payload: entry.payload,
+        ...(entry.kind ? { kind: entry.kind } : {}),
       });
       return {
         chain_seq: result.chain_seq,

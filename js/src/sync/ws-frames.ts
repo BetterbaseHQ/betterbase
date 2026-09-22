@@ -263,6 +263,12 @@ export interface WSMembershipAppendParams {
   prev_hash?: Uint8Array;
   entry_hash: Uint8Array;
   payload: Uint8Array;
+  /**
+   * Declared entry class. Self statements (accept/decline) may be appended
+   * with a read-level UCAN; omitting the field requires write (every
+   * pre-existing caller).
+   */
+  kind?: "accept" | "decline";
 }
 
 export interface WSMembershipAppendResult {
