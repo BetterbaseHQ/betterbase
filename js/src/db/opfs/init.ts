@@ -20,8 +20,17 @@ import type { CollectionDefHandle, CollectionBlueprint } from "../types.js";
 import { BLUEPRINT } from "../types.js";
 import type { MainToWorkerMessage, WorkerResponse } from "./types.js";
 import { OpfsWorkerHost } from "./OpfsWorkerHost.js";
+import { spaces } from "../../sync/spaces-collection.js";
 
 export function initWorker(collections: CollectionDefHandle[]): void {
+  // The sync layer (`SyncEngine`, `useSpaces` hooks) observes the `__spaces`
+  // collection on whatever database it runs against — register it unless
+  // the app already did, so reactive subscriptions don't fail with
+  // "Collection not registered".
+  const allCollections = collections.some((c) => c.name === spaces.name)
+    ? collections
+    : [...collections, spaces];
+
   // We need to listen for an "open" message with the database name.
   // Once received, we initialize everything and switch to the OpfsWorkerHost handler.
   self.onmessage = async (ev: MessageEvent<MainToWorkerMessage>) => {
@@ -54,7 +63,7 @@ export function initWorker(collections: CollectionDefHandle[]): void {
       // Build collection definitions from blueprints
       const wasmDefs: unknown[] = [];
 
-      for (const col of collections) {
+      for (const col of allCollections) {
         const blueprint = (
           col as unknown as Record<symbol, CollectionBlueprint>
         )[BLUEPRINT]!;
