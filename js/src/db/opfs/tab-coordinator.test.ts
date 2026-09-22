@@ -110,17 +110,22 @@ describe("TabCoordinator failure handling (AUD-023)", () => {
   });
 
   it("releases the election lock when initial leader init fails", async () => {
-    electLeaderMock.mockImplementation(async () => ({
+    vi.mocked(electLeader).mockImplementation(async () => ({
       role: "leader",
       release: releaseMock,
     }));
     rpcCallMock.mockRejectedValue(new Error("OPFS install failed"));
+    const worker = new FakeWorker();
+    const workerAsNever = worker as unknown as never;
 
-    await expect(
-      TabCoordinator.create("db", new FakeWorker() as never),
-    ).rejects.toThrow("OPFS install failed");
+    await expect(TabCoordinator.create("db", workerAsNever)).rejects.toThrow(
+      "OPFS install failed",
+    );
 
     expect(releaseMock).toHaveBeenCalledTimes(1);
+    // Review round: the worker must not leak on a failed open either
+    // (close() parity).
+    expect(worker.terminate).toHaveBeenCalled();
   });
 
   it("releases leadership and resumes following when promotion fails", async () => {

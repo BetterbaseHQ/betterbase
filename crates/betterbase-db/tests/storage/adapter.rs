@@ -13,6 +13,7 @@ use betterbase_db::{
     storage::{
         adapter::Adapter,
         sqlite::SqliteBackend,
+        traits::StorageBackend,
         traits::{StorageLifecycle, StorageRead, StorageSync, StorageWrite},
     },
     types::{
@@ -2174,4 +2175,69 @@ fn meta_only_write_converges_when_peer_pushed_same_meta() {
         "identical remote meta converges — no redundant push"
     );
     assert_eq!(after.meta, Some(json!({"spaceId": "s-shared"})));
+}
+
+// ============================================================================
+// Session ID range (AUD-018 upgrade path)
+// ============================================================================
+
+#[test]
+fn legacy_out_of_range_persisted_session_id_is_masked_on_load() {
+    // Databases created before the 57-bit fix persist a full-width sid
+    // (~99% of them are out of range). Loading must mask it to the codec's
+    // representable range — reproducing exactly the identity the old codec
+    // already wrote into binaries — so writes keep working after upgrade.
+    // On the pre-fix parent this put hard-errors with "outside
+    // representable range".
+
+    let def = users_def();
+    let mut backend = SqliteBackend::open_in_memory().expect("open in-memory DB");
+    backend.initialize(&[&def]).expect("backend initialize");
+    // The audit reproduction value: (1<<63)+65536 — pre-fix generation shape.
+    backend
+        .set_meta("session_id", &((1u64 << 63) + 65536).to_string())
+        .expect("seed legacy session id");
+    let mut adapter = Adapter::new(backend);
+    adapter
+        .initialize(&[Arc::new(users_def())])
+        .expect("adapter initialize");
+
+    let record = adapter
+        .put(
+            &def,
+            json!({ "name": "Upgrade", "email": "upgrade@example.com" }),
+            &put_opts_with_session(None),
+        )
+        .expect("put must succeed with the masked persisted sid");
+    assert_eq!(record.data["name"], json!("Upgrade"));
+
+    // The masked id is codec-representable and round-trips.
+    let reloaded = adapter.get(&def, &record.id, &get_opts()).expect("get");
+    assert_eq!(reloaded.unwrap().id, record.id);
+}
+
+#[test]
+fn fresh_session_id_survives_range_validation() {
+    // Sanity for the other leg: with no explicit sessionId option, the
+    // adapter's own generated/persisted sid must always be valid.
+    let def = users_def();
+    let adapter = make_adapter(&def);
+    for _ in 0..20 {
+        let record = adapter
+            .put(
+                &def,
+                json!({ "name": "N", "email": "n@example.com" }),
+                &put_opts_with_session(None),
+            )
+            .expect("put with adapter-managed sid");
+        assert!(!record.id.is_empty());
+    }
+}
+
+/// Put options with an explicit (or omitted) session id.
+fn put_opts_with_session(sid: Option<u64>) -> PutOptions {
+    PutOptions {
+        session_id: sid,
+        ..Default::default()
+    }
 }

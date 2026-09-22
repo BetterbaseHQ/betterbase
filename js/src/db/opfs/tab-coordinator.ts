@@ -83,10 +83,12 @@ export class TabCoordinator {
       // AUD-023: a failed init must not strand leadership (or a queued
       // promotion) on a coordinator with no usable database — other tabs
       // would be blocked from opening until this page terminates. Mark
-      // closed so stray callbacks no-op, release the election lock, and
-      // surface the original failure.
+      // closed so stray callbacks no-op, release the election lock,
+      // terminate the worker (close() parity — the caller only receives
+      // the error), and surface the original failure.
       coordinator.closed = true;
       coordinator.releaseElectionLock();
+      worker.terminate();
       throw e;
     }
 
@@ -243,7 +245,12 @@ export class TabCoordinator {
       // blocking every tab until page termination.
       this.promoting = false;
       this.releaseElectionLock();
-      this.listenForLeaderChanges();
+      // Only re-arm follower listening if we're still open: close() may
+      // have completed while the open call was pending, and it must remain
+      // final (a listener armed here would never be closed).
+      if (!this.closed) {
+        this.listenForLeaderChanges();
+      }
       console.error(
         "Failed to initialize as leader after promotion; released leadership:",
         e,

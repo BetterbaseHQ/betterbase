@@ -93,6 +93,13 @@ impl<B: StorageBackend> Adapter<B> {
             let sid: u64 = stored
                 .parse()
                 .map_err(|_| LessDbError::Internal("Invalid session_id stored in meta".into()))?;
+            // AUD-018: databases created before the 57-bit range fix may
+            // hold a persisted sid the codec cannot represent. Masking at
+            // load reproduces exactly the identity the old codec already
+            // wrote into every model binary (it truncated on encode), so
+            // existing histories keep their actor — while all later writes
+            // stay representable.
+            let sid = sid & crate::crdt::MAX_SESSION_ID;
             *guard = Some(sid);
             return Ok(sid);
         }
