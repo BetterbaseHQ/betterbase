@@ -1460,7 +1460,11 @@ export class SpaceManager {
       // whole mailbox pass — later invitations and revocation notices
       // still need processing. Failures are skipped (never deleted: a
       // decrypt failure may be a transient key mismatch) and quarantined
-      // in memory for this session.
+      // in memory for this session. Note this also swallows a *throwing*
+      // revocation notice until restart — deliberate: revocation is
+      // independently enforced server-side (the next sync op 403s and
+      // triggers handleRevocation through the transport), so quarantine
+      // only delays the notice cleanup, not the enforcement.
       if (this.undecryptableInvitationIds.has(invitation.id)) continue;
 
       try {
