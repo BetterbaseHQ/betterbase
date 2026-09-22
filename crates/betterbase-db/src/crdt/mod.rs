@@ -14,25 +14,34 @@ use crate::error::{LessDbError, Result};
 /// Minimum session ID (json-joy requirement: sid >= 0x10000)
 pub const MIN_SESSION_ID: u64 = 65536;
 
+/// Maximum session ID representable by the structural codec's `vu57`
+/// integer encoding (AUD-018): values above this silently lose their high
+/// bits when written to model binaries, corrupting actor identity.
+pub const MAX_SESSION_ID: u64 = (1 << 57) - 1;
+
 /// Maximum CRDT binary size (10 MB)
 pub const MAX_CRDT_BINARY_SIZE: usize = 10 * 1024 * 1024;
 
-/// Generate a cryptographically random session ID (>= MIN_SESSION_ID).
+/// Generate a cryptographically random session ID in `[MIN_SESSION_ID, MAX_SESSION_ID]`.
 ///
 /// Uses UUID v4 (backed by `getrandom`/OS CSPRNG) for collision resistance.
 /// Session ID collisions cause silent CRDT corruption, so cryptographic
-/// randomness is essential.
+/// randomness is essential. The value is masked to the codec's 57-bit
+/// representable range — an out-of-range sid would truncate on encode and
+/// collide with another actor's identity in every model binary.
 pub fn generate_session_id() -> u64 {
     let id = uuid::Uuid::new_v4();
     let bytes = id.as_bytes();
-    // Take 8 bytes of cryptographic randomness and ensure MIN_SESSION_ID bit
+    // Take 8 bytes of cryptographic randomness, force the MIN bit, and mask
+    // to the representable 57-bit range
     let val = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
-    val | MIN_SESSION_ID
+    (val | MIN_SESSION_ID) & MAX_SESSION_ID
 }
 
-/// Validate that a session ID meets json-joy requirements.
+/// Validate that a session ID meets json-joy requirements: within the
+/// codec-representable range `[MIN_SESSION_ID, MAX_SESSION_ID]`.
 pub fn is_valid_session_id(sid: u64) -> bool {
-    sid >= MIN_SESSION_ID
+    (MIN_SESSION_ID..=MAX_SESSION_ID).contains(&sid)
 }
 
 /// Create a new Model initialized with JSON data.
@@ -40,10 +49,13 @@ pub fn is_valid_session_id(sid: u64) -> bool {
 /// The model is created with the given session ID and the provided data
 /// is set as the root value via `ModelApi`.
 pub fn create_model(data: &Value, session_id: u64) -> Result<Model> {
-    debug_assert!(
-        is_valid_session_id(session_id),
-        "create_model: session ID {session_id} is below minimum {MIN_SESSION_ID}"
-    );
+    // AUD-018: an out-of-range sid would silently truncate on encode,
+    // corrupting actor identity in model binaries — reject it up front.
+    if !is_valid_session_id(session_id) {
+        return Err(LessDbError::Crdt(format!(
+            "session ID {session_id} outside representable range [{MIN_SESSION_ID}, {MAX_SESSION_ID}]"
+        )));
+    }
     let mut model = Model::new(session_id);
     {
         let mut api = ModelApi::new(&mut model);
@@ -130,6 +142,13 @@ pub fn model_from_binary(data: &[u8]) -> Result<Model> {
 /// Equivalent to `model_from_binary` followed by assigning the session ID to
 /// the model's clock, so the model can issue locally-unique timestamps.
 pub fn model_load(data: &[u8], session_id: u64) -> Result<Model> {
+    // AUD-018: the local session id must be codec-representable or every
+    // subsequent local write would truncate its identity on encode
+    if !is_valid_session_id(session_id) {
+        return Err(LessDbError::Crdt(format!(
+            "session ID {session_id} outside representable range [{MIN_SESSION_ID}, {MAX_SESSION_ID}]"
+        )));
+    }
     let mut model = model_from_binary(data)?;
     let old_time = model.clock.time;
     model.clock = model.clock.fork(session_id);
@@ -231,8 +250,45 @@ mod tests {
     }
 
     #[test]
-    fn is_valid_session_id_accepts_large_value() {
-        assert!(is_valid_session_id(u64::MAX));
+    fn is_valid_session_id_accepts_codec_maximum() {
+        assert!(is_valid_session_id(MAX_SESSION_ID));
+    }
+
+    #[test]
+    fn is_valid_session_id_rejects_above_codec_maximum() {
+        // AUD-018: values above 2^57-1 silently truncated in model binaries
+        assert!(!is_valid_session_id(MAX_SESSION_ID + 1));
+        assert!(!is_valid_session_id((1 << 63) + 65536));
+        assert!(!is_valid_session_id(u64::MAX));
+    }
+
+    #[test]
+    fn generated_session_ids_stay_within_codec_range() {
+        for _ in 0..1000 {
+            let sid = generate_session_id();
+            assert!(
+                (MIN_SESSION_ID..=MAX_SESSION_ID).contains(&sid),
+                "generated SID {sid} outside representable range"
+            );
+        }
+    }
+
+    #[test]
+    fn create_model_rejects_unrepresentable_session_id() {
+        // The exact value from the audit reproduction: (1<<63)+65536 used to
+        // encode/decode back as 65536 — silently stealing another actor's
+        // identity. Now rejected at creation.
+        let err = create_model(&serde_json::json!({}), (1 << 63) + 65536)
+            .expect_err("out-of-range sid must be rejected");
+        assert!(err.to_string().contains("representable range"));
+    }
+
+    #[test]
+    fn audit_repro_value_no_longer_truncates_through_round_trip() {
+        let model = create_model(&serde_json::json!({ "a": 1 }), MAX_SESSION_ID)
+            .expect("max sid is representable");
+        let decoded = model_from_binary(&model_to_binary(&model)).expect("round trip");
+        assert_eq!(decoded.clock.sid, MAX_SESSION_ID);
     }
 
     #[test]

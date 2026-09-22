@@ -73,10 +73,21 @@ export class TabCoordinator {
     });
     coordinator.electionRelease = election.release;
 
-    if (election.role === "leader") {
-      await coordinator.initAsLeader();
-    } else {
-      await coordinator.initAsFollower();
+    try {
+      if (election.role === "leader") {
+        await coordinator.initAsLeader();
+      } else {
+        await coordinator.initAsFollower();
+      }
+    } catch (e) {
+      // AUD-023: a failed init must not strand leadership (or a queued
+      // promotion) on a coordinator with no usable database — other tabs
+      // would be blocked from opening until this page terminates. Mark
+      // closed so stray callbacks no-op, release the election lock, and
+      // surface the original failure.
+      coordinator.closed = true;
+      coordinator.releaseElectionLock();
+      throw e;
     }
 
     return {
@@ -225,8 +236,26 @@ export class TabCoordinator {
       this.rpc.replaceTransport(localPort);
       this.rpc.resubscribeAll();
     } catch (e) {
-      console.error("Failed to initialize as leader after promotion:", e);
+      // AUD-023: promotion failed — this tab holds leadership but has no
+      // usable database. Release the lock so a healthy tab can take over
+      // (releasing also cancels our queued-promotion callback), then fall
+      // back to following whoever wins the next election instead of
+      // blocking every tab until page termination.
+      this.promoting = false;
+      this.releaseElectionLock();
+      this.listenForLeaderChanges();
+      console.error(
+        "Failed to initialize as leader after promotion; released leadership:",
+        e,
+      );
     }
+  }
+
+  /** Release the Web Lock (leader) or cancel the queued promotion (follower). */
+  private releaseElectionLock(): void {
+    const release = this.electionRelease;
+    this.electionRelease = null;
+    release?.();
   }
 
   /** Shut down the coordinator, releasing all resources. */
@@ -274,9 +303,6 @@ export class TabCoordinator {
     this.worker.terminate();
 
     // Release the Web Lock
-    if (this.electionRelease) {
-      this.electionRelease();
-      this.electionRelease = null;
-    }
+    this.releaseElectionLock();
   }
 }

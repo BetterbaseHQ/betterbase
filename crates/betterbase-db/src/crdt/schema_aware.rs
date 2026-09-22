@@ -224,6 +224,14 @@ pub fn create_model_with_schema(
     session_id: u64,
     schema: &BTreeMap<String, SchemaNode>,
 ) -> Result<Model> {
+    // AUD-018: reject session IDs the codec cannot represent (they would
+    // silently truncate on encode, corrupting actor identity)
+    if !crate::crdt::is_valid_session_id(session_id) {
+        return Err(LessDbError::Crdt(format!(
+            "session ID {session_id} outside representable range"
+        )));
+    }
+
     // First transform dates to epoch-ms
     let wrapped = serialize_for_crdt(schema, data);
 
@@ -1264,8 +1272,8 @@ mod tests {
     /// the op's own-sid time (the ordinary push → edit → pull sync loop).
     #[test]
     fn replay_keeps_own_pending_ops_against_faster_merged_clock() {
-        let sid_a = 1_000;
-        let sid_b = 2_000;
+        let sid_a = MIN_SESSION_ID;
+        let sid_b = MIN_SESSION_ID + 1;
         let body_schema = || {
             let mut s = std::collections::BTreeMap::new();
             s.insert("body".to_string(), SchemaNode::Text);
@@ -1352,8 +1360,8 @@ mod tests {
     /// survive when the peer later merges back.
     #[test]
     fn merge_with_pending_patches_applies_unseen_ops() {
-        let sid_a = 1_000;
-        let sid_b = 2_000;
+        let sid_a = MIN_SESSION_ID;
+        let sid_b = MIN_SESSION_ID + 1;
         let body_schema = || {
             let mut s = std::collections::BTreeMap::new();
             s.insert("body".to_string(), SchemaNode::Text);
