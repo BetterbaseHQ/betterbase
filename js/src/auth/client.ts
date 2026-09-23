@@ -33,12 +33,49 @@ export class OAuthClient {
     this.config = config;
   }
 
-  /** Lazily fetch and cache server metadata from the domain's .well-known endpoint. */
+  /** Lazily fetch (and persist) server metadata from the domain's .well-known endpoint. */
   private getMetadata(): Promise<ServerMetadata> {
     if (!this.metadataPromise) {
-      this.metadataPromise = fetchServerMetadata(this.config.domain);
+      this.metadataPromise = this.fetchMetadataCached();
     }
     return this.metadataPromise;
+  }
+
+  /**
+   * Discovery with a localStorage cache: a fresh fetch on every page load
+   * puts a network round-trip (plus a WSSP validation) on the critical
+   * path before tokens can refresh or sessions restore. Cache for 1h;
+   * fall back to stale metadata when the fetch fails (offline-first).
+   * Metadata is public server config, never per-user secrets.
+   */
+  private async fetchMetadataCached(): Promise<ServerMetadata> {
+    const cacheKey = `betterbase_metadata_${this.config.domain}`;
+    const TTL_MS = 3_600_000;
+    let cached: { fetchedAt: number; metadata: ServerMetadata } | null = null;
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) cached = JSON.parse(raw);
+    } catch {
+      // Corrupt cache entry — ignore and refetch.
+    }
+    if (cached && Date.now() - cached.fetchedAt < TTL_MS) {
+      return cached.metadata;
+    }
+    try {
+      const metadata = await fetchServerMetadata(this.config.domain);
+      try {
+        localStorage.setItem(
+          cacheKey,
+          JSON.stringify({ fetchedAt: Date.now(), metadata }),
+        );
+      } catch {
+        // Storage full/blocked — metadata just won't be cached.
+      }
+      return metadata;
+    } catch (err) {
+      if (cached) return cached.metadata;
+      throw err;
+    }
   }
 
   /** Resolve the accounts server URL from discovery. */
