@@ -1383,8 +1383,9 @@ export class SpaceManager {
 
   /**
    * Update cached space metadata from a pull response.
-   * Persists epoch (as metadataVersion) and rewrapEpoch to the __spaces record.
-   * Only writes when values actually changed.
+   * Persists the server's space metadata version (membership-log CAS
+   * counter) and rewrap epoch to the spaces record. Only writes when
+   * values actually changed.
    */
   async updateSpaceMetadata(
     spaceId: string,

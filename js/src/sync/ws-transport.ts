@@ -142,7 +142,7 @@ export class WSTransport implements SyncTransportInterface {
       id: c.id,
       blob: c.blob ?? null,
       expected_cursor: c.sequence,
-      ...(c.dek ? { dek: c.dek } : {}),
+      ...(c.wrappedDek ? { wrapped_dek: c.wrappedDek } : {}),
     }));
     const ucan =
       space !== this.config.personalSpaceId
@@ -371,7 +371,7 @@ export class WSTransport implements SyncTransportInterface {
         id: r.id,
         blob: r.blob ?? null,
         sequence: r.cursor,
-        dek: r.dek,
+        wrappedDek: r.wrapped_dek,
         deleted: r.deleted,
       }));
 
@@ -504,7 +504,7 @@ export class WSTransport implements SyncTransportInterface {
         id: r.id,
         blob: r.blob ?? null,
         sequence: r.cursor,
-        dek: r.dek,
+        wrappedDek: r.wrapped_dek,
         deleted: r.deleted,
       })),
       prev: data.prev,

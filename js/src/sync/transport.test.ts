@@ -130,7 +130,7 @@ describe("SyncTransport.pull failure classification (AUD-024)", () => {
           id: "r1",
           sequence: 7,
           blob: new Uint8Array([9, 9, 9]),
-          dek: epochPrefixedDek(5),
+          wrappedDek: epochPrefixedDek(5),
           deleted: false,
         },
       ],

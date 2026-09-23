@@ -179,8 +179,8 @@ export async function rewrapAllDEKs(
     // (AUD-026). On conflict the whole pass refetches and retries.
     const rewrapped: Array<{
       id: string;
-      dek: Uint8Array;
-      observed_dek: Uint8Array;
+      wrapped_dek: Uint8Array;
+      observed_wrapped_dek: Uint8Array;
     }> = [];
     for (let attempt = 0; ; attempt++) {
       const deks = await ws.getDEKs({
@@ -189,7 +189,7 @@ export async function rewrapAllDEKs(
         since: 0,
       });
       rewrapped.length = 0;
-      for (const { id, dek: wrappedDEK } of deks) {
+      for (const { id, wrapped_dek: wrappedDEK } of deks) {
         const dekEpoch = peekEpoch(wrappedDEK);
         if (dekEpoch === newEpoch) continue;
         const unwrapKey = keyCache.get(dekEpoch);
@@ -198,8 +198,8 @@ export async function rewrapAllDEKs(
         try {
           rewrapped.push({
             id,
-            dek: wrapDEK(dek, rawNewKey, newEpoch),
-            observed_dek: wrappedDEK,
+            wrapped_dek: wrapDEK(dek, rawNewKey, newEpoch),
+            observed_wrapped_dek: wrappedDEK,
           });
         } finally {
           dek.fill(0);
@@ -226,8 +226,8 @@ export async function rewrapAllDEKs(
     if (includeFiles) {
       const rewrappedFiles: Array<{
         id: string;
-        dek: Uint8Array;
-        observed_dek: Uint8Array;
+        wrapped_dek: Uint8Array;
+        observed_wrapped_dek: Uint8Array;
       }> = [];
       for (let attempt = 0; ; attempt++) {
         const fileDeks = await ws.getFileDEKs({
@@ -236,7 +236,7 @@ export async function rewrapAllDEKs(
           since: 0,
         });
         rewrappedFiles.length = 0;
-        for (const { id, dek: wrappedDEK } of fileDeks) {
+        for (const { id, wrapped_dek: wrappedDEK } of fileDeks) {
           const dekEpoch = peekEpoch(wrappedDEK);
           if (dekEpoch === newEpoch) continue;
           const unwrapKey = keyCache.get(dekEpoch);
@@ -246,8 +246,8 @@ export async function rewrapAllDEKs(
           try {
             rewrappedFiles.push({
               id,
-              dek: wrapDEK(dek, rawNewKey, newEpoch),
-              observed_dek: wrappedDEK,
+              wrapped_dek: wrapDEK(dek, rawNewKey, newEpoch),
+              observed_wrapped_dek: wrappedDEK,
             });
           } finally {
             dek.fill(0);
@@ -339,14 +339,20 @@ async function rewrapAllDEKsCryptoKey(
   }
 
   async function rewrapDEKList(
-    deks: Array<{ id: string; dek: Uint8Array }>,
-  ): Promise<Array<{ id: string; dek: Uint8Array; observed_dek: Uint8Array }>> {
+    deks: Array<{ id: string; wrapped_dek: Uint8Array }>,
+  ): Promise<
+    Array<{
+      id: string;
+      wrapped_dek: Uint8Array;
+      observed_wrapped_dek: Uint8Array;
+    }>
+  > {
     const rewrapped: Array<{
       id: string;
-      dek: Uint8Array;
-      observed_dek: Uint8Array;
+      wrapped_dek: Uint8Array;
+      observed_wrapped_dek: Uint8Array;
     }> = [];
-    for (const { id, dek: wrappedDEK } of deks) {
+    for (const { id, wrapped_dek: wrappedDEK } of deks) {
       const dekEpoch = peekEpoch(wrappedDEK);
       if (dekEpoch === newEpoch) continue;
       const unwrapKey = kwKeyCache.get(dekEpoch);
@@ -355,8 +361,8 @@ async function rewrapAllDEKsCryptoKey(
       try {
         rewrapped.push({
           id,
-          dek: await webcryptoWrapDEK(dek, newKey, newEpoch),
-          observed_dek: wrappedDEK,
+          wrapped_dek: await webcryptoWrapDEK(dek, newKey, newEpoch),
+          observed_wrapped_dek: wrappedDEK,
         });
       } finally {
         dek.fill(0);
@@ -371,8 +377,8 @@ async function rewrapAllDEKsCryptoKey(
     // refetches and retries instead of clobbering (AUD-026).
     const rewrapped: Array<{
       id: string;
-      dek: Uint8Array;
-      observed_dek: Uint8Array;
+      wrapped_dek: Uint8Array;
+      observed_wrapped_dek: Uint8Array;
     }> = [];
     for (let attempt = 0; ; attempt++) {
       const deks = await ws.getDEKs({
@@ -403,8 +409,8 @@ async function rewrapAllDEKsCryptoKey(
     if (includeFiles) {
       const rewrappedFiles: Array<{
         id: string;
-        dek: Uint8Array;
-        observed_dek: Uint8Array;
+        wrapped_dek: Uint8Array;
+        observed_wrapped_dek: Uint8Array;
       }> = [];
       for (let attempt = 0; ; attempt++) {
         const fileDeks = await ws.getFileDEKs({

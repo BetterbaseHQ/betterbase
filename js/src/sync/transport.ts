@@ -367,7 +367,7 @@ export class SyncTransport implements SyncTransportInterface {
         id: record.id,
         blob,
         sequence: record.sequence,
-        ...(wrappedDEK ? { dek: wrappedDEK } : {}),
+        ...(wrappedDEK ? { wrappedDek: wrappedDEK } : {}),
       };
     } catch (err) {
       // Per-record encryption failure (e.g., padding overflow).
@@ -654,7 +654,7 @@ export class SyncTransport implements SyncTransportInterface {
         const envelope = await this.decryptEnvelope(
           change.blob!,
           change.id,
-          change.dek,
+          change.wrappedDek,
         );
         results.push({ id: change.id, envelope, sequence: change.sequence });
       } catch (e) {
@@ -787,7 +787,7 @@ export class SyncTransport implements SyncTransportInterface {
         envelope = await this.decryptEnvelope(
           change.blob!,
           change.id,
-          change.dek,
+          change.wrappedDek,
         );
       } catch (err) {
         // Preserve the original instance: TransientKeyResolutionError (and

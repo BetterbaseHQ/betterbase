@@ -82,7 +82,7 @@ describe("Cross-session durability — personal space (browser)", () => {
     expect(pushed[0]!.blob).toBeTruthy();
     // The wrapped DEK must carry the server's initial key generation —
     // anything lower gets orphaned by the first pull's epoch sync.
-    expect(wrappedDekEpoch(pushed[0]!.dek!)).toBe(SERVER_INITIAL_EPOCH);
+    expect(wrappedDekEpoch(pushed[0]!.wrappedDek!)).toBe(SERVER_INITIAL_EPOCH);
 
     // Session B: restored from persisted state. No advance fired (first pull
     // saw epoch === INITIAL_EPOCH), so the persisted epoch
@@ -102,7 +102,7 @@ describe("Cross-session durability — personal space (browser)", () => {
           id: "rec-1",
           blob: pushed[0]!.blob,
           sequence: 1,
-          dek: pushed[0]!.dek,
+          wrappedDek: pushed[0]!.wrappedDek,
         },
       ],
       1,
@@ -137,7 +137,9 @@ describe("Cross-session durability — personal space (browser)", () => {
     await buggySession.push("items", [
       { id: "rec-1", _v: 1, sequence: 0, crdt: fakeCrdt() },
     ]);
-    expect(wrappedDekEpoch(pushed[0]!.dek!)).toBe(SERVER_INITIAL_EPOCH - 1);
+    expect(wrappedDekEpoch(pushed[0]!.wrappedDek!)).toBe(
+      SERVER_INITIAL_EPOCH - 1,
+    );
 
     // Session B: the first pull advanced the persisted session to the
     // server's generation, so the restored transport is built at that base.
@@ -156,7 +158,7 @@ describe("Cross-session durability — personal space (browser)", () => {
           id: "rec-1",
           blob: pushed[0]!.blob,
           sequence: 1,
-          dek: pushed[0]!.dek,
+          wrappedDek: pushed[0]!.wrappedDek,
         },
       ],
       1,

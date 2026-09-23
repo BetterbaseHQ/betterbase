@@ -364,7 +364,7 @@ describe("WSClient", () => {
     server.handle("deks.get", () => {
       return {
         deks: [
-          { id: "d1", dek: new Uint8Array([1]), seq: 5 },
+          { id: "d1", wrapped_dek: new Uint8Array([1]), seq: 5 },
           { id: "d2", dek: new Uint8Array([2]), seq: 6 },
         ],
       };

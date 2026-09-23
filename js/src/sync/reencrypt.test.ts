@@ -111,29 +111,35 @@ describe2("rewrapAllDEKs compare-and-set (AUD-026)", () => {
 
   it2("submits the observed wrapper and retries on conflict", async () => {
     const calls: Array<
-      Array<{ id: string; dek: Uint8Array; observed_dek?: Uint8Array }>
+      Array<{
+        id: string;
+        wrapped_dek: Uint8Array;
+        observed_wrapped_dek?: Uint8Array;
+      }>
     > = [];
     // Server state changes after the first (conflicting) submission: a
     // concurrent writer replaced the wrapper with a fresh DEK at the same
     // (old) epoch — the rewrapper must observe the new value and rewrap it.
     let serverDek = dekAt(1, 0x11);
     const ws = {
-      getDEKs: vi.fn(async () => [{ id: "r1", dek: serverDek, seq: 1 }]),
+      getDEKs: vi.fn(async () => [
+        { id: "r1", wrapped_dek: serverDek, seq: 1 },
+      ]),
       getFileDEKs: vi.fn(async () => []),
       rewrapDEKs: vi.fn(
         async (_params: {
           deks: Array<{
             id: string;
-            dek: Uint8Array;
-            observed_dek?: Uint8Array;
+            wrapped_dek: Uint8Array;
+            observed_wrapped_dek?: Uint8Array;
           }>;
         }) => {
           // Snapshot: the caller reuses one array across retry passes.
           calls.push(
             _params.deks.map((d) => ({
               ...d,
-              dek: d.dek.slice(),
-              observed_dek: d.observed_dek?.slice(),
+              wrapped_dek: d.wrapped_dek.slice(),
+              observed_wrapped_dek: d.observed_wrapped_dek?.slice(),
             })),
           );
           if (calls.length === 1) {
@@ -162,17 +168,21 @@ describe2("rewrapAllDEKs compare-and-set (AUD-026)", () => {
     expect2(result.dekCount).toBe(1);
     expect2(calls.length).toBe(2);
     // First submission carried the originally observed wrapper...
-    expect2(calls[0]![0]!.observed_dek).toEqual(dekAt(1, 0x11));
+    expect2(calls[0]![0]!.observed_wrapped_dek).toEqual(dekAt(1, 0x11));
     // ...the retry refetched and observed the concurrent writer's wrapper.
-    expect2(calls[1]![0]!.observed_dek).toEqual(dekAt(1, 0x33));
+    expect2(calls[1]![0]!.observed_wrapped_dek).toEqual(dekAt(1, 0x33));
     // The retry's submission is wrapped under the new epoch.
-    expect2(new DataView(calls[1]![0]!.dek.buffer).getUint32(0, false)).toBe(2);
+    expect2(
+      new DataView(calls[1]![0]!.wrapped_dek.buffer).getUint32(0, false),
+    ).toBe(2);
   });
 
   it2("throws after exhausting retries on persistent conflict", async () => {
     let submissions = 0;
     const ws = {
-      getDEKs: vi.fn(async () => [{ id: "r1", dek: dekAt(1, 0x11), seq: 1 }]),
+      getDEKs: vi.fn(async () => [
+        { id: "r1", wrapped_dek: dekAt(1, 0x11), seq: 1 },
+      ]),
       getFileDEKs: vi.fn(async () => []),
       rewrapDEKs: vi.fn(async () => {
         submissions += 1;
@@ -200,7 +210,9 @@ describe2("rewrapAllDEKs compare-and-set (AUD-026)", () => {
   it2("propagates non-conflict errors without retry", async () => {
     let submissions = 0;
     const ws = {
-      getDEKs: vi.fn(async () => [{ id: "r1", dek: dekAt(1, 0x11), seq: 1 }]),
+      getDEKs: vi.fn(async () => [
+        { id: "r1", wrapped_dek: dekAt(1, 0x11), seq: 1 },
+      ]),
       getFileDEKs: vi.fn(async () => []),
       rewrapDEKs: vi.fn(async () => {
         submissions += 1;
@@ -234,25 +246,31 @@ describe2("rewrapAllDEKs CryptoKey path compare-and-set (AUD-026)", () => {
 
   it2("submits the observed wrapper and retries on conflict", async () => {
     const calls: Array<
-      Array<{ id: string; dek: Uint8Array; observed_dek?: Uint8Array }>
+      Array<{
+        id: string;
+        wrapped_dek: Uint8Array;
+        observed_wrapped_dek?: Uint8Array;
+      }>
     > = [];
     let serverDek = dekAt(1, 0x11);
     const ws = {
-      getDEKs: vi.fn(async () => [{ id: "r1", dek: serverDek, seq: 1 }]),
+      getDEKs: vi.fn(async () => [
+        { id: "r1", wrapped_dek: serverDek, seq: 1 },
+      ]),
       getFileDEKs: vi.fn(async () => []),
       rewrapDEKs: vi.fn(
         async (_params: {
           deks: Array<{
             id: string;
-            dek: Uint8Array;
-            observed_dek?: Uint8Array;
+            wrapped_dek: Uint8Array;
+            observed_wrapped_dek?: Uint8Array;
           }>;
         }) => {
           calls.push(
             _params.deks.map((d) => ({
               ...d,
-              dek: d.dek.slice(),
-              observed_dek: d.observed_dek?.slice(),
+              wrapped_dek: d.wrapped_dek.slice(),
+              observed_wrapped_dek: d.observed_wrapped_dek?.slice(),
             })),
           );
           if (calls.length === 1) {
@@ -279,14 +297,16 @@ describe2("rewrapAllDEKs CryptoKey path compare-and-set (AUD-026)", () => {
 
     expect2(result.dekCount).toBe(1);
     expect2(calls.length).toBe(2);
-    expect2(calls[0]![0]!.observed_dek).toEqual(dekAt(1, 0x11));
-    expect2(calls[1]![0]!.observed_dek).toEqual(dekAt(1, 0x33));
+    expect2(calls[0]![0]!.observed_wrapped_dek).toEqual(dekAt(1, 0x11));
+    expect2(calls[1]![0]!.observed_wrapped_dek).toEqual(dekAt(1, 0x33));
   });
 
   it2("throws after exhausting retries on persistent conflict", async () => {
     let submissions = 0;
     const ws = {
-      getDEKs: vi.fn(async () => [{ id: "r1", dek: dekAt(1, 0x11), seq: 1 }]),
+      getDEKs: vi.fn(async () => [
+        { id: "r1", wrapped_dek: dekAt(1, 0x11), seq: 1 },
+      ]),
       getFileDEKs: vi.fn(async () => []),
       rewrapDEKs: vi.fn(async () => {
         submissions += 1;

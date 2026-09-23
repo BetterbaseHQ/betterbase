@@ -212,7 +212,7 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
 
     expect(pushed.length).toBe(1);
     expect(pushed[0]!.blob).toBeTruthy();
-    expect(pushed[0]!.dek).toBeTruthy();
+    expect(pushed[0]!.wrappedDek).toBeTruthy();
 
     // Pull it back (simulate server returning the same change)
     transport.setPrepulledChanges(
@@ -221,7 +221,7 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
           id: "rec-1",
           blob: pushed[0]!.blob,
           sequence: 1,
-          dek: pushed[0]!.dek,
+          wrappedDek: pushed[0]!.wrappedDek,
         },
       ],
       1,
@@ -250,7 +250,7 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
 
     // Pull it — transport derives forward from epoch 1 to epoch 2
     transport.setPrepulledChanges(
-      [{ id: "rec-2", blob, sequence: 1, dek: wrappedDEK }],
+      [{ id: "rec-2", blob, sequence: 1, wrappedDek: wrappedDEK }],
       1,
     );
     const pullResult = await transport.pull("items", 0);
@@ -280,7 +280,7 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
 
     // Transport's defensive copy survives — can still decrypt
     transport.setPrepulledChanges(
-      [{ id: "rec-3", blob, sequence: 1, dek: wrappedDEK }],
+      [{ id: "rec-3", blob, sequence: 1, wrappedDek: wrappedDEK }],
       1,
     );
     const pullResult = await transport.pull("items", 0);
@@ -310,7 +310,7 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
 
     // Transport derives forward from its copy → succeeds
     transport.setPrepulledChanges(
-      [{ id: "rec-4", blob, sequence: 1, dek: wrappedDEK }],
+      [{ id: "rec-4", blob, sequence: 1, wrappedDek: wrappedDEK }],
       1,
     );
     const pullResult = await transport.pull("items", 0);
@@ -337,7 +337,7 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
     await transport.push("items", [{ id: "rec-5", _v: 1, sequence: 0, crdt }]);
 
     expect(pushed.length).toBe(1);
-    const wrappedDEK = pushed[0]!.dek!;
+    const wrappedDEK = pushed[0]!.wrappedDek!;
     // Verify the DEK is tagged with epoch 2
     const dekEpoch = new DataView(
       wrappedDEK.buffer,
@@ -379,7 +379,7 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
 
     // Step 3: pull("items") — decrypt epoch 2 records
     transport.setPrepulledChanges(
-      [{ id: "rec-6", blob, sequence: 1, dek: wrappedDEK }],
+      [{ id: "rec-6", blob, sequence: 1, wrappedDek: wrappedDEK }],
       1,
     );
     const pullResult = await transport.pull("items", 0);
@@ -415,7 +415,7 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
 
     // But can still decrypt the epoch-1 record (base key copy is intact)
     transport.setPrepulledChanges(
-      [{ id: "rec-7", blob, sequence: 1, dek: wrappedDEK }],
+      [{ id: "rec-7", blob, sequence: 1, wrappedDek: wrappedDEK }],
       1,
     );
     const pullResult = await transport.pull("items", 0);
@@ -448,7 +448,12 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
       const blob = manualEncrypt("items", crdt, dek, id);
       const wrappedDEK = wrapDEK(dek, key, epoch);
       dek.fill(0);
-      changes.push({ id, blob, sequence: changes.length + 1, dek: wrappedDEK });
+      changes.push({
+        id,
+        blob,
+        sequence: changes.length + 1,
+        wrappedDek: wrappedDEK,
+      });
     }
 
     // SpaceManager has advanced to epoch 3, zeroing all previous keys

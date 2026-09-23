@@ -302,7 +302,7 @@ simplification of the earlier proposal to soft-delete file rows):
    `deleted = false` filter.
 4. **Epoch rotation × large cascades** — offline client returning after
    rotation re-encrypts its dirty set; cascades amplify it. (Note: the
-   server's `min_key_generation` push guard is currently unreachable
+   server's `min_epoch` push guard is currently unreachable
    from RPC — `ws/storage.rs:38` never passes options; wire it while in
    there.) `deleteTree` reports should classify re-encrypt-retry
    distinctly.

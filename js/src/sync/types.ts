@@ -11,7 +11,7 @@ export type TokenProvider = () => string | null | Promise<string | null>;
 
 /**
  * A change record in the wire format.
- * Matches the server protocol: {id, blob, sequence, dek?, deleted?}.
+ * Matches the server protocol: {id, blob, sequence, wrapped_dek?, deleted?}.
  */
 export interface Change {
   /** Record ID (UUID) */
@@ -21,7 +21,7 @@ export interface Change {
   /** Last-known sequence (0 for new records on push, server-assigned on pull) */
   sequence: number;
   /** Wrapped DEK (44 bytes: [epoch:4][AES-KW(KEK, DEK):40]), omitted for tombstones */
-  dek?: Uint8Array;
+  wrappedDek?: Uint8Array;
   /** True if this record is a tombstone. Authoritative when set by the server. */
   deleted?: boolean;
 }

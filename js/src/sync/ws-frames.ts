@@ -96,7 +96,7 @@ export interface WSSyncRecord {
   id: string;
   blob?: Uint8Array;
   cursor: number;
-  dek?: Uint8Array;
+  wrapped_dek?: Uint8Array;
   deleted?: boolean;
 }
 
@@ -130,7 +130,7 @@ export interface WSFileEntry {
   id: string;
   record_id: string;
   size?: number;
-  dek?: Uint8Array;
+  wrapped_dek?: Uint8Array;
   deleted?: boolean;
 }
 
@@ -153,7 +153,7 @@ export interface WSPushChange {
   id: string;
   blob?: Uint8Array | null;
   expected_cursor: number;
-  dek?: Uint8Array;
+  wrapped_dek?: Uint8Array;
 }
 
 export interface WSPushResult {
@@ -183,7 +183,7 @@ export interface WSPullRecordData {
   id: string;
   blob?: Uint8Array;
   cursor: number;
-  dek?: Uint8Array;
+  wrapped_dek?: Uint8Array;
   deleted?: boolean;
 }
 
@@ -199,7 +199,7 @@ export interface WSPullFileData {
   id: string;
   record_id: string;
   size?: number;
-  dek?: Uint8Array;
+  wrapped_dek?: Uint8Array;
   cursor: number;
   deleted?: boolean;
 }
@@ -360,7 +360,7 @@ export interface WSDEKsGetParams {
 
 export interface WSDEKRecord {
   id: string;
-  dek: Uint8Array;
+  wrapped_dek: Uint8Array;
   seq: number;
 }
 
@@ -370,9 +370,9 @@ export interface WSDEKsGetResult {
 
 export interface WSDEKRewrapEntry {
   id: string;
-  dek: Uint8Array;
+  wrapped_dek: Uint8Array;
   /** Wrapped DEK observed when read; server applies a compare-and-set. */
-  observed_dek?: Uint8Array;
+  observed_wrapped_dek?: Uint8Array;
 }
 
 export interface WSDEKsRewrapParams {
@@ -390,7 +390,7 @@ export interface WSDEKsRewrapResult {
 
 export interface WSFileDEKRecord {
   id: string;
-  dek: Uint8Array;
+  wrapped_dek: Uint8Array;
   cursor: number;
 }
 
@@ -406,9 +406,9 @@ export interface WSFileDEKsGetResult {
 
 export interface WSFileDEKRewrapEntry {
   id: string;
-  dek: Uint8Array;
+  wrapped_dek: Uint8Array;
   /** Wrapped DEK observed when read; server applies a compare-and-set. */
-  observed_dek?: Uint8Array;
+  observed_wrapped_dek?: Uint8Array;
 }
 
 export interface WSFileDEKsRewrapParams {
