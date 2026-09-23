@@ -345,7 +345,7 @@ export class SpaceManager {
       metadata: {
         space_name: options?.spaceName ?? spaceRecord.name,
         inviter_display_name: this.config.selfHandle,
-        generation: this.spaceEpochOf(spaceId, spaceRecord),
+        epoch: this.spaceEpochOf(spaceId, spaceRecord),
       },
     };
 
@@ -745,7 +745,7 @@ export class SpaceManager {
    *
    * Performs the full revocation sequence:
    * 1. Revoke the member's UCAN (server marks it revoked)
-   * 2. Rotate the encryption key (server increments key_generation)
+   * 2. Rotate the encryption key (server increments epoch)
    * 3. Re-wrap all DEKs under new epoch key (forward secrecy)
    * 4. Update local crypto state
    *
@@ -872,7 +872,7 @@ export class SpaceManager {
       );
     }
 
-    // 1d. Advance epoch with setMinKeyGeneration (revokes grace period),
+    // 1d. Advance epoch with setMinEpoch (revokes grace period),
     // then distribute wrapped fresh-key shares to all remaining members
     // BEFORE any DEK rewrap (crash safety per D-005: nothing is ever
     // encrypted under a key that has not already been distributed).
@@ -891,7 +891,7 @@ export class SpaceManager {
           ucan: spaceUCAN,
         },
         newEpoch,
-        { setMinKeyGeneration: true },
+        { setMinEpoch: true },
       );
     } catch (err) {
       if (err instanceof EpochMismatchError && err.rewrapEpoch !== null) {
@@ -913,7 +913,7 @@ export class SpaceManager {
             ucan: spaceUCAN,
           },
           newEpoch,
-          { setMinKeyGeneration: true },
+          { setMinEpoch: true },
         );
       } else {
         throw new Error(
@@ -1350,7 +1350,7 @@ export class SpaceManager {
 
   /**
    * Adopt a server epoch that's ahead of local state.
-   * Called when pull reveals key_generation > local epoch with no pending rewrap.
+   * Called when pull reveals epoch > local epoch with no pending rewrap.
    */
   async adoptServerEpoch(spaceId: string, serverEpoch: number): Promise<void> {
     const currentEpoch = this.spaceEpochs.get(spaceId) ?? 1;
@@ -1383,7 +1383,7 @@ export class SpaceManager {
 
   /**
    * Update cached space metadata from a pull response.
-   * Persists keyGeneration (as metadataVersion) and rewrapEpoch to the __spaces record.
+   * Persists epoch (as metadataVersion) and rewrapEpoch to the __spaces record.
    * Only writes when values actually changed.
    */
   async updateSpaceMetadata(
@@ -1567,7 +1567,7 @@ export class SpaceManager {
         rootPublicKey: "", // Will be populated on accept if needed
         // The epoch the delivered key belongs to (AUD-034): invitations
         // after rotation must not relabel the current key as epoch 1.
-        epoch: payload.metadata.generation ?? 1,
+        epoch: payload.metadata.epoch ?? 1,
         serverInvitationId: invitation.id,
       } as never,
       { space: this.config.personalSpaceId },
@@ -2101,7 +2101,7 @@ function parseInvitationWirePayload(raw: unknown): InvitationPayload {
     metadata: {
       space_name?: string;
       inviter_display_name?: string;
-      generation?: number;
+      epoch?: number;
     };
   };
   const binaryString = atob(wire.space_key);

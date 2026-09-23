@@ -19,7 +19,7 @@ export interface InvitationPayload {
   metadata: {
     space_name?: string;
     inviter_display_name?: string;
-    generation?: number;
+    epoch?: number;
   };
 }
 
@@ -31,7 +31,7 @@ interface InvitationPayloadWire {
   metadata: {
     space_name?: string;
     inviter_display_name?: string;
-    generation?: number;
+    epoch?: number;
   };
 }
 

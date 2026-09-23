@@ -98,7 +98,7 @@ describe("WSClient", () => {
         space: "s1",
         prev: 3,
         cursor: 9,
-        key_generation: 2,
+        epoch: 2,
       } satisfies WSPullBeginData);
       reply.chunk(id, "pull.record", { space: "s1", id: "r1", cursor: 7 });
       reply.chunk(id, "pull.record", {
@@ -120,7 +120,7 @@ describe("WSClient", () => {
     expect(s1).toBeDefined();
     expect(s1!.prev).toBe(3);
     expect(s1!.cursor).toBe(9);
-    expect(s1!.keyGeneration).toBe(2);
+    expect(s1!.epoch).toBe(2);
     expect(s1!.records.map((r) => r.id)).toEqual(["r1", "r2"]);
     expect(s1!.records[1]!.deleted).toBe(true);
     expect(s1!.files).toHaveLength(1);
@@ -137,7 +137,7 @@ describe("WSClient", () => {
         space: "s1",
         prev: 3,
         cursor: 9,
-        key_generation: 2,
+        epoch: 2,
       });
       reply.chunk(id, "pull.record", { space: "s1", id: "r1", cursor: 7 });
       reply.chunk(id, "pull.file", { space: "s1", id: "f1", cursor: 8 });
@@ -165,7 +165,7 @@ describe("WSClient", () => {
         space: "s1",
         prev: 0,
         cursor: 5,
-        key_generation: 1,
+        epoch: 1,
       });
       // Buggy/malicious server repeats the begin — the first segment must
       // not be silently discarded.
@@ -173,7 +173,7 @@ describe("WSClient", () => {
         space: "s1",
         prev: 0,
         cursor: 5,
-        key_generation: 1,
+        epoch: 1,
       });
       return { _chunks: 2 };
     });
@@ -192,7 +192,7 @@ describe("WSClient", () => {
         space: "s1",
         prev: 5,
         cursor: 9,
-        key_generation: 1,
+        epoch: 1,
       });
       return { _chunks: 1 };
     });
@@ -211,7 +211,7 @@ describe("WSClient", () => {
         space: "a",
         prev: 0,
         cursor: 1,
-        key_generation: 1,
+        epoch: 1,
       });
       reply.chunk(id, "pull.record", { space: "a", id: "ra", cursor: 1 });
       reply.chunk(id, "pull.commit", { space: "a", count: 1, cursor: 1 });
@@ -219,7 +219,7 @@ describe("WSClient", () => {
         space: "b",
         prev: 0,
         cursor: 1,
-        key_generation: 1,
+        epoch: 1,
       });
       reply.chunk(id, "pull.commit", { space: "b", count: 0, cursor: 1 });
       return { _chunks: 5 };
@@ -243,7 +243,7 @@ describe("WSClient", () => {
         space: "s1",
         prev: 0,
         cursor: 2,
-        key_generation: 1,
+        epoch: 1,
       });
       reply.chunk(id, "pull.record", { space: "s1", id: "r1", cursor: 1 });
       // Server claims 5, client received 1
@@ -266,7 +266,7 @@ describe("WSClient", () => {
         space: "s1",
         prev: 0,
         cursor: 1,
-        key_generation: 1,
+        epoch: 1,
       });
       reply.chunk(id, "pull.commit", { space: "s1", count: 0, cursor: 1 });
       return { _chunks: 3 };

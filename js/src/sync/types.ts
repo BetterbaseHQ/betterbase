@@ -67,6 +67,18 @@ export interface SyncCryptoInterface {
 }
 
 /**
+ * Epoch label of the key delivered at login, and the epoch every space
+ * starts at (personal and shared alike).
+ *
+ * Must equal the server's initial epoch for a new space (betterbase-sync
+ * creates spaces at epoch 1). If the client ever labels a key lower, the
+ * pull-time epoch sync (ws-transport) advances the session forward, and any
+ * DEKs wrapped below the advanced epoch become permanently undecryptable —
+ * backward derivation is forbidden by forward secrecy.
+ */
+export const INITIAL_EPOCH = 1;
+
+/**
  * Configuration for epoch-based forward secrecy.
  *
  * When `epochKey` is a CryptoKey (non-extractable AES-KW), the transport uses

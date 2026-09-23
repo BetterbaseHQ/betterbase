@@ -75,7 +75,7 @@ export interface WSSubscribeSpace {
 export interface WSSubscribedSpace {
   id: string;
   cursor: number;
-  key_generation: number;
+  epoch: number;
   rewrap_epoch?: number;
   peers?: WSPresencePeer[];
 }
@@ -104,7 +104,7 @@ export interface WSSyncData {
   space: string;
   prev: number;
   cursor: number;
-  key_generation?: number;
+  epoch?: number;
   rewrap_epoch?: number;
   records: WSSyncRecord[];
 }
@@ -174,7 +174,7 @@ export interface WSPullBeginData {
   space: string;
   prev: number;
   cursor: number;
-  key_generation: number;
+  epoch: number;
   rewrap_epoch?: number;
 }
 
@@ -251,7 +251,7 @@ export interface WSSpaceCreateParams {
 
 export interface WSSpaceCreateResult {
   id: string;
-  key_generation: number;
+  epoch: number;
 }
 
 // --- Membership RPC ---
@@ -302,7 +302,7 @@ export interface WSEpochBeginParams {
   space: string;
   ucan?: string;
   epoch: number;
-  set_min_key_generation?: boolean;
+  set_min_epoch?: boolean;
 }
 
 export interface WSEpochBeginResult {

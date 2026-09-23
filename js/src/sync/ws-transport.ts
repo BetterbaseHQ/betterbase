@@ -316,16 +316,16 @@ export class WSTransport implements SyncTransportInterface {
     // Process each space's results
     for (const [spaceId, spaceResult] of pullResult.spaces) {
       // Detect epoch advancement for personal space — derive forward to the
-      // server's keyGeneration before notifying the callback so it persists
+      // server's epoch before notifying the callback so it persists
       // the correct (advanced) key, not the stale current key.
       if (
         spaceId === this.config.personalSpaceId &&
-        spaceResult.keyGeneration !== undefined &&
+        spaceResult.epoch !== undefined &&
         this.config.personalEpochConfig &&
-        spaceResult.keyGeneration > this.config.personalEpochConfig.epoch
+        spaceResult.epoch > this.config.personalEpochConfig.epoch
       ) {
         const currentEpoch = this.config.personalEpochConfig.epoch;
-        const targetEpoch = spaceResult.keyGeneration;
+        const targetEpoch = spaceResult.epoch;
         const epochKey = this.config.personalEpochConfig.epochKey;
         const epochDeriveKey = this.config.personalEpochConfig.epochDeriveKey;
 
@@ -420,10 +420,10 @@ export class WSTransport implements SyncTransportInterface {
     // Handle epoch changes for shared spaces
     for (const [spaceId, spaceResult] of pullResult.spaces) {
       if (spaceId === this.config.personalSpaceId) continue;
-      if (spaceResult.keyGeneration === undefined) continue;
+      if (spaceResult.epoch === undefined) continue;
 
       const localEpoch = this.config.spaceManager.getSpaceEpoch(spaceId) ?? 0;
-      if (spaceResult.keyGeneration <= localEpoch) continue;
+      if (spaceResult.epoch <= localEpoch) continue;
       try {
         if (
           spaceResult.rewrapEpoch !== undefined &&
@@ -436,7 +436,7 @@ export class WSTransport implements SyncTransportInterface {
         } else if (spaceResult.rewrapEpoch === undefined) {
           await this.config.spaceManager.adoptServerEpoch(
             spaceId,
-            spaceResult.keyGeneration,
+            spaceResult.epoch,
           );
         }
       } catch (err) {
@@ -451,7 +451,7 @@ export class WSTransport implements SyncTransportInterface {
       this.config.spaceManager
         .updateSpaceMetadata(
           spaceId,
-          spaceResult.keyGeneration,
+          spaceResult.epoch,
           spaceResult.rewrapEpoch,
         )
         .catch((err) => {

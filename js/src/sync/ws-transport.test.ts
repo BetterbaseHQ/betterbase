@@ -3,11 +3,25 @@ import { WSTransport } from "./ws-transport.js";
 import { WSClient } from "./ws-client.js";
 import { PushRejectedError } from "./transport.js";
 import type { SpaceManager } from "./space-manager.js";
+import type { EpochConfig } from "./types.js";
+import { INITIAL_EPOCH } from "./types.js";
 import {
   FakeSyncServer,
   stubWebSocket,
   resetFakeWebSocket,
+  SERVER_INITIAL_EPOCH,
 } from "./test-helpers.js";
+
+vi.mock("../crypto/webcrypto.js", () => ({
+  webcryptoDeriveEpochKey: async (
+    _deriveKey: CryptoKey,
+    spaceId: string,
+    epoch: number,
+  ) => ({
+    kwKey: { spaceId, epoch } as unknown as CryptoKey,
+    deriveKey: { spaceId, epoch } as unknown as CryptoKey,
+  }),
+}));
 
 const PERSONAL = "space-personal";
 
@@ -45,6 +59,7 @@ function makeHarness(
       get: (k: string) => Promise<number>;
       set: (k: string, v: number) => Promise<void>;
     };
+    personalEpochConfig?: EpochConfig;
   } = {},
 ) {
   const spaceManager = makeSpaceManager(overrides.spaceManager);
@@ -58,6 +73,7 @@ function makeHarness(
     personalSpaceId: PERSONAL,
     ws,
     cursorStore,
+    personalEpochConfig: overrides.personalEpochConfig,
   });
   return { spaceManager, cursorStore, ws, transport };
 }
@@ -155,7 +171,7 @@ describe("WSTransport", () => {
           space: PERSONAL,
           prev: 0,
           cursor: 5,
-          key_generation: 1,
+          epoch: 1,
         });
         for (const r of records) {
           reply.chunk(id, "pull.record", {
@@ -207,7 +223,7 @@ describe("WSTransport", () => {
           space: PERSONAL,
           prev: 7,
           cursor: 8,
-          key_generation: 1,
+          epoch: 1,
         });
         reply.chunk(id, "pull.commit", {
           space: PERSONAL,
@@ -244,7 +260,7 @@ describe("WSTransport", () => {
           space: PERSONAL,
           prev: since,
           cursor: 5,
-          key_generation: 1,
+          epoch: 1,
         });
         reply.chunk(id, "pull.record", {
           space: PERSONAL,
@@ -304,7 +320,7 @@ describe("WSTransport", () => {
           space: PERSONAL,
           prev: 0,
           cursor: 8,
-          key_generation: 1,
+          epoch: 1,
         });
         reply.chunk(id, "pull.record", {
           space: PERSONAL,
@@ -345,7 +361,7 @@ describe("WSTransport", () => {
           space: PERSONAL,
           prev: cursor,
           cursor: cursor + 5,
-          key_generation: 1,
+          epoch: 1,
         });
         reply.chunk(id, "pull.commit", {
           space: PERSONAL,
@@ -384,6 +400,83 @@ describe("WSTransport", () => {
     });
   });
 
+  describe("personal-space epoch sync", () => {
+    const pullWithEpoch = (epoch: number) =>
+      server.handle("pull", (_params, reply) => {
+        const id = reply.socket.sentFrames.find((f) => f.method === "pull")!
+          .id as string;
+        reply.chunk(id, "pull.begin", {
+          space: PERSONAL,
+          prev: 0,
+          cursor: 1,
+          epoch,
+        });
+        reply.chunk(id, "pull.commit", {
+          space: PERSONAL,
+          count: 0,
+          cursor: 1,
+        });
+        return { _chunks: 2 };
+      });
+
+    async function epochHarness(
+      epoch: number,
+      onEpochAdvanced: ReturnType<typeof vi.fn>,
+    ) {
+      const kwKey = await crypto.subtle.generateKey(
+        { name: "AES-KW", length: 256 },
+        false,
+        ["wrapKey", "unwrapKey"],
+      );
+      return makeHarness({
+        personalEpochConfig: {
+          epoch,
+          epochKey: kwKey,
+          epochDeriveKey: kwKey,
+          onEpochAdvanced: onEpochAdvanced as EpochConfig["onEpochAdvanced"],
+        },
+      });
+    }
+
+    it("does not advance the epoch when it already matches the server epoch", async () => {
+      pullWithEpoch(SERVER_INITIAL_EPOCH);
+      const onEpochAdvanced = vi.fn();
+      const { ws, transport } = await epochHarness(
+        INITIAL_EPOCH,
+        onEpochAdvanced,
+      );
+      await connect(ws);
+
+      await transport.pull("notes", 0);
+
+      // Regression: fresh sessions label the login-delivered key
+      // INITIAL_EPOCH, matching the server. A spurious 0→1 advance here persisted epoch 1 while epoch-0-wrapped
+      // DEKs existed, orphaning them permanently (backward derivation is
+      // forbidden by forward secrecy).
+      expect(INITIAL_EPOCH).toBe(SERVER_INITIAL_EPOCH);
+      expect(onEpochAdvanced).not.toHaveBeenCalled();
+    });
+
+    it("derives forward and notifies when the server reports a higher epoch", async () => {
+      pullWithEpoch(3);
+      const onEpochAdvanced = vi.fn();
+      const { ws, transport } = await epochHarness(1, onEpochAdvanced);
+      await connect(ws);
+
+      await transport.pull("notes", 0);
+
+      expect(onEpochAdvanced).toHaveBeenCalledTimes(1);
+      const [epoch, kwKey, deriveKey] = onEpochAdvanced.mock.calls[0] as [
+        number,
+        { epoch: number },
+        { epoch: number },
+      ];
+      expect(epoch).toBe(3);
+      expect(kwKey.epoch).toBe(3);
+      expect(deriveKey.epoch).toBe(3);
+    });
+  });
+
   describe("applySyncEvent", () => {
     it("ignores stale events at or below the space cursor", async () => {
       const { ws, transport } = makeHarness();
@@ -396,7 +489,7 @@ describe("WSTransport", () => {
           space: PERSONAL,
           prev: 0,
           cursor: 10,
-          key_generation: 1,
+          epoch: 1,
         });
         reply.chunk(id, "pull.commit", { space: PERSONAL, count: 0 });
         return { _chunks: 2 };
@@ -421,7 +514,7 @@ describe("WSTransport", () => {
           space: PERSONAL,
           prev: 0,
           cursor: 12,
-          key_generation: 1,
+          epoch: 1,
         });
         reply.chunk(id, "pull.commit", { space: PERSONAL, count: 0 });
         return { _chunks: 2 };
@@ -441,7 +534,7 @@ describe("WSTransport", () => {
           space: PERSONAL,
           prev: 12,
           cursor: 13,
-          key_generation: 1,
+          epoch: 1,
         });
         reply.chunk(id, "pull.commit", { space: PERSONAL, count: 0 });
         return { _chunks: 2 };
@@ -501,7 +594,7 @@ describe("WSTransport AUD-025 review fixes", () => {
         space: PERSONAL,
         prev: since,
         cursor: 5,
-        key_generation: 1,
+        epoch: 1,
       });
       reply.chunk(id, "pull.record", {
         space: PERSONAL,
@@ -564,7 +657,7 @@ describe("WSTransport AUD-025 review fixes", () => {
         space: PERSONAL,
         prev: since,
         cursor: 5,
-        key_generation: 1,
+        epoch: 1,
       });
       reply.chunk(id, "pull.commit", { space: PERSONAL, count: 0, cursor: 5 });
       return { _chunks: 2 };

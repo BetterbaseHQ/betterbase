@@ -29,6 +29,7 @@ import {
   type CacheStats,
 } from "./file-store.js";
 import type { TokenProvider } from "./types.js";
+import { INITIAL_EPOCH } from "./types.js";
 import {
   SpaceManager,
   type SpaceRecord,
@@ -98,8 +99,12 @@ export interface Session {
   /**
    * Current epoch number for forward secrecy.
    * Returns `undefined` for new sessions before `updateEpoch` is called.
-   * BetterbaseProvider defaults to epoch 0 when undefined — the initial epoch key
-   * delivered at login IS the epoch-0 key (HKDF-derived from the root export key).
+   * BetterbaseProvider defaults to `INITIAL_EPOCH` (1) when
+   * undefined — the initial epoch key delivered at login is the epoch-1 key
+   * (HKDF-derived from the root export key), matching the server's initial
+   * epoch for personal spaces. Labeling it lower makes the
+   * pull-time key-generation sync advance the session and permanently orphan
+   * any DEKs wrapped below the advanced epoch.
    */
   getEpoch(): number | undefined;
   /** Get the current epoch KW key as CryptoKey (may read from IndexedDB). */
@@ -448,7 +453,8 @@ export function BetterbaseProvider(
     props.personalSpaceId ?? session?.getPersonalSpaceId() ?? undefined;
   const handle = props.handle ?? session?.getHandle() ?? undefined;
   const getToken = props.getToken ?? (session ? sessionGetToken : undefined);
-  const epoch = props.epoch ?? session?.getEpoch() ?? (session ? 0 : undefined);
+  const epoch =
+    props.epoch ?? session?.getEpoch() ?? (session ? INITIAL_EPOCH : undefined);
   const epochKey = props.epochKey ?? sessionEpochKey ?? undefined;
   const epochDeriveKey = sessionEpochDeriveKey ?? undefined;
   const epochAdvancedAt =

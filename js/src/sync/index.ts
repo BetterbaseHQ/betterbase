@@ -48,6 +48,7 @@ export type {
   SyncEventData,
   SyncCryptoInterface,
 } from "./types.js";
+export { INITIAL_EPOCH } from "./types.js";
 
 // DEK re-wrapping (epoch advancement)
 export {

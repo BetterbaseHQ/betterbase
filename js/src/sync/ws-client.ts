@@ -88,7 +88,7 @@ export interface PullSpaceResult {
   space: string;
   prev: number;
   cursor: number;
-  keyGeneration: number;
+  epoch: number;
   rewrapEpoch?: number;
   records: WSPullRecordData[];
   files: WSPullFileData[];
@@ -199,7 +199,7 @@ export class WSClient {
               // head — a mid-stream error skips the commit, and the cursor
               // must never advance past work that was not delivered.
               cursor: d.prev,
-              keyGeneration: d.key_generation,
+              epoch: d.epoch,
               rewrapEpoch: d.rewrap_epoch,
               records: [],
               files: [],

@@ -47,8 +47,8 @@ export interface AdvanceEpochConfig {
 
 /** Options for advanceEpoch. */
 export interface AdvanceEpochOptions {
-  /** Set min_key_generation to the new epoch (for revocation — skips grace period). */
-  setMinKeyGeneration?: boolean;
+  /** Set min_epoch to the new epoch (for revocation — skips grace period). */
+  setMinEpoch?: boolean;
 }
 
 /**
@@ -69,7 +69,7 @@ export async function advanceEpoch(
     space: config.spaceId,
     ...(config.ucan ? { ucan: config.ucan } : {}),
     epoch: newEpoch,
-    ...(opts?.setMinKeyGeneration ? { set_min_key_generation: true } : {}),
+    ...(opts?.setMinEpoch ? { set_min_epoch: true } : {}),
   });
 
   // Check for conflict result (returned as success with error field).

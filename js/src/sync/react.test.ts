@@ -19,6 +19,7 @@ import {
   afterEach,
   type MockInstance,
 } from "vitest";
+import { INITIAL_EPOCH } from "./types.js";
 import {
   BetterbaseProvider,
   SyncReady,
@@ -588,6 +589,22 @@ describe("session-derived config", () => {
       new Uint8Array(4),
       undefined,
     );
+  });
+
+  it("defaults a new session's epoch to 1 (the server's initial key generation)", async () => {
+    const session = makeSession({ getEpoch: vi.fn(() => undefined) });
+    mountHook(() => useSyncReady(), sessionProps(session), {
+      mergeBase: false,
+    });
+    await ready();
+
+    const arg = vi.mocked(SyncEngine.create).mock
+      .calls[0]![0] as unknown as Record<string, unknown>;
+    // Regression: the login-delivered epoch key is the epoch-1 key. A 0
+    // default made the first push wrap its DEK at epoch 0, which the
+    // pull-time key-generation advance then orphaned permanently.
+    expect(arg.epoch).toBe(INITIAL_EPOCH);
+    expect(INITIAL_EPOCH).toBe(1);
   });
 
   it("re-resolves session keys when the epoch advances", async () => {

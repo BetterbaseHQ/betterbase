@@ -27,6 +27,16 @@ import {
   RPC_CHUNK,
 } from "./ws-frames.js";
 
+/**
+ * The epoch a fresh betterbase-sync space reports in pull.begin.
+ * Mirror of the server's initial epoch (spaces are created at 1 —
+ * see betterbase-sync storage). Scripted pull handlers should use this as
+ * the default: client epoch labels must line up with it
+ * (`INITIAL_EPOCH` in types.ts), or DEKs wrap below the value the
+ * first pull syncs to and become permanently undecryptable.
+ */
+export const SERVER_INITIAL_EPOCH = 1;
+
 type Frame = Record<string, unknown>;
 
 /** Instance hook owned by the active FakeSyncServer. */

@@ -986,9 +986,9 @@ describe("SpaceManager", () => {
   });
 
   describe("invite", () => {
-    it("labels the invitation payload with the current key generation (AUD-034, sender side)", async () => {
+    it("labels the invitation payload with the current epoch (AUD-034, sender side)", async () => {
       // After rotations brought the space to epoch 3, a NEW invitation
-      // must embed generation: 3 — invitees derive keys from the right base.
+      // must embed epoch: 3 — invitees derive keys from the right base.
       await activate({ epoch: 3 });
       vi.stubGlobal(
         "fetch",
@@ -1020,7 +1020,7 @@ describe("SpaceManager", () => {
       // encryptJwe is mocked as "jwe:" + plaintext JSON.
       expect(sentPayload).toBeDefined();
       const payload = JSON.parse(sentPayload!.slice(4));
-      expect(payload.metadata.generation).toBe(3);
+      expect(payload.metadata.epoch).toBe(3);
     });
   });
 
@@ -1155,7 +1155,7 @@ describe("SpaceManager", () => {
   describe("checkInvitations", () => {
     const wireInvitation = (
       spaceId: string,
-      cmdOrMeta: string | { generation: number } = "/space/write",
+      cmdOrMeta: string | { epoch: number } = "/space/write",
     ) => {
       const cmd = typeof cmdOrMeta === "string" ? cmdOrMeta : "/space/write";
       const metadata =
@@ -1164,7 +1164,7 @@ describe("SpaceManager", () => {
           : {
               space_name: "Shared",
               inviter_display_name: "self@test",
-              generation: cmdOrMeta.generation,
+              epoch: cmdOrMeta.epoch,
             };
       return JSON.stringify({
         space_id: spaceId,
@@ -1203,8 +1203,8 @@ describe("SpaceManager", () => {
       });
     });
 
-    it("stores the invitation's key generation as the space epoch (AUD-034)", async () => {
-      // After a rotation to epoch 3, the invitation must carry generation: 3;
+    it("stores the invitation's epoch as the space epoch (AUD-034)", async () => {
+      // After a rotation to epoch 3, the invitation must carry epoch: 3;
       // the recipient labels the delivered key with that epoch — not 1 — so
       // epoch-key derivation starts from the right base.
       server.handle("invitation.list", () => ({
@@ -1221,9 +1221,7 @@ describe("SpaceManager", () => {
       vi.mocked(decryptJwe).mockImplementation((payload: unknown) => {
         const jwe = payload as string;
         if (jwe === "jwe-e3") {
-          return new TextEncoder().encode(
-            wireInvitation("s-e3", { generation: 3 }),
-          );
+          return new TextEncoder().encode(wireInvitation("s-e3", { epoch: 3 }));
         }
         if (jwe === "jwe-legacy") {
           return new TextEncoder().encode(wireInvitation("s-legacy"));
@@ -1238,7 +1236,7 @@ describe("SpaceManager", () => {
         (r) => r.spaceId === "s-e3",
       );
       expect(withGeneration).toMatchObject({ epoch: 3 });
-      // Legacy invitations without a generation label still default to 1.
+      // Legacy invitations without an epoch label still default to 1.
       const legacy = [...db.records.values()].find(
         (r) => r.spaceId === "s-legacy",
       );

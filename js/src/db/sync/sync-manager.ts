@@ -555,7 +555,7 @@ function classifyPushRejection(e: unknown): SyncErrorKind {
       return "capacity";
     case "rate_limited":
     case "internal":
-    case "key_generation_stale":
+    case "epoch_stale":
       return "transient";
     case "forbidden":
     case "not_found":
