@@ -124,4 +124,53 @@ describe("mergeDatabaseRecords", () => {
     const after = await source.db.getAll(users);
     expect(after).toEqual(before);
   });
+
+  it("skips records whose id is tombstoned in the target (deleted stays deleted)", async () => {
+    const users = buildUsersCollection();
+    const source = await openFreshOpfsDb([users]);
+    const target = await openFreshOpfsDb([users]);
+    openDbs.push(source.db, target.db);
+
+    // The target once had this record; the user deleted it
+    const doomed = await target.db.put(users, {
+      name: "frank",
+      email: "frank@example.com",
+      age: 60,
+    });
+    await target.db.delete(users, doomed.id);
+
+    // The source still has the same id (e.g. an anonymous default meeting
+    // an account where the default was deleted on another device)
+    await source.db.put(
+      users,
+      {
+        name: "frank",
+        email: "frank@example.com",
+        age: 60,
+      },
+      { id: doomed.id },
+    );
+
+    const merged = await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [users],
+    });
+    expect(merged).toBe(0);
+
+    // Alive records still merge alongside the skipped tombstone
+    await source.db.put(users, {
+      name: "grace",
+      email: "grace@example.com",
+      age: 28,
+    });
+    const merged2 = await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [users],
+    });
+    expect(merged2).toBe(1);
+    const alive = await target.db.getAll(users);
+    expect(alive.map((r) => r.name)).toEqual(["grace"]);
+  });
 });

@@ -36,10 +36,54 @@ export function initWorker(collections: CollectionDefHandle[]): void {
   self.onmessage = async (ev: MessageEvent<MainToWorkerMessage>) => {
     const msg = ev.data;
 
-    if (msg.type !== "request" || msg.method !== "open") {
+    if (msg.type !== "request") {
       const response: WorkerResponse = {
         type: "response",
         id: (msg as { id?: number }).id ?? 0,
+        error: "Unexpected message type.",
+      };
+      self.postMessage(response);
+      return;
+    }
+
+    // Standalone deletion (deleteDatabase on the main thread): remove the
+    // SQLite file without switching to the OpfsWorkerHost — this worker
+    // exits after responding.
+    if (msg.method === "deleteDatabase") {
+      const requestId = msg.id;
+      const dbName = msg.args[0] as string;
+      try {
+        const wasmModule =
+          await import("../../../../crates/betterbase-db-wasm/pkg/betterbase_db_wasm.js");
+        const { WasmDb } = wasmModule;
+        // The adapter's deleteDatabase requires a closed instance: create
+        // (opening the pool), close + release the OPFS handles, then delete.
+        const wasm = await WasmDb.create(dbName);
+        wasm.close();
+        await wasm.releaseAccessHandles();
+        await wasm.deleteDatabase();
+        const response: WorkerResponse = {
+          type: "response",
+          id: requestId,
+          result: true,
+        };
+        self.postMessage(response);
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        const response: WorkerResponse = {
+          type: "response",
+          id: requestId,
+          error,
+        };
+        self.postMessage(response);
+      }
+      return;
+    }
+
+    if (msg.method !== "open") {
+      const response: WorkerResponse = {
+        type: "response",
+        id: msg.id,
         error: "Worker not initialized. Send 'open' request first.",
       };
       self.postMessage(response);
