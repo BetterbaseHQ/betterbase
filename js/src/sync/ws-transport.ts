@@ -123,7 +123,8 @@ export class WSTransport implements SyncTransportInterface {
     this.wsClient = config.ws;
 
     this.personalTransport = new SyncTransport({
-      push: (changes) => this.wsPush(config.personalSpaceId, changes),
+      push: (changes, epoch) =>
+        this.wsPush(config.personalSpaceId, changes, epoch),
       spaceId: config.personalSpaceId,
       paddingBuckets: config.paddingBuckets,
       epochConfig: config.personalEpochConfig,
@@ -137,7 +138,11 @@ export class WSTransport implements SyncTransportInterface {
    * Adapts WSClient.push() to the PushResult interface used by SyncTransport.
    * For shared spaces, includes the UCAN for authorization.
    */
-  private async wsPush(space: string, changes: Change[]): Promise<PushResult> {
+  private async wsPush(
+    space: string,
+    changes: Change[],
+    epoch: number,
+  ): Promise<PushResult> {
     const wsChanges: WSPushChange[] = changes.map((c) => ({
       id: c.id,
       blob: c.blob ?? null,
@@ -148,7 +153,7 @@ export class WSTransport implements SyncTransportInterface {
       space !== this.config.personalSpaceId
         ? (this.config.spaceManager.getUCAN(space) ?? undefined)
         : undefined;
-    const ack = await this.wsClient.push(space, wsChanges, ucan);
+    const ack = await this.wsClient.push(space, wsChanges, ucan, epoch);
     return {
       ok: ack.ok,
       sequence: ack.cursor ?? 0,
@@ -630,7 +635,7 @@ export class WSTransport implements SyncTransportInterface {
     const spaceEpoch = this.config.spaceManager.getSpaceEpoch(spaceId) ?? 0;
 
     const transport = new SyncTransport({
-      push: (changes) => this.wsPush(spaceId, changes),
+      push: (changes, epoch) => this.wsPush(spaceId, changes, epoch),
       spaceId,
       paddingBuckets: this.config.paddingBuckets,
       ...(spaceKey

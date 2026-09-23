@@ -132,13 +132,16 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
 
   const spaceId = "test-space-transport";
 
-  /** Stub push that captures outbound changes for later decryption. */
+  /** Stub push that captures outbound changes and the declared epoch. */
   function capturePush() {
     const pushed: Change[] = [];
+    const declaredEpochs: number[] = [];
     return {
       pushed,
-      pushFn: async (changes: Change[]) => {
+      declaredEpochs,
+      pushFn: async (changes: Change[], epoch: number) => {
         pushed.push(...changes);
+        declaredEpochs.push(epoch);
         return { ok: true, sequence: pushed.length };
       },
     };
@@ -191,7 +194,7 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
 
   it("transport encrypts and decrypts a round-trip at base epoch", async () => {
     const key = randomKey();
-    const { pushFn, pushed } = capturePush();
+    const { pushFn, pushed, declaredEpochs } = capturePush();
 
     const transport = new SyncTransport({
       push: pushFn,
@@ -213,6 +216,9 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
     expect(pushed.length).toBe(1);
     expect(pushed[0]!.blob).toBeTruthy();
     expect(pushed[0]!.wrappedDek).toBeTruthy();
+    // The transport declares the epoch it encrypted with so the server can
+    // fast-fail stale writers (epoch_stale guard).
+    expect(declaredEpochs).toEqual([1]);
 
     // Pull it back (simulate server returning the same change)
     transport.setPrepulledChanges(
@@ -229,6 +235,28 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
     const pullResult = await transport.pull("items", 0);
     expect(pullResult.records.length).toBe(1);
     expect(pullResult.records[0]!.id).toBe("rec-1");
+  });
+
+  it("declared push epoch follows epoch advancement", async () => {
+    const key = randomKey();
+    const { pushFn, declaredEpochs } = capturePush();
+    const transport = new SyncTransport({
+      push: pushFn,
+      spaceId,
+      epochConfig: { epoch: 1, epochKey: key },
+    });
+
+    await transport.push("items", [
+      { id: "rec-1", _v: 1, sequence: 0, crdt: fakeCrdt() },
+    ]);
+    transport.updateEncryptionEpoch(3);
+    await transport.push("items", [
+      { id: "rec-2", _v: 1, sequence: 0, crdt: fakeCrdt() },
+    ]);
+
+    // Every push declares the epoch its ciphertext was encrypted under —
+    // before and after advancement.
+    expect(declaredEpochs).toEqual([1, 3]);
   });
 
   it("transport decrypts records from a newer epoch via forward derivation", async () => {
@@ -320,7 +348,7 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
 
   it("updateEncryptionEpoch advances push epoch while preserving base key", async () => {
     const epoch1Key = randomKey();
-    const { pushFn, pushed } = capturePush();
+    const { pushFn, pushed, declaredEpochs } = capturePush();
 
     const transport = new SyncTransport({
       push: pushFn,

@@ -124,7 +124,7 @@ export class PushRejectedError extends Error {
 
 export interface SyncTransportConfig {
   /** Push function — sends encrypted changes to the server. */
-  push: (changes: Change[]) => Promise<PushResult>;
+  push: (changes: Change[], epoch: number) => Promise<PushResult>;
   /** Space ID for AAD binding in encryption */
   spaceId?: string;
   /**
@@ -167,13 +167,13 @@ export class TransientKeyResolutionError extends Error {
 /**
  * Bridges betterbase/db's SyncTransport interface to the betterbase-sync server.
  *
- * On push: OutboundRecord -> CRDT binary -> BlobEnvelope -> CBOR -> pad -> encrypt(DEK) -> Change{blob, dek}
- * On pull: Change{blob, dek} -> unwrap DEK -> decrypt(DEK) -> unpad -> CBOR -> BlobEnvelope -> RemoteRecord
+ * On push: OutboundRecord -> CRDT binary -> BlobEnvelope -> CBOR -> pad -> encrypt(DEK) -> Change{blob, wrappedDek}
+ * On pull: Change{blob, wrappedDek} -> unwrap DEK -> decrypt(DEK) -> unpad -> CBOR -> BlobEnvelope -> RemoteRecord
  *
  * Pull accepts pre-pulled changes from the outer transport for decryption.
  */
 export class SyncTransport implements SyncTransportInterface {
-  private pushFn: (changes: Change[]) => Promise<PushResult>;
+  private pushFn: (changes: Change[], epoch: number) => Promise<PushResult>;
   private spaceId?: string;
   private paddingBuckets: number[];
   private epochConfig?: EpochConfig;
@@ -286,7 +286,9 @@ export class SyncTransport implements SyncTransportInterface {
 
     if (changes.length === 0) return [];
 
-    const pushResult = await this.pushFn(changes);
+    // Declare the epoch used for encryption so the server can fast-fail
+    // pushes from stale writers (epoch_stale) before any write.
+    const pushResult = await this.pushFn(changes, this.currentEpoch);
 
     if (!pushResult.ok) {
       // The server rejected the batch. Throwing (instead of returning empty

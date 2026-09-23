@@ -167,10 +167,12 @@ export class WSClient {
     space: string,
     changes: WSPushChange[],
     ucan?: string,
+    epoch?: number,
   ): Promise<WSPushResult> {
     return this.rpc.call<WSPushResult>("push", {
       space,
       ...(ucan ? { ucan } : {}),
+      ...(epoch ? { epoch } : {}),
       changes,
     });
   }

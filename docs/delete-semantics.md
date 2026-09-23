@@ -301,10 +301,11 @@ simplification of the earlier proposal to soft-delete file rows):
 3. **Delete during upload** — the `record_exists` bug; fix is the
    `deleted = false` filter.
 4. **Epoch rotation × large cascades** — offline client returning after
-   rotation re-encrypts its dirty set; cascades amplify it. (Note: the
-   server's `min_epoch` push guard is currently unreachable
-   from RPC — `ws/storage.rs:38` never passes options; wire it while in
-   there.) `deleteTree` reports should classify re-encrypt-retry
+   rotation re-encrypts its dirty set; cascades amplify it. (The server
+   enforces `min_epoch` on every push two ways: the writer-declared
+   `epoch` fast-fail in `PushParams`, and per-change wrapped-DEK epoch
+   inspection — the former covers updates that carry no wrapped DEK.)
+   `deleteTree` reports should classify re-encrypt-retry
    distinctly.
 5. **`since=0` invariant** — document; consider refusing cursor resets
    over non-empty collections.
