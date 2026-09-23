@@ -782,11 +782,14 @@ function BetterbaseProviderInner(props: BetterbaseProviderInnerProps) {
 // ---------------------------------------------------------------------------
 
 /**
- * Check whether the sync infrastructure is fully initialized.
+ * Check whether the sync infrastructure is mounted.
  *
- * Returns `true` once session resolution, adapter initialization, and sync
- * setup have all completed — meaning `useSyncDb()`, `useSpaces()`,
- * `useQuery()` (from sync/react), etc. are safe to call.
+ * Returns `true` once session resolution, adapter initialization, and engine
+ * construction have completed — meaning `useSyncDb()`, `useSpaces()`,
+ * `useQuery()` (from sync/react), etc. are safe to call. The engine's
+ * network bootstrap (connect, initial pull) continues in the background:
+ * local data is readable/writable immediately (offline-first), and
+ * network-dependent behavior should gate on `useSync().phase === "ready"`.
  *
  * Returns `false` during the async gap (session resolving, adapter
  * initializing) and outside of `BetterbaseProvider`.

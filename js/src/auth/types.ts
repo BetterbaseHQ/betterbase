@@ -8,7 +8,7 @@ export interface OAuthConfig {
   redirectUri: string;
   /** Identity domain (e.g., "betterbase.dev"). Accounts server discovered via .well-known. */
   domain: string;
-  /** Space-separated list of scopes (e.g., "openid email sync") */
+  /** Space-separated list of scopes (e.g., "openid sync"). Request the minimum the app needs. */
   scope: string;
   /**
    * Key-storage scope / localStorage prefix for the session this client

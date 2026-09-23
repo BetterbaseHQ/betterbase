@@ -327,11 +327,21 @@ export interface AuthProviderProps {
    */
   clientId: string;
   /**
-   * OAuth scopes to request. `"sync"` delivers the encryption key needed by
-   * `BetterbaseProvider`; `"files"` is additionally required by `FileStore`.
-   * Default: `"openid email sync"`.
+   * OAuth scopes to request. Defaults to the minimum: `"openid sync"`.
+   * `"sync"` delivers the encryption key needed by `BetterbaseProvider`;
+   * `"files"` is additionally required by `FileStore`. Request `"email"`
+   * only if the app actually consumes the user's email address.
    */
   scope?: string;
+  /**
+   * Prefix for the session's localStorage slot and IndexedDB key scope.
+   * Apps hosted on the same origin MUST pass distinct prefixes (e.g.
+   * `"betterbase_session_tasks_"`): a shared prefix means a shared session
+   * slot, so each app silently reuses whichever app's OAuth grant was
+   * stored last — wrong client, wrong personal space, and refresh fails
+   * with a client_id mismatch. Default: `"betterbase_session_"`.
+   */
+  storagePrefix?: string;
   /** OAuth redirect URI. Default: `window.location.origin + "/"`. */
   redirectUri?: string;
 }
@@ -365,7 +375,8 @@ export function AuthProvider({
   children,
   domain,
   clientId,
-  scope = "openid email sync",
+  scope = "openid sync",
+  storagePrefix,
   redirectUri,
 }: AuthProviderProps) {
   const client = useMemo(
@@ -375,10 +386,11 @@ export function AuthProvider({
             clientId,
             domain,
             scope,
+            storagePrefix,
             redirectUri: redirectUri ?? window.location.origin + "/",
           })
         : null,
-    [clientId, domain, scope, redirectUri],
+    [clientId, domain, scope, storagePrefix, redirectUri],
   );
 
   const {

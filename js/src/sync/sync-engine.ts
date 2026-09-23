@@ -201,9 +201,9 @@ export class SyncEngine {
   // --- Lifecycle ---
 
   /**
-   * Create and bootstrap a SyncEngine.
+   * Create a SyncEngine and start background bootstrap.
    *
-   * Performs the full bootstrap sequence:
+   * Wires the local stack synchronously-resolvable:
    * 1. Derive DID from public key JWK
    * 2. Create TypedAdapter with spaces middleware
    * 3. Create SpaceManager, FilesClient, FileStore
@@ -211,7 +211,9 @@ export class SyncEngine {
    * 5. Create PresenceManager + EventManager
    * 6. Create WSTransport + SyncManager + SyncScheduler
    * 7. Wire auto-sync on local writes
-   * 8. Connect → flush → initializeFromSpaces → subscribe → flush
+   * 8. Kick off connect → flush → initializeFromSpaces → subscribe → flush
+   *    in the background (see runBootstrap); the returned engine is usable
+   *    for local reads/writes immediately.
    */
   static async create(config: SyncEngineConfig): Promise<SyncEngine> {
     await initWasm();
@@ -594,41 +596,56 @@ export class SyncEngine {
         });
     }
 
-    // 10. Bootstrap
-    engine._bootstrapping = true;
-    engine.dispatch({ type: "BOOTSTRAP_START" });
+    // 10. Bootstrap in the background: create() resolves once the local
+    // stack is wired so apps can render local data immediately
+    // (offline-first). Network bootstrap (connect → flush → subscribe)
+    // continues async; `phase` reaches "ready" when it completes, which
+    // gates network-dependent behavior like one-time default seeding.
+    void engine.runBootstrap();
+
+    return engine;
+  }
+
+  /**
+   * Network bootstrap: connect → flush → check invitations → activate
+   * shared spaces → subscribe → flush. Runs in the background after
+   * create() resolves; dispatches BOOTSTRAP_START/COMPLETE (phase
+   * "bootstrapping"/"ready") or ERROR. Safe to run only once, from
+   * create().
+   */
+  private async runBootstrap(): Promise<void> {
+    this._bootstrapping = true;
+    this.dispatch({ type: "BOOTSTRAP_START" });
     try {
-      await transport.connect();
-      await scheduler.flushAll();
-      spaceManager.checkInvitations(keypair.privateKeyJwk).catch((err) => {
+      await this.transport.connect();
+      await this.scheduler.flushAll();
+      this.spaceManager.checkInvitations(this.privateKeyJwk).catch((err) => {
         console.error(
           "[betterbase-sync] Failed to check invitations during bootstrap:",
           err,
         );
       });
-      const activated = await spaceManager.initializeFromSpaces();
+      const activated = await this.spaceManager.initializeFromSpaces();
       if (activated > 0) {
-        await scheduler.flushAll();
+        await this.scheduler.flushAll();
       }
-      await transport.subscribe();
-      await scheduler.flushAll();
-      engine._bootstrapping = false;
-      engine.dispatch({ type: "BOOTSTRAP_COMPLETE" });
-      fileStore.processQueue().catch((err) => {
+      await this.transport.subscribe();
+      await this.scheduler.flushAll();
+      this._bootstrapping = false;
+      this.dispatch({ type: "BOOTSTRAP_COMPLETE" });
+      this.fileStore.processQueue().catch((err) => {
         console.error(
           "[betterbase-sync] Failed to process file queue after bootstrap:",
           err,
         );
       });
     } catch (err) {
-      engine._bootstrapping = false;
-      engine.dispatch({
+      this._bootstrapping = false;
+      this.dispatch({
         type: "ERROR",
         error: err instanceof Error ? err.message : "Initial sync failed",
       });
     }
-
-    return engine;
   }
 
   // --- Public operations ---
