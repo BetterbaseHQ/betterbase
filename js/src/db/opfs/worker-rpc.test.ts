@@ -381,3 +381,30 @@ describe("RpcClient", () => {
     });
   });
 });
+
+describe("RpcClient lifecycle fail-fast (issue #4 hardening)", () => {
+  it("terminate() rejects pending calls immediately instead of timing out", async () => {
+    const t = createMockTransport();
+    const client = new RpcClient(t.transport);
+
+    const pending = client.call("getAll", ["users"], 10_000);
+    client.terminate();
+
+    // No 10s wait: the rejection is synchronous bookkeeping.
+    const start = Date.now();
+    await expect(pending).rejects.toThrow("Worker terminated");
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
+
+  it("terminate() makes subsequent calls throw synchronously", async () => {
+    const t = createMockTransport();
+    const client = new RpcClient(t.transport);
+    client.terminate();
+
+    await expect(client.call("get", ["users", "x"])).rejects.toThrow(
+      "Worker has been terminated",
+    );
+    // The transport was closed as part of termination.
+    expect(t.transport.close).toHaveBeenCalled();
+  });
+});

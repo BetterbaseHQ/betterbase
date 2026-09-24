@@ -149,6 +149,13 @@ export class WorkerRouter {
 
   /** Close the router and terminate the worker. */
   close(): void {
+    // Fail pending calls through every port immediately — a post-close
+    // call would otherwise sit in `pending` until its 30s timeout with
+    // no worker left to answer (messages posted to a terminated worker
+    // are silently dropped by the platform).
+    for (const port of [...this.ports]) {
+      port.deliverError(new Error("Port disconnected"));
+    }
     this.requestSources.clear();
     this.subscriptionSources.clear();
     this.ports.clear();
@@ -166,7 +173,6 @@ export class RouterPort implements RpcTransport {
   private router: WorkerRouter;
   private messageHandler: ((msg: WorkerToMainMessage) => void) | null = null;
   private errorHandler: ((error: Error) => void) | null = null;
-
   constructor(router: WorkerRouter) {
     this.router = router;
   }

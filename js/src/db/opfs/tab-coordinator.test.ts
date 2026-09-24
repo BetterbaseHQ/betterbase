@@ -32,6 +32,7 @@ vi.mock("./worker-rpc.js", () => ({
     call = (...args: unknown[]) => rpcCallMock(...args);
     replaceTransport = vi.fn();
     resubscribeAll = vi.fn();
+    terminate = vi.fn();
   },
 }));
 

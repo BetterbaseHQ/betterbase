@@ -309,6 +309,13 @@ export class TabCoordinator {
     // router.close()) is harmless.
     this.worker.terminate();
 
+    // Terminate the RPC client: pending calls reject immediately and any
+    // call made after close throws "Worker has been terminated" instead of
+    // posting into the void. Without this, a Database handle used after
+    // close() would hang every request for its full 30s timeout — a
+    // closed-database wedge that is invisible until a consumer reads it.
+    this.rpc.terminate();
+
     // Release the Web Lock
     this.releaseElectionLock();
   }
