@@ -7,7 +7,7 @@
  * never modified.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { mergeDatabaseRecords } from "../../src/db/merge-records.js";
 import {
   openFreshOpfsDb,
@@ -47,7 +47,7 @@ describe("mergeDatabaseRecords", () => {
       target: target.db,
       collections: [users],
     });
-    expect(merged).toBe(2);
+    expect(merged.merged).toBe(2);
 
     const records = await target.db.getAll(users);
     expect(records.map((r) => r.id).sort()).toEqual([a.id, b.id].sort());
@@ -100,7 +100,7 @@ describe("mergeDatabaseRecords", () => {
       target: target.db,
       collections: [users],
     });
-    expect(merged).toBe(0);
+    expect(merged.merged).toBe(0);
     expect((await target.db.getAll(users)).length).toBe(1);
   });
 
@@ -151,7 +151,7 @@ describe("mergeDatabaseRecords", () => {
       target: target.db,
       collections: [users],
     });
-    expect(merged).toBe(1);
+    expect(merged.merged).toBe(1);
 
     const records = await target.db.getAll(users);
     expect(records.length).toBe(1);
@@ -189,7 +189,7 @@ describe("mergeDatabaseRecords", () => {
       target: target.db,
       collections: [users],
     });
-    expect(merged).toBe(0);
+    expect(merged.merged).toBe(0);
 
     // Alive records still merge alongside the skipped tombstone
     await source.db.put(users, {
@@ -202,7 +202,7 @@ describe("mergeDatabaseRecords", () => {
       target: target.db,
       collections: [users],
     });
-    expect(merged2).toBe(1);
+    expect(merged2.merged).toBe(1);
     const alive = await target.db.getAll(users);
     expect(alive.map((r) => r.name)).toEqual(["grace"]);
   });
@@ -240,7 +240,7 @@ describe("mergeDatabaseRecords", () => {
       target: target.db,
       collections: [docs],
     });
-    expect(merged).toBe(1);
+    expect(merged.merged).toBe(1);
 
     const after = (await target.db.getAll(docs))[0];
     // Target scalars win (the account's own edits are authoritative)...
@@ -355,5 +355,121 @@ describe("mergeDatabaseRecords", () => {
       text: "source version",
       done: true,
     });
+  });
+
+  it("skipRecord excludes declared default data from every write path and reports dispositions", async () => {
+    const boards = buildBoardCollection();
+    const source = await openFreshOpfsDb([boards]);
+    const target = await openFreshOpfsDb([boards]);
+    openDbs.push(source.db, target.db);
+
+    // Pristine seed (skipped), edited seed (kept), user record (kept).
+    const pristine = await source.db.put(boards, {
+      title: "default board",
+      cards: [{ id: "c1", text: "sample card", done: false }],
+    });
+    const edited = await source.db.put(boards, {
+      title: "default board 2",
+      cards: [{ id: "c2", text: "sample", done: false }],
+    });
+    await new Promise((r) => setTimeout(r, 25));
+    await source.db.patch(boards, { id: edited.id, title: "renamed by user" });
+    const user = await source.db.put(boards, {
+      title: "mine",
+      cards: [],
+    });
+    // Target already alive at `edited.id` (same deterministic id on the
+    // account side): proves skipRecord applies to the patch path too.
+    await target.db.put(
+      boards,
+      { title: "account side", cards: [] },
+      { id: edited.id },
+    );
+    await new Promise((r) => setTimeout(r, 25));
+
+    const pristineIds = new Set([pristine.id]);
+    const result = await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [boards],
+      skipRecord: (_def, record) => pristineIds.has(record.id as string),
+    });
+
+    expect(result).toEqual({
+      merged: 2,
+      skippedPristine: 1,
+      skippedTombstoned: 0,
+    });
+    const targetIds = new Set(
+      (await target.db.getAll(boards)).map((r) => r.id as string),
+    );
+    expect(targetIds.has(pristine.id)).toBe(false);
+    expect(targetIds.has(edited.id)).toBe(true);
+    expect(targetIds.has(user.id)).toBe(true);
+  });
+
+  it("an all-pristine source merges nothing without reading the target", async () => {
+    const boards = buildBoardCollection();
+    const source = await openFreshOpfsDb([boards]);
+    const target = await openFreshOpfsDb([boards]);
+    openDbs.push(source.db, target.db);
+
+    await source.db.put(boards, { title: "default board", cards: [] });
+    // A tombstone in the target would normally be reported — proving the
+    // short-circuit: the target read never happens.
+    const all = await target.db.getAll(boards);
+    await target.db.delete(
+      boards,
+      all.length > 0 ? (all[0] as { id: string }).id : "x",
+    );
+    const getAllSpy = vi.spyOn(target.db, "getAll");
+
+    const result = await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [boards],
+      skipRecord: () => true,
+    });
+
+    expect(result).toEqual({
+      merged: 0,
+      skippedPristine: 1,
+      skippedTombstoned: 0,
+    });
+    expect(getAllSpy).not.toHaveBeenCalled();
+  });
+
+  it("counts tombstoned target records in the result breakdown", async () => {
+    const users = buildUsersCollection();
+    const source = await openFreshOpfsDb([users]);
+    const target = await openFreshOpfsDb([users]);
+    openDbs.push(source.db, target.db);
+
+    const targetRecord = await target.db.put(users, {
+      name: "Deleted Elsewhere",
+      email: "gone@example.com",
+      age: 42,
+    });
+    // Same id on the source side: the merge must respect the target's
+    // tombstone instead of writing it back.
+    await source.db.put(
+      users,
+      {
+        name: "Deleted Elsewhere",
+        email: "gone@example.com",
+        age: 42,
+      },
+      { id: targetRecord.id },
+    );
+    await target.db.delete(users, targetRecord.id);
+
+    const result = await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [users],
+    });
+
+    expect(result.merged).toBe(0);
+    expect(result.skippedTombstoned).toBe(1);
   });
 });

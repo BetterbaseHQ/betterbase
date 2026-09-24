@@ -108,7 +108,10 @@ export type { CreateDatabaseOptions } from "./createOpfsDb.js";
 export { deleteDatabase } from "./delete-database.js";
 export type { DeleteDatabaseOptions } from "./delete-database.js";
 export { mergeDatabaseRecords } from "./merge-records.js";
-export type { MergeDatabaseRecordsOptions } from "./merge-records.js";
+export type {
+  MergeDatabaseRecordsOptions,
+  MergeDatabaseRecordsResult,
+} from "./merge-records.js";
 
 // Sync manager + scheduler
 export { SyncManager } from "./sync/sync-manager.js";

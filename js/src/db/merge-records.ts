@@ -22,14 +22,38 @@ export interface MergeDatabaseRecordsOptions {
   target: Database;
   /** Collections whose records should be merged. */
   collections: ReadonlyArray<CollectionDefHandle>;
+  /**
+   * Exclude a source record from the merge entirely. Apps use this to
+   * declare default/sample data: a record the app can identify as an
+   * unedited seed is phantom data — the user never authored it — and
+   * must not land in the account (where it would sync to every device).
+   * Unlike a tombstone hit, this applies regardless of target state.
+   * May be async; consulted once per live source record.
+   */
+  skipRecord?: (
+    def: CollectionDefHandle,
+    record: Record<string, unknown>,
+  ) => boolean | Promise<boolean>;
+}
+
+/** Disposition counts for one mergeDatabaseRecords run. */
+export interface MergeDatabaseRecordsResult {
+  /** Records written or patched into the target. */
+  merged: number;
+  /** Records excluded by the skipRecord predicate (e.g. pristine seeds). */
+  skippedPristine: number;
+  /** Records skipped because the target holds a tombstone for their id. */
+  skippedTombstoned: number;
 }
 
 /**
  * Copy records of `collections` from `source` to `target`, keeping ids
- * and dropping space stamps. Returns the number of records merged (0 when
- * the source has none).
+ * and dropping space stamps. Returns per-disposition counts (all zero
+ * when the source has no mergeable records).
  *
  * Record disposition:
+ * - Excluded by `skipRecord` → skipped before any target read: a
+ *   declared-pristine seed never merges, whatever the target holds.
  * - Unknown id in the target → written (the point of the merge).
  * - Alive in the target → field-merged and written: scalar fields keep
  *   the target's value (the account's own edits win), array fields are
@@ -50,12 +74,29 @@ export interface MergeDatabaseRecordsOptions {
  */
 export async function mergeDatabaseRecords(
   options: MergeDatabaseRecordsOptions,
-): Promise<number> {
-  const { source, target, collections } = options;
+): Promise<MergeDatabaseRecordsResult> {
+  const { source, target, collections, skipRecord } = options;
   let merged = 0;
+  let skippedPristine = 0;
+  let skippedTombstoned = 0;
   for (const def of collections) {
     const records = await source.getAll(def);
     if (records.length === 0) continue;
+
+    // Pristine-seed filter first: when every record is excluded (the
+    // poisoned-first-visit case) the target is never even read.
+    const candidates: Record<string, unknown>[] = [];
+    for (const record of records) {
+      if (
+        skipRecord &&
+        (await skipRecord(def, record as Record<string, unknown>))
+      ) {
+        skippedPristine++;
+        continue;
+      }
+      candidates.push(record as Record<string, unknown>);
+    }
+    if (candidates.length === 0) continue;
 
     // One read for each disposition: alive ids re-write (CRDT update),
     // tombstoned ids skip. Tombstones = present with includeDeleted but
@@ -74,7 +115,7 @@ export async function mergeDatabaseRecords(
 
     const writes: Record<string, unknown>[] = [];
     const patches: { id: string; fields: Record<string, unknown> }[] = [];
-    for (const record of records) {
+    for (const record of candidates) {
       const {
         _spaceId: _s,
         createdAt: _c,
@@ -98,8 +139,10 @@ export async function mergeDatabaseRecords(
       } else if (!knownIds.has(id)) {
         // Unknown to the target: write.
         writes.push(rest);
+      } else {
+        // Tombstoned in the target — respect the deletion.
+        skippedTombstoned++;
       }
-      // else: tombstoned in the target — respect the deletion.
     }
 
     if (writes.length > 0) {
@@ -164,7 +207,7 @@ export async function mergeDatabaseRecords(
       }
     }
   }
-  return merged;
+  return { merged, skippedPristine, skippedTombstoned };
 }
 
 /** Fields the merge never rewrites (identity + engine-managed). */
