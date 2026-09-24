@@ -13,6 +13,7 @@ import {
   openFreshOpfsDb,
   cleanupOpfsDb,
   buildUsersCollection,
+  buildDocsCollection,
 } from "./opfs-helpers.js";
 import type { Database } from "../../src/db/index.js";
 
@@ -203,5 +204,111 @@ describe("mergeDatabaseRecords", () => {
     expect(merged2).toBe(1);
     const alive = await target.db.getAll(users);
     expect(alive.map((r) => r.name)).toEqual(["grace"]);
+  });
+
+  it("regression: embedded arrays from an older source survive merging onto a newer target record", async () => {
+    // The adoption path: the account side may already hold the same record
+    // id (e.g. both sides seeded the deterministic default list), written
+    // later than the anonymous copy. A bare re-put loses field-level
+    // conflict resolution wholesale — including embedded items (todos,
+    // cards). The merge must union arrays and keep the target's scalars.
+    const docs = buildDocsCollection();
+    const source = await openFreshOpfsDb([docs]);
+    const target = await openFreshOpfsDb([docs]);
+    openDbs.push(source.db, target.db);
+
+    const src = await source.db.put(docs, {
+      title: "anonymous-title",
+      tags: ["adopted-a", "adopted-b"],
+      meta: { category: "anon", score: 1 },
+    });
+    await new Promise((r) => setTimeout(r, 25));
+    // Target record written LATER (models the account-side seed/edit)
+    await target.db.put(
+      docs,
+      {
+        title: "account-title",
+        tags: ["account-tag"],
+        meta: { category: "acct", score: 2 },
+      },
+      { id: src.id },
+    );
+
+    const merged = await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [docs],
+    });
+    expect(merged).toBe(1);
+
+    const after = (await target.db.getAll(docs))[0];
+    // Target scalars win (the account's own edits are authoritative)...
+    expect(after.title).toBe("account-title");
+    expect(after.meta).toEqual({ category: "acct", score: 2 });
+    // ...but the anonymous items union in — never silently dropped.
+    expect([...after.tags].sort()).toEqual([
+      "account-tag",
+      "adopted-a",
+      "adopted-b",
+    ]);
+  });
+
+  it("unions arrays of objects by element id, keeping the target's version on conflict", async () => {
+    const boards = buildDocsCollection();
+    const source = await openFreshOpfsDb([boards]);
+    const target = await openFreshOpfsDb([boards]);
+    openDbs.push(source.db, target.db);
+
+    const src = await source.db.put(boards, {
+      title: "b",
+      tags: ["same", "src-only"],
+      meta: { category: "c", score: 1 },
+    });
+    await target.db.put(
+      boards,
+      {
+        title: "b",
+        tags: ["same", "tgt-only"],
+        meta: { category: "c", score: 1 },
+      },
+      { id: src.id },
+    );
+
+    await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [boards],
+    });
+    const after = (await target.db.getAll(boards))[0];
+    expect([...after.tags].sort()).toEqual(["same", "src-only", "tgt-only"]);
+  });
+
+  it("copies fields the target record lacks", async () => {
+    const docs = buildDocsCollection();
+    const source = await openFreshOpfsDb([docs]);
+    const target = await openFreshOpfsDb([docs]);
+    openDbs.push(source.db, target.db);
+
+    const src = await source.db.put(docs, {
+      title: "t",
+      tags: ["x"],
+      meta: { category: "c", score: 1 },
+      note: "from-anonymous",
+    });
+    // Target's older write predates the note field's presence
+    await target.db.put(
+      docs,
+      { title: "t2", tags: [], meta: { category: "c", score: 1 } },
+      { id: src.id },
+    );
+
+    await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [docs],
+    });
+    const after = (await target.db.getAll(docs))[0];
+    expect(after.note).toBe("from-anonymous");
+    expect(after.title).toBe("t2");
   });
 });
