@@ -106,6 +106,7 @@ export { Database } from "./opfs/OpfsDb.js";
 export { createDatabase } from "./createOpfsDb.js";
 export type { CreateDatabaseOptions } from "./createOpfsDb.js";
 export { deleteDatabase } from "./delete-database.js";
+export type { DeleteDatabaseOptions } from "./delete-database.js";
 export { mergeDatabaseRecords } from "./merge-records.js";
 export type { MergeDatabaseRecordsOptions } from "./merge-records.js";
 

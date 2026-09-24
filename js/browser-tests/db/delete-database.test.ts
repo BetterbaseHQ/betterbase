@@ -30,6 +30,13 @@ describe("deleteDatabase", () => {
     );
     await deleteDatabase(dbName, { worker });
 
+    // The whole database directory is gone — stale SAH-pool state would
+    // wedge the next open.
+    const root = await navigator.storage.getDirectory();
+    const names: string[] = [];
+    for await (const name of root.keys()) names.push(name);
+    expect(names).not.toContain(`.betterbase-db-${dbName}`);
+
     const reopened = await createDatabase(dbName, [users], {
       worker: new Worker(new URL("./opfs-test-worker.ts", import.meta.url), {
         type: "module",
@@ -50,9 +57,9 @@ describe("deleteDatabase", () => {
         type: "module",
       },
     );
-    await expect(deleteDatabase(dbName, { worker })).rejects.toThrow(
-      /open in another tab/,
-    );
+    await expect(
+      deleteDatabase(dbName, { worker, lockTimeoutMs: 500 }),
+    ).rejects.toThrow(/retry later/);
     await worker.terminate();
 
     // The live database is untouched
@@ -63,5 +70,41 @@ describe("deleteDatabase", () => {
     });
     expect((await db.getAll(users)).length).toBe(1);
     await db.close();
+  });
+
+  it("deletes after the lock frees within the wait budget", async () => {
+    const users = buildUsersCollection();
+    const { db, dbName } = await openFreshOpfsDb([users]);
+    await db.put(users, { name: "carol", email: "carol@example.com", age: 22 });
+    await db.close();
+
+    // Simulate a displaced tab still holding the leader lock briefly: the
+    // queued deletion must wait it out and then succeed. (Leader locks are
+    // held via a pending promise and released by resolving it — an abort
+    // signal cannot release a granted lock.)
+    let releaseHolder!: () => void;
+    const lockHeld = navigator.locks.request(
+      `betterbase-db:leader:${dbName}`,
+      () => new Promise<void>((r) => (releaseHolder = r)),
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    setTimeout(() => releaseHolder(), 600);
+
+    const worker = new Worker(
+      new URL("./opfs-test-worker.ts", import.meta.url),
+      {
+        type: "module",
+      },
+    );
+    await deleteDatabase(dbName, { worker, lockTimeoutMs: 5_000 });
+    await lockHeld.catch(() => {});
+
+    const reopened = await createDatabase(dbName, [users], {
+      worker: new Worker(new URL("./opfs-test-worker.ts", import.meta.url), {
+        type: "module",
+      }),
+    });
+    expect(await reopened.getAll(users)).toHaveLength(0);
+    await reopened.close();
   });
 });

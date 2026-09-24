@@ -125,6 +125,37 @@ describe("mergeDatabaseRecords", () => {
     expect(after).toEqual(before);
   });
 
+  it("re-writes records alive in the target so local edits merge in", async () => {
+    const users = buildUsersCollection();
+    const source = await openFreshOpfsDb([users]);
+    const target = await openFreshOpfsDb([users]);
+    openDbs.push(source.db, target.db);
+
+    // The target already knows this identity with older data
+    const original = await target.db.put(users, {
+      name: "heidi",
+      email: "heidi@example.com",
+      age: 40,
+    });
+    // The source carries newer local edits on the same id
+    await source.db.put(
+      users,
+      { name: "heidi", email: "heidi@example.com", age: 41 },
+      { id: original.id },
+    );
+
+    const merged = await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [users],
+    });
+    expect(merged).toBe(1);
+
+    const records = await target.db.getAll(users);
+    expect(records.length).toBe(1);
+    expect(records[0]!.age).toBe(41);
+  });
+
   it("skips records whose id is tombstoned in the target (deleted stays deleted)", async () => {
     const users = buildUsersCollection();
     const source = await openFreshOpfsDb([users]);
