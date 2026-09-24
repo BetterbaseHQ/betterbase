@@ -36,20 +36,30 @@ export interface MergeDatabaseRecordsOptions {
   ) => boolean | Promise<boolean>;
 }
 
-/** Disposition counts for one mergeDatabaseRecords run. */
+/**
+ * Disposition counts for one mergeDatabaseRecords run. The buckets
+ * partition the source's live records: merged + skipped +
+ * skippedTombstoned + skippedConflict equals what `getAll` returned.
+ */
 export interface MergeDatabaseRecordsResult {
   /** Records written or patched into the target. */
   merged: number;
   /** Records excluded by the skipRecord predicate (e.g. pristine seeds). */
-  skippedPristine: number;
+  skipped: number;
   /** Records skipped because the target holds a tombstone for their id. */
   skippedTombstoned: number;
+  /**
+   * Records tolerated past a conflict: a unique-index collision in the
+   * bulk write (the target already holds the data under another
+   * identity) or a record deleted mid-merge by a concurrent sync.
+   */
+  skippedConflict: number;
 }
 
 /**
  * Copy records of `collections` from `source` to `target`, keeping ids
  * and dropping space stamps. Returns per-disposition counts (all zero
- * when the source has no mergeable records).
+ * when the source has no records).
  *
  * Record disposition:
  * - Excluded by `skipRecord` → skipped before any target read: a
@@ -77,8 +87,9 @@ export async function mergeDatabaseRecords(
 ): Promise<MergeDatabaseRecordsResult> {
   const { source, target, collections, skipRecord } = options;
   let merged = 0;
-  let skippedPristine = 0;
+  let skipped = 0;
   let skippedTombstoned = 0;
+  let skippedConflict = 0;
   for (const def of collections) {
     const records = await source.getAll(def);
     if (records.length === 0) continue;
@@ -91,7 +102,7 @@ export async function mergeDatabaseRecords(
         skipRecord &&
         (await skipRecord(def, record as Record<string, unknown>))
       ) {
-        skippedPristine++;
+        skipped++;
         continue;
       }
       candidates.push(record as Record<string, unknown>);
@@ -169,6 +180,7 @@ export async function mergeDatabaseRecords(
           `[betterbase-db] mergeDatabaseRecords: skipped ${result.errors.length} record(s) with unique-field collisions in ${def.name}`,
         );
         merged += writes.length - result.errors.length;
+        skippedConflict += result.errors.length;
       } else {
         merged += writes.length;
       }
@@ -195,10 +207,22 @@ export async function mergeDatabaseRecords(
         // record", not "fail the adoption" — the merge is idempotent and
         // a thrown error here blocks the login path.
         const msg = String((e as Error)?.message ?? e);
-        if (/deleted|not found|unique/i.test(msg)) {
+        // Tolerated failures, matched on the engine's exact wordings
+        // ("Record deleted: …", "Record not found: …", "Unique constraint
+        // violation on …") with word boundaries so near-miss substrings
+        // (a field named uniqueId, "not registered") still throw — a
+        // reworded engine error must fail loudly, not skip silently.
+        // Deleted/not-found mid-merge is semantically the tombstone
+        // disposition; unique collisions are conflicts.
+        if (/\b(deleted|not found|unique)\b/i.test(msg)) {
           console.warn(
             `[betterbase-db] mergeDatabaseRecords: skipped ${def.name}/${id}: ${msg}`,
           );
+          if (/\b(deleted|not found)\b/i.test(msg)) {
+            skippedTombstoned++;
+          } else {
+            skippedConflict++;
+          }
           continue;
         }
         throw new Error(
@@ -207,7 +231,7 @@ export async function mergeDatabaseRecords(
       }
     }
   }
-  return { merged, skippedPristine, skippedTombstoned };
+  return { merged, skipped, skippedTombstoned, skippedConflict };
 }
 
 /** Fields the merge never rewrites (identity + engine-managed). */

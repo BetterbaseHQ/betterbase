@@ -378,8 +378,15 @@ describe("mergeDatabaseRecords", () => {
       title: "mine",
       cards: [],
     });
-    // Target already alive at `edited.id` (same deterministic id on the
-    // account side): proves skipRecord applies to the patch path too.
+    // Both a pristine and an edited record alive in the target (same
+    // deterministic ids on the account side): pins that skipRecord
+    // applies regardless of target state — the pristine one is never
+    // patched, the edited one takes the field-merge (patch) path.
+    await target.db.put(
+      boards,
+      { title: "account default", cards: [] },
+      { id: pristine.id },
+    );
     await target.db.put(
       boards,
       { title: "account side", cards: [] },
@@ -397,13 +404,21 @@ describe("mergeDatabaseRecords", () => {
 
     expect(result).toEqual({
       merged: 2,
-      skippedPristine: 1,
+      skipped: 1,
       skippedTombstoned: 0,
+      skippedConflict: 0,
     });
+    // The alive pristine record was skipped untouched: the target's
+    // version is exactly what was put, no field-merge applied.
+    const pristineAfter = (await target.db.getAll(boards)).find(
+      (r) => r.id === pristine.id,
+    );
+    expect(pristineAfter?.title).toBe("account default");
     const targetIds = new Set(
       (await target.db.getAll(boards)).map((r) => r.id as string),
     );
-    expect(targetIds.has(pristine.id)).toBe(false);
+    // The pristine record's presence is the setup's own put — the title
+    // assertion above proves the merge never touched it.
     expect(targetIds.has(edited.id)).toBe(true);
     expect(targetIds.has(user.id)).toBe(true);
   });
@@ -417,11 +432,11 @@ describe("mergeDatabaseRecords", () => {
     await source.db.put(boards, { title: "default board", cards: [] });
     // A tombstone in the target would normally be reported — proving the
     // short-circuit: the target read never happens.
-    const all = await target.db.getAll(boards);
-    await target.db.delete(
-      boards,
-      all.length > 0 ? (all[0] as { id: string }).id : "x",
-    );
+    const targetRecord = await target.db.put(boards, {
+      title: "account board",
+      cards: [],
+    });
+    await target.db.delete(boards, targetRecord.id);
     const getAllSpy = vi.spyOn(target.db, "getAll");
 
     const result = await mergeDatabaseRecords({
@@ -433,8 +448,9 @@ describe("mergeDatabaseRecords", () => {
 
     expect(result).toEqual({
       merged: 0,
-      skippedPristine: 1,
+      skipped: 1,
       skippedTombstoned: 0,
+      skippedConflict: 0,
     });
     expect(getAllSpy).not.toHaveBeenCalled();
   });
@@ -471,5 +487,35 @@ describe("mergeDatabaseRecords", () => {
 
     expect(result.merged).toBe(0);
     expect(result.skippedTombstoned).toBe(1);
+  });
+
+  it("skipRecord may be async and differentiate by collection", async () => {
+    const users = buildUsersCollection();
+    const boards = buildBoardCollection();
+    const source = await openFreshOpfsDb([users, boards]);
+    const target = await openFreshOpfsDb([users, boards]);
+    openDbs.push(source.db, target.db);
+
+    await source.db.put(users, { name: "u", email: "u@x.com", age: 1 });
+    await source.db.put(boards, { title: "b", cards: [] });
+
+    const result = await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [users, boards],
+      skipRecord: async (def) => {
+        await Promise.resolve(); // exercise the awaited path
+        return def.name === "boards";
+      },
+    });
+
+    expect(result).toEqual({
+      merged: 1, // users
+      skipped: 1, // boards
+      skippedTombstoned: 0,
+      skippedConflict: 0,
+    });
+    expect(await target.db.getAll(boards)).toHaveLength(0);
+    expect(await target.db.getAll(users)).toHaveLength(1);
   });
 });
