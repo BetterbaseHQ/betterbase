@@ -177,6 +177,62 @@ describe2("rewrapAllDEKs compare-and-set (AUD-026)", () => {
     ).toBe(2);
   });
 
+  it2("skips the file leg when the files scope is absent", async () => {
+    // The file-DEK RPCs check the `files` OAuth scope before emptiness, so
+    // sync-only clients are forbidden even for spaces with zero files.
+    // Rotation must complete rather than abort mid-chain (epoch.begin has
+    // already advanced the server by the time this leg runs).
+    const rewrapFileDEKs = vi.fn(async () => ({ ok: true, count: 0 }));
+    const ws = {
+      getDEKs: vi.fn(async () => [
+        { id: "r1", wrapped_dek: dekAt(1, 0x11), seq: 1 },
+      ]),
+      getFileDEKs: vi.fn(async () => {
+        throw new RPCCallError({
+          code: "forbidden",
+          message: "files scope required",
+        });
+      }),
+      rewrapDEKs: vi.fn(async () => ({ ok: true, count: 1 })),
+      rewrapFileDEKs,
+    } as unknown as WSClient;
+
+    const result = await rewrapAllDEKs({
+      ws,
+      spaceId: "s1",
+      currentEpoch: 1,
+      currentKey: keyAt(1),
+      newEpoch: 2,
+      newKey: keyAt(2),
+    });
+
+    expect2(result.dekCount).toBe(1);
+    expect2(result.fileDekCount).toBe(0);
+    expect2(rewrapFileDEKs).not.toHaveBeenCalled();
+  });
+
+  it2("propagates non-scope file-DEK failures", async () => {
+    const ws = {
+      getDEKs: vi.fn(async () => []),
+      getFileDEKs: vi.fn(async () => {
+        throw new RPCCallError({ code: "internal", message: "boom" });
+      }),
+      rewrapDEKs: vi.fn(async () => ({ ok: true, count: 0 })),
+      rewrapFileDEKs: vi.fn(async () => ({ ok: true, count: 0 })),
+    } as unknown as WSClient;
+
+    await expect2(
+      rewrapAllDEKs({
+        ws,
+        spaceId: "s1",
+        currentEpoch: 1,
+        currentKey: keyAt(1),
+        newEpoch: 2,
+        newKey: keyAt(2),
+      }),
+    ).rejects.toThrow();
+  });
+
   it2("throws after exhausting retries on persistent conflict", async () => {
     let submissions = 0;
     const ws = {

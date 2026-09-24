@@ -1170,4 +1170,41 @@ describe("FileStore.transferUnuploadedFrom — connected target (regression)", (
     expect(upload).toHaveBeenCalledTimes(2);
     expect(await store.getQueueEntries()).toEqual([]);
   });
+
+  it("re-scans queue entries rewritten by a space-id migration racing an in-flight pass", async () => {
+    // connect() with a changed spaceId rewrites queued entries under new
+    // cache keys. A pass already in flight scanned the OLD keys and exits
+    // via the no-progress heuristic; connect()'s own queue kick coalesces
+    // into that pass, so without the migration enqueue bump the rewritten
+    // entries strand until the next external kick.
+    let releaseA: () => void = () => {};
+    const gateA = new Promise<void>((r) => (releaseA = r));
+    const upload = vi
+      .fn()
+      .mockImplementation(
+        async (
+          _id: string,
+          _enc: Uint8Array,
+          _w: Uint8Array,
+          recordId: string,
+        ) => {
+          if (recordId === RECORD) await gateA;
+          return { fileId: UUID };
+        },
+      );
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient({ upload })));
+    await store.put(UUID, data(16), RECORD);
+    const firstRun = store.processQueue(); // pass hangs mid-upload on A
+    await new Promise((r) => setTimeout(r, 10)); // let the pass enter A
+
+    await store.connect(
+      syncConfig(makeFilesClient({ upload }), { spaceId: "sp-2" }),
+    );
+    releaseA();
+
+    await firstRun;
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(await store.getQueueEntries()).toEqual([]);
+  });
 });

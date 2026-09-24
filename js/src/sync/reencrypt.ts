@@ -230,11 +230,7 @@ export async function rewrapAllDEKs(
         observed_wrapped_dek: Uint8Array;
       }> = [];
       for (let attempt = 0; ; attempt++) {
-        const fileDeks = await ws.getFileDEKs({
-          space: spaceId,
-          ...(ucan ? { ucan } : {}),
-          since: 0,
-        });
+        const fileDeks = await getFileDEKsIfPermitted(ws, spaceId, ucan);
         rewrappedFiles.length = 0;
         for (const { id, wrapped_dek: wrappedDEK } of fileDeks) {
           const dekEpoch = peekEpoch(wrappedDEK);
@@ -413,11 +409,7 @@ async function rewrapAllDEKsCryptoKey(
         observed_wrapped_dek: Uint8Array;
       }> = [];
       for (let attempt = 0; ; attempt++) {
-        const fileDeks = await ws.getFileDEKs({
-          space: spaceId,
-          ...(ucan ? { ucan } : {}),
-          since: 0,
-        });
+        const fileDeks = await getFileDEKsIfPermitted(ws, spaceId, ucan);
         rewrappedFiles.length = 0;
         rewrappedFiles.push(...(await rewrapDEKList(fileDeks)));
         if (rewrappedFiles.length === 0) break;
@@ -456,6 +448,33 @@ export function peekEpoch(wrappedDEK: Uint8Array): number {
     wrappedDEK.byteOffset,
     wrappedDEK.byteLength,
   ).getUint32(0, false);
+}
+
+/**
+ * Fetch file DEKs, treating a `forbidden` rejection as "none exist".
+ *
+ * The file-DEK RPCs require the `files` OAuth scope — checked before the
+ * server looks at whether the space has any file DEKs. A principal without
+ * that scope cannot own file DEKs (the scope is the authorization), so
+ * rotation for sync-only clients must skip the file leg instead of
+ * aborting mid-chain after `epoch.begin` already advanced the server.
+ * Any other rejection (network, epoch mismatch) propagates.
+ */
+async function getFileDEKsIfPermitted(
+  ws: WSClient,
+  spaceId: string,
+  ucan?: string,
+): Promise<Array<{ id: string; wrapped_dek: Uint8Array }>> {
+  try {
+    return await ws.getFileDEKs({
+      space: spaceId,
+      ...(ucan ? { ucan } : {}),
+      since: 0,
+    });
+  } catch (err) {
+    if (err instanceof RPCCallError && err.code === "forbidden") return [];
+    throw err;
+  }
 }
 
 /**

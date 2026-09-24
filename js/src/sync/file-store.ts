@@ -930,6 +930,14 @@ export class FileStore {
     const oldEntries = await metaGetAllForSpace(db, oldSpaceId);
     if (oldEntries.length === 0) return;
 
+    // A queue pass of OURS in flight means any `uploading` claim was set by
+    // this instance against the OLD key — it will never mark the migrated
+    // copy. Without the reset the copy is invisible to queue scans (they
+    // match only pending/error) and strands for the stale window. With no
+    // pass in flight, a recent `uploading` claim may belong to a peer tab —
+    // preserve it (the stale window recovers) rather than double-upload.
+    const ownPassInFlight = this.currentRun !== null;
+
     for (const oldMeta of oldEntries) {
       const newKey = cacheKey(newSpaceId, oldMeta.fileId);
       const oldBlob = await blobGet(db, oldMeta.key);
@@ -938,12 +946,21 @@ export class FileStore {
         ...oldMeta,
         key: newKey,
         spaceId: newSpaceId,
+        ...(ownPassInFlight && oldMeta.uploadStatus === "uploading"
+          ? { uploadStatus: "pending" as const }
+          : {}),
       };
       if (oldBlob) {
         await putFile(db, newMeta, { key: newKey, data: oldBlob.data });
       } else {
         await metaPut(db, newMeta);
       }
+      // Migration rewrites queued entries under new keys mid-flight: a queue
+      // pass that is already running scanned the old keys and will exit via
+      // the no-progress heuristic without noticing. Bumping the enqueue
+      // counter is what forces a re-scan (and connect()'s own kick
+      // coalesces into the in-flight pass, so it cannot be relied on).
+      if (oldMeta.recordId !== undefined) this.enqueuedCount += 1;
 
       await deleteFile(db, oldMeta.key);
 
