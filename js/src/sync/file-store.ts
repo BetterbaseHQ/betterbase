@@ -321,14 +321,23 @@ function deleteFile(db: IDBDatabase, key: string): Promise<void> {
   });
 }
 
-/** All meta entries queued for upload but not currently in-flight. */
-function metaGetAllQueued(db: IDBDatabase): Promise<MetaEntry[]> {
+/** Queued entries of one space awaiting their first upload: pending or
+ * errored, plus `uploading` entries abandoned by a crash (never one
+ * genuinely in flight — see isStaleUploading). */
+function metaGetAllQueued(
+  db: IDBDatabase,
+  spaceId: string,
+): Promise<MetaEntry[]> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(META_STORE, "readonly");
     const req = tx.objectStore(META_STORE).getAll();
     req.onsuccess = () => {
       const entries = (req.result as MetaEntry[]).filter(
-        (e) => e.uploadStatus === "pending" || e.uploadStatus === "error",
+        (e) =>
+          e.spaceId === spaceId &&
+          (e.uploadStatus === "pending" ||
+            e.uploadStatus === "error" ||
+            isStaleUploading(e)),
       );
       resolve(entries);
     };
@@ -373,7 +382,10 @@ export class FileStore {
   private inflight = new Map<string, Promise<Uint8Array | null>>();
   private urlCache = new Map<string, string>();
   private disposed = false;
-  private processingPromise: Promise<void> | null = null;
+  /** In-flight queue run; see processQueue for the coalescing contract. */
+  private currentRun: Promise<void> | null = null;
+  /** Monotonic count of enqueue writes; drives mid-pass re-scans. */
+  private enqueuedCount = 0;
   private evicting = false;
   private evictRequested = false;
   private version = 0;
@@ -526,6 +538,7 @@ export class FileStore {
       meta.uploadStatus = "pending";
       meta.queuedAt = now;
       meta.attempts = 0;
+      this.enqueuedCount += 1;
     }
 
     await putFile(db, meta, { key, data: fileData });
@@ -594,20 +607,88 @@ export class FileStore {
    * idempotent alongside the adoption merge. Returns the number of files
    * transferred.
    */
+  /**
+   * Copy queued-but-unuploaded files from another (typically anonymous)
+   * store into this one.
+   *
+   * Adoption merges records into the account database, but file bytes live
+   * in the anonymous store's cache — and retirement deletes that cache.
+   * This moves every entry still waiting for its first upload (pending or
+   * errored, plus `uploading` entries abandoned by a crash — never one
+   * genuinely in flight) into this store's upload queue under this store's
+   * space, so a connected store pushes them on its next queue pass.
+   *
+   * Entries are written directly (meta + blob in one transaction) rather
+   * than via put(): put() fires processQueue() per entry, and the queue's
+   * coalescing plus no-progress heuristics would strand every entry after
+   * the first when the target is already connected — with retirement about
+   * to delete the only other copy of those bytes. Exactly one queue pass
+   * is kicked off at the end instead.
+   *
+   * Semantics:
+   * - Idempotent: entries already present here (any state) are skipped.
+   * - The source is left untouched; retirement deletes it once this
+   *   returns. Error history does not carry over (fresh `attempts: 0`).
+   * - Hard-failing: any entry whose bytes exist but cannot be written
+   *   rejects the promise after attempting the rest, so retirement
+   *   (the caller) aborts instead of deleting surviving bytes. Entries
+   *   with no bytes in the source are skipped — nothing to preserve.
+   * - Returns the number of files transferred.
+   */
   async transferUnuploadedFrom(from: FileStore): Promise<number> {
     if (from === this) return 0;
     const fromDb = await from.dbPromise;
-    const queued = await metaGetAllQueued(fromDb);
+    const db = await this.dbPromise;
+    const queued = await metaGetAllQueued(fromDb, from.spaceId);
 
     let transferred = 0;
+    let failed = 0;
     for (const meta of queued) {
-      if (this.disposed || from.disposed) break;
+      if (this.disposed || from.disposed) {
+        throw new Error("FileStore: disposed mid-transfer — source preserved");
+      }
       const blob = await blobGet(fromDb, meta.key);
       if (!blob) continue; // bytes already gone — nothing to preserve
-      const db = await this.dbPromise;
-      if (await metaHas(db, cacheKey(this.spaceId, meta.fileId))) continue;
-      await this.put(meta.fileId, blob.data, meta.recordId);
-      transferred += 1;
+      const key = cacheKey(this.spaceId, meta.fileId);
+      if (await metaHas(db, key)) continue;
+      const now = Date.now();
+      const target: MetaEntry = {
+        key,
+        spaceId: this.spaceId,
+        fileId: meta.fileId,
+        cachedAt: now,
+        lastAccessedAt: now,
+        size: blob.data.byteLength,
+      };
+      if (meta.recordId !== undefined) {
+        target.recordId = meta.recordId;
+        target.uploadStatus = "pending";
+        target.queuedAt = now;
+        target.attempts = 0;
+      }
+      try {
+        await putFile(db, target, { key, data: blob.data });
+        if (target.recordId !== undefined) this.enqueuedCount += 1;
+        transferred += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    if (transferred > 0 || failed > 0) {
+      await this.fireQueueChange(db);
+      if (this.syncConfig) {
+        this.processQueue().catch((err) => {
+          console.warn(
+            "FileStore: background queue processing failed after transfer",
+            err,
+          );
+        });
+      }
+    }
+    if (failed > 0) {
+      throw new Error(
+        `FileStore: ${failed} of ${queued.length} queued files failed to transfer`,
+      );
     }
     return transferred;
   }
@@ -690,16 +771,41 @@ export class FileStore {
 
   /**
    * Process all pending/error uploads in the queue.
+   *
+   * Coalescing contract: a call that arrives while a pass is running awaits
+   * the run in flight AND any follow-up pass its writes necessitate — the
+   * run loop re-scans whenever entries were enqueued mid-pass, so the
+   * caller's writes are always observed before the promise resolves.
+   * (Previously the caller received the in-flight pass's promise, which
+   * could exit via the no-progress heuristic before their entries were
+   * scanned — `await processQueue()` resolving with entries pending.)
+   * Follow-ups trigger on NEW arrivals only; errored entries are retried
+   * by an explicit later pass, never spun on by arrivals.
    */
   async processQueue(): Promise<void> {
     if (!this.syncConfig) return;
-    if (this.processingPromise) return this.processingPromise;
-    this.processingPromise = this.doProcessQueue();
-    try {
-      await this.processingPromise;
-    } finally {
-      this.processingPromise = null;
+    if (this.currentRun) {
+      await this.currentRun;
+      return;
     }
+    this.currentRun = this.runQueueToCompletion();
+    try {
+      await this.currentRun;
+    } finally {
+      this.currentRun = null;
+    }
+  }
+
+  /** Pass loop: re-scan while entries arrive mid-pass. */
+  private async runQueueToCompletion(): Promise<void> {
+    let seen = this.enqueuedCount;
+    do {
+      await this.doProcessQueue();
+      if (this.disposed || this.syncConfig === null) break;
+      const arrived = this.enqueuedCount;
+      if (arrived === seen) break;
+      seen = arrived;
+    } while (true);
   }
 
   private async doProcessQueue(): Promise<void> {
@@ -722,6 +828,9 @@ export class FileStore {
       const remaining = (await metaGetAllForSpace(db, this.spaceId)).filter(
         (m) => m.uploadStatus === "pending" || m.uploadStatus === "error",
       );
+      // No progress (errored entries) → exit rather than spin. Entries that
+      // ARRIVED mid-pass break this too, but they bumped enqueuedCount, so
+      // runQueueToCompletion re-scans once the pass exits.
       if (remaining.length >= countBefore) break;
     }
   }

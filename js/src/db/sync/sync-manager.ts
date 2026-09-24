@@ -230,6 +230,12 @@ export class SyncManager {
       );
       return result;
     }
+    // Records the server permanently refuses are never pushed again
+    // (see pushBatchWithIsolation) — exclude them up front so they stop
+    // failing every batch they land in.
+    dirtyRecords = dirtyRecords.filter(
+      (r) => !this.quarantined.has(`${collection}:${r.id}`),
+    );
 
     if (dirtyRecords.length === 0) {
       return result;
@@ -261,9 +267,8 @@ export class SyncManager {
     for (let offset = 0; offset < total; offset += batchSize) {
       const batch = allOutbound.slice(offset, offset + batchSize);
 
-      let acks;
       try {
-        acks = await this.transport.push(collection, batch);
+        await this.pushBatchWithIsolation(def, batch, pushSnapshots, result);
       } catch (e) {
         result.errors.push(
           this.makeSyncError(
@@ -277,33 +282,89 @@ export class SyncManager {
         break;
       }
 
-      for (const ack of acks) {
-        try {
-          const snapshot = pushSnapshots.get(ack.id);
-          await this.adapter.markSynced(
-            def,
-            ack.id,
-            ack.sequence,
-            snapshot
-              ? {
-                  pending_patches_length: snapshot.pendingPatchesLength,
-                  deleted: snapshot.deleted,
-                  meta: snapshot.meta,
-                }
-              : undefined,
-          );
-          result.pushed++;
-        } catch (e) {
-          result.errors.push(
-            this.makeSyncError("push", collection, ack.id, e, "transient"),
-          );
-        }
-      }
-
       this.reportProgress("push", collection, offset + batch.length, total);
     }
 
     return result;
+  }
+
+  /**
+   * Push one batch, isolating permanently-rejected records by bisection.
+   *
+   * The server validates an entire batch atomically: one unpushable record
+   * (e.g. a non-UUID id the storage layer refuses) rejects everything it
+   * shares a batch with, and since the whole-batch failure carries no
+   * record identity, nothing ever marks the offender — the collection's
+   * push stream wedges forever. On a permanent rejection, split the batch
+   * and retry the halves; a lone rejected record is attributed (and
+   * failure-tracked exactly like the pull side, eventually quarantined),
+   * while its batch-mates go through. Transient/conflict rejections
+   * rethrow for the caller's existing handling.
+   */
+  private async pushBatchWithIsolation(
+    def: CollectionDefHandle,
+    batch: OutboundRecord[],
+    snapshots: Map<
+      string,
+      { pendingPatchesLength: number; deleted: boolean; meta?: unknown }
+    >,
+    result: SyncResult,
+  ): Promise<void> {
+    const collection = def.name;
+    let acks;
+    try {
+      acks = await this.transport.push(collection, batch);
+    } catch (e) {
+      const kind = classifyPushRejection(e);
+      if (kind !== "permanent" || batch.length === 1) {
+        if (kind === "permanent") {
+          const id = batch[0]!.id;
+          result.errors.push(
+            this.makeSyncError("push", collection, id, e, kind),
+          );
+          this.trackFailure(collection, id, kind);
+          return;
+        }
+        throw e;
+      }
+      const mid = Math.ceil(batch.length / 2);
+      await this.pushBatchWithIsolation(
+        def,
+        batch.slice(0, mid),
+        snapshots,
+        result,
+      );
+      await this.pushBatchWithIsolation(
+        def,
+        batch.slice(mid),
+        snapshots,
+        result,
+      );
+      return;
+    }
+
+    for (const ack of acks) {
+      try {
+        const snapshot = snapshots.get(ack.id);
+        await this.adapter.markSynced(
+          def,
+          ack.id,
+          ack.sequence,
+          snapshot
+            ? {
+                pending_patches_length: snapshot.pendingPatchesLength,
+                deleted: snapshot.deleted,
+                meta: snapshot.meta,
+              }
+            : undefined,
+        );
+        result.pushed++;
+      } catch (e) {
+        result.errors.push(
+          this.makeSyncError("push", collection, ack.id, e, "transient"),
+        );
+      }
+    }
   }
 
   private async pullImpl(def: CollectionDefHandle): Promise<SyncResult> {

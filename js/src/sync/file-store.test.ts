@@ -84,6 +84,7 @@ vi.mock("../crypto/webcrypto.js", () => {
 const UUID = "0f0e0d0c-1b2a-3c4d-5e6f-7a8b9c0d1e2f";
 const UUID2 = "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d";
 const RECORD = "9a8b7c6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d";
+const RECORD2 = "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d";
 
 let dbCounter = 0;
 
@@ -1023,5 +1024,150 @@ describe("FileStore.transferUnuploadedFrom", () => {
     const store = freshStore();
     await store.put(UUID, data(8), RECORD);
     expect(await store.transferUnuploadedFrom(store)).toBe(0);
+  });
+});
+
+describe("FileStore.transferUnuploadedFrom — connected target (regression)", () => {
+  // The production topology: the scoped store is already connected when
+  // adoption transfers into it. The original implementation routed through
+  // put(), whose per-entry processQueue() raced the queue's coalescing and
+  // no-progress heuristics, stranding every entry after the first while
+  // retirement deleted the only other copy of those bytes.
+
+  it("transfers every entry into a connected target and uploads all of them", async () => {
+    const upload = vi
+      .fn()
+      .mockImplementation(
+        () =>
+          new Promise((resolve) =>
+            setTimeout(() => resolve({ fileId: UUID }), 20),
+          ),
+      );
+    const from = freshStore();
+    const to = freshStore();
+    await from.put(UUID, data(16), RECORD);
+    await from.put(UUID2, data(24), RECORD);
+
+    await to.connect(syncConfig(makeFilesClient({ upload })));
+    const transferred = await to.transferUnuploadedFrom(from);
+    expect(transferred).toBe(2);
+
+    await to.processQueue();
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(await to.getQueueEntries()).toEqual([]);
+    expect(await to.has(UUID)).toBe(true);
+    expect(await to.has(UUID2)).toBe(true);
+  });
+
+  it("preserves byte lengths through the transfer-and-upload pipeline", async () => {
+    const uploads: number[] = [];
+    const upload = vi
+      .fn()
+      .mockImplementation(async (_id: string, encrypted: Uint8Array) => {
+        uploads.push(encrypted.byteLength);
+        return { fileId: UUID };
+      });
+    const from = freshStore();
+    const to = freshStore();
+    await from.put(UUID, data(98), RECORD);
+    await from.put(UUID2, data(770), RECORD);
+
+    await to.connect(syncConfig(makeFilesClient({ upload })));
+    await to.transferUnuploadedFrom(from);
+    await to.processQueue();
+
+    expect(uploads.length).toBe(2);
+    // decryptable sizes — not the 34-byte empty payloads the bug produced
+    expect(uploads.every((n) => n > 40)).toBe(true);
+  });
+
+  it("includes crash-abandoned uploading entries but never a live one", async () => {
+    const from = freshStore();
+    const to = freshStore();
+    await from.put(UUID, data(16), RECORD);
+    await from.put(UUID2, data(24), RECORD);
+    // UUID2 pretends a upload crashed mid-flight long ago
+    await forceQueueState(from, UUID2, {
+      uploadStatus: "uploading",
+      lastAttemptAt: Date.now() - 60 * 60 * 1000,
+    });
+
+    expect(await to.transferUnuploadedFrom(from)).toBe(2);
+    // A LIVE uploading claim is left alone: the source's two original
+    // entries transfer again (the source is untouched — idempotency is
+    // per-target), but the in-flight claim never moves
+    await from.put(uuidFor(3), data(8), RECORD);
+    await forceQueueState(from, uuidFor(3), {
+      uploadStatus: "uploading",
+      lastAttemptAt: Date.now(),
+    });
+    const second = freshStore();
+    expect(await second.transferUnuploadedFrom(from)).toBe(2);
+    expect(await second.has(uuidFor(3))).toBe(false);
+  });
+
+  it("fails hard when an entry cannot be written, preserving the count of survivors", async () => {
+    const from = freshStore();
+    const to = freshStore();
+    await from.put(UUID, data(16), RECORD);
+    await from.put(UUID2, data(24), RECORD);
+    // Break the target's IDB after open
+    const internal = to as unknown as { dbPromise: Promise<IDBDatabase> };
+    const realDb = await internal.dbPromise;
+    const broken = Object.create(realDb);
+    broken.transaction = () => {
+      throw new Error("quota exceeded");
+    };
+    internal.dbPromise = Promise.resolve(broken as IDBDatabase);
+
+    // Rejects (raw IDB failure propagates) — retirement aborts, source
+    // bytes survive for the retry
+    await expect(to.transferUnuploadedFrom(from)).rejects.toThrow();
+  });
+
+  it("rejects when disposed mid-transfer so retirement aborts", async () => {
+    const from = freshStore();
+    const to = freshStore();
+    await from.put(UUID, data(16), RECORD);
+    await from.put(UUID2, data(24), RECORD);
+    // Dispose after the scan has entries — simulate a scope switch racing
+    to.dispose();
+    await expect(to.transferUnuploadedFrom(from)).rejects.toThrow(
+      /disposed mid-transfer/,
+    );
+  });
+
+  it("awaits a follow-up pass when entries arrive mid-pass", async () => {
+    // Entry A's slow upload is in flight; entry B is enqueued during it.
+    // The caller's processQueue() promise must resolve only after B is
+    // uploaded (previously it resolved after A's pass, B stranded).
+    let releaseA: () => void = () => {};
+    const gateA = new Promise<void>((r) => (releaseA = r));
+    const upload = vi
+      .fn()
+      .mockImplementation(
+        async (
+          _id: string,
+          _enc: Uint8Array,
+          _w: Uint8Array,
+          recordId: string,
+        ) => {
+          if (recordId === RECORD) await gateA; // first entry hangs until released
+          return { fileId: UUID };
+        },
+      );
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient({ upload })));
+
+    await store.put(UUID, data(16), RECORD);
+    const firstRun = store.processQueue(); // starts pass, hangs on A
+    await new Promise((r) => setTimeout(r, 10)); // let the pass enter A
+    const secondCall = store.processQueue(); // arrives mid-pass
+    await store.put(UUID2, data(24), RECORD2); // B enqueued mid-pass
+    releaseA();
+
+    await Promise.all([firstRun, secondCall]);
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(await store.getQueueEntries()).toEqual([]);
   });
 });

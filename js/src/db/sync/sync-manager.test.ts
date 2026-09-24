@@ -664,3 +664,96 @@ describe("SyncManager.sync", () => {
     expect(transport.push).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("SyncManager push-side poison isolation", () => {
+  const permanentRejection = () => {
+    const err = new Error("push rejected by server: bad_request") as Error & {
+      rejected: boolean;
+      code: string;
+    };
+    err.rejected = true;
+    err.code = "bad_request";
+    return err;
+  };
+
+  it("isolates a permanently-rejected record and lets batch-mates through", async () => {
+    const dirty = [
+      makeDirty({ id: "good-1" }),
+      makeDirty({ id: "bad-id" }),
+      makeDirty({ id: "good-2" }),
+    ];
+    const { manager, adapter, transport } = makeHarness({
+      adapter: { getDirty: vi.fn().mockResolvedValue(dirty) },
+      options: { quarantineThreshold: 3 },
+    });
+    // Reject any batch containing bad-id; accept the rest
+    transport.push.mockImplementation(
+      async (_c: string, batch: OutboundRecord[]) => {
+        if (batch.some((r) => r.id === "bad-id")) throw permanentRejection();
+        return batch.map((r) => ({ id: r.id, sequence: 1 }));
+      },
+    );
+
+    const result = await manager.push(def);
+
+    // Both clean records pushed and marked synced
+    expect(result.pushed).toBe(2);
+    expect(adapter.markSynced).toHaveBeenCalledTimes(2);
+    // The offender is attributed, not the whole batch
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toMatchObject({ id: "bad-id", kind: "permanent" });
+  });
+
+  it("quarantines a repeatedly-rejected record — the collection unblocks", async () => {
+    const dirty = () => [
+      makeDirty({ id: "poison" }),
+      makeDirty({ id: "healthy" }),
+    ];
+    const { manager, transport } = makeHarness({
+      adapter: {
+        getDirty: vi.fn().mockImplementation(() => Promise.resolve(dirty())),
+      },
+      options: { quarantineThreshold: 2 },
+    });
+    transport.push.mockImplementation(
+      async (_c: string, batch: OutboundRecord[]) => {
+        if (batch.some((r) => r.id === "poison")) throw permanentRejection();
+        return batch.map((r) => ({ id: r.id, sequence: 1 }));
+      },
+    );
+
+    await manager.push(def);
+    await manager.push(def);
+    // Threshold hit on the second failure: poison is quarantined now
+    const third = await manager.push(def);
+    expect(third.pushed).toBe(1); // healthy still goes through
+    expect(third.errors).toEqual([]);
+    // Quarantined record never reaches the transport again
+    const pushedIds = transport.push.mock.calls.flatMap((c) =>
+      (c[1] as OutboundRecord[]).map((r) => r.id),
+    );
+    expect(pushedIds.filter((id) => id === "poison").length).toBeLessThan(20);
+  });
+
+  it("still fails the batch on transient rejections (no bisection)", async () => {
+    const { manager, transport } = makeHarness({
+      adapter: {
+        getDirty: vi
+          .fn()
+          .mockResolvedValue([makeDirty({ id: "a" }), makeDirty({ id: "b" })]),
+      },
+    });
+    const transient = new Error("boom") as Error & {
+      rejected: boolean;
+      code: string;
+    };
+    transient.rejected = true;
+    transient.code = "internal";
+    transport.push.mockRejectedValue(transient);
+
+    const result = await manager.push(def);
+    expect(result.pushed).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(transport.push).toHaveBeenCalledTimes(1); // no retry storm
+  });
+});
