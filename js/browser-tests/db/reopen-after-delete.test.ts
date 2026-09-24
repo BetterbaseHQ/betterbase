@@ -19,16 +19,26 @@ describe("reopen after delete in a live page", () => {
     const users = buildUsersCollection();
     const a = await openFreshOpfsDb([users]);
     const b = await openFreshOpfsDb([users]);
-    await a.db.put(users, { name: "alice", email: "alice@example.com", age: 30 });
+    await a.db.put(users, {
+      name: "alice",
+      email: "alice@example.com",
+      age: 30,
+    });
     await b.db.put(users, { name: "bob", email: "bob@example.com", age: 40 });
 
     // Retirement timing: deletion starts while A is still open (the app's
     // deferred close hasn't released the leader lock yet), so it queues,
     // then completes after the close.
-    const worker = new Worker(new URL("./opfs-test-worker.ts", import.meta.url), {
-      type: "module",
+    const worker = new Worker(
+      new URL("./opfs-test-worker.ts", import.meta.url),
+      {
+        type: "module",
+      },
+    );
+    const deleting = deleteDatabase(a.dbName, {
+      worker,
+      lockTimeoutMs: 10_000,
     });
-    const deleting = deleteDatabase(a.dbName, { worker, lockTimeoutMs: 10_000 });
     await new Promise((r) => setTimeout(r, 300));
     await a.db.close();
     await deleting;
@@ -51,7 +61,11 @@ describe("reopen after delete in a live page", () => {
         }
       });
     });
-    await reopened.put(users, { name: "carol", email: "carol@example.com", age: 22 });
+    await reopened.put(users, {
+      name: "carol",
+      email: "carol@example.com",
+      age: 22,
+    });
     await Promise.race([
       gotPut,
       new Promise((_, reject) =>

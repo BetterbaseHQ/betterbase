@@ -107,4 +107,23 @@ describe("deleteDatabase", () => {
     expect(await reopened.getAll(users)).toHaveLength(0);
     await reopened.close();
   });
+
+  it("is idempotent: deleting an already-deleted name succeeds", async () => {
+    const users = buildUsersCollection();
+    const { db, dbName } = await openFreshOpfsDb([users]);
+    await db.close();
+
+    const worker = new Worker(
+      new URL("./opfs-test-worker.ts", import.meta.url),
+      {
+        type: "module",
+      },
+    );
+    await deleteDatabase(dbName, { worker });
+    await deleteDatabase(dbName, {
+      worker: new Worker(new URL("./opfs-test-worker.ts", import.meta.url), {
+        type: "module",
+      }),
+    });
+  });
 });

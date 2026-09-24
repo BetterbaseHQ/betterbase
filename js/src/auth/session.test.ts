@@ -82,6 +82,45 @@ function seedState(): void {
   );
 }
 
+describe("AuthSession storagePrefix isolation", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("restore reads only this prefix's slot — apps on a shared origin never see each other's sessions", async () => {
+    // tasks' session lives under its prefix; the default slot holds
+    // another app's (still valid-looking) state.
+    localStorage.setItem(
+      "betterbase_session_tasks_state",
+      JSON.stringify({
+        accessToken: "tasks-access",
+        refreshToken: "tasks-refresh",
+        expiresAt: Date.now() + 3600_000,
+      }),
+    );
+    localStorage.setItem(
+      "betterbase_session_state",
+      JSON.stringify({
+        accessToken: "other-access",
+        refreshToken: "other-refresh",
+        expiresAt: Date.now() + 3600_000,
+      }),
+    );
+
+    const client = {
+      refreshToken: vi.fn(async () => {
+        throw new Error("should not refresh — token is fresh");
+      }),
+    };
+    const session = await AuthSession.restore({
+      ...makeConfig(client),
+      storagePrefix: "betterbase_session_tasks_",
+    });
+    expect(session).not.toBeNull();
+    expect(await session!.getToken()).toBe("tasks-access");
+  });
+});
+
 describe("AuthSession AUD-010: refresh fencing across destroy()", () => {
   beforeEach(() => {
     localStorage.clear();

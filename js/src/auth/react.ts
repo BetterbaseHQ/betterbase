@@ -105,7 +105,11 @@ export function useAuthSession(
 
         if (result) {
           const session = await AuthSession.create(
-            { client, onExpired },
+            // Forward the client's storage prefix so the session's
+            // localStorage slot and key scope match — without this, apps
+            // on a shared origin collide on the default slot even with
+            // distinct AuthProvider storagePrefix props.
+            { client, onExpired, storagePrefix: client.storagePrefix },
             result,
           );
           if (cancelled) return;
@@ -113,7 +117,11 @@ export function useAuthSession(
           return;
         }
 
-        const restored = await AuthSession.restore({ client, onExpired });
+        const restored = await AuthSession.restore({
+          client,
+          onExpired,
+          storagePrefix: client.storagePrefix,
+        });
         if (cancelled) return;
 
         if (restored) {
@@ -205,8 +213,11 @@ export function useSessionToken(
 
   useEffect(() => {
     if (!session) return;
+    const storageKey = session.getStorageKey();
     const onStorage = (e: StorageEvent) => {
-      if (e.key && e.key.endsWith("state")) {
+      // Only this session's own slot — apps sharing an origin have their
+      // own prefixed slots, and their writes are not identity changes here.
+      if (e.key === storageKey) {
         setIdentityVersion((v) => v + 1);
       }
     };

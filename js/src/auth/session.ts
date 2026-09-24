@@ -69,6 +69,11 @@ export class AuthSession {
   private storageListener: ((e: StorageEvent) => void) | null = null;
   private config: AuthSessionConfig;
   private storageKey: string;
+
+  /** The localStorage slot this session persists to (used to filter storage events). */
+  getStorageKey(): string {
+    return this.storageKey;
+  }
   private disposed = false;
   /**
    * Bumped on every cleanup (destroy/dispose/cross-tab logout). Async work

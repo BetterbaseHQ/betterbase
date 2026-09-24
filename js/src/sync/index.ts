@@ -25,7 +25,7 @@ export type {
 } from "./files.js";
 
 // File store (encrypted file cache)
-export { FileStore } from "./file-store.js";
+export { FileStore, deleteFileCacheDatabase } from "./file-store.js";
 export type {
   FileStoreConfig,
   FileStoreSyncConfig,

@@ -136,6 +136,8 @@ export class SyncEngine {
   private _listeners = new Set<() => void>();
   private _disposed = false;
   private _bootstrapping = false;
+  /** Set once BOOTSTRAP_COMPLETE dispatched; reconnects before it mean bootstrap failed. */
+  private _bootstrapComplete = false;
 
   private scheduler: SyncScheduler;
   private transport: WSTransport;
@@ -401,6 +403,13 @@ export class SyncEngine {
         // flush → subscribe → flush explicitly. Firing a background flushAll
         // here would race with bootstrap and the test's item creation.
         if (engine._bootstrapping) return;
+        // A reconnect before bootstrap completed means the initial run
+        // failed (ERROR leaves phase below "ready" with no retry path).
+        // The reconnect is the recovery point: finish the sequence.
+        if (!engine._bootstrapComplete) {
+          void engine.recoverBootstrap();
+          return;
+        }
         const t = engine.transport;
         if (t) {
           t.subscribe()
@@ -618,7 +627,9 @@ export class SyncEngine {
     this.dispatch({ type: "BOOTSTRAP_START" });
     try {
       await this.transport.connect();
+      if (this._disposed) return;
       await this.scheduler.flushAll();
+      if (this._disposed) return;
       this.spaceManager.checkInvitations(this.privateKeyJwk).catch((err) => {
         console.error(
           "[betterbase-sync] Failed to check invitations during bootstrap:",
@@ -626,12 +637,15 @@ export class SyncEngine {
         );
       });
       const activated = await this.spaceManager.initializeFromSpaces();
+      if (this._disposed) return;
       if (activated > 0) {
         await this.scheduler.flushAll();
       }
       await this.transport.subscribe();
+      if (this._disposed) return;
       await this.scheduler.flushAll();
       this._bootstrapping = false;
+      this._bootstrapComplete = true;
       this.dispatch({ type: "BOOTSTRAP_COMPLETE" });
       this.fileStore.processQueue().catch((err) => {
         console.error(
@@ -644,6 +658,43 @@ export class SyncEngine {
       this.dispatch({
         type: "ERROR",
         error: err instanceof Error ? err.message : "Initial sync failed",
+      });
+    }
+  }
+
+  /**
+   * Bootstrap recovery after the initial run failed and the WS
+   * reconnected: complete the remaining sequence (subscribe → flush →
+   * activate shared spaces → flush) and dispatch BOOTSTRAP_COMPLETE so
+   * `phase === "ready"` gating (one-time seeding, shared-space
+   * activation) works despite a transient startup failure. Further
+   * failures dispatch ERROR and wait for the next reconnect.
+   */
+  private async recoverBootstrap(): Promise<void> {
+    this._bootstrapping = true;
+    try {
+      await this.transport.subscribe();
+      if (this._disposed) return;
+      await this.scheduler.flushAll();
+      const activated = await this.spaceManager.initializeFromSpaces();
+      if (this._disposed) return;
+      if (activated > 0) {
+        await this.scheduler.flushAll();
+      }
+      this._bootstrapping = false;
+      this._bootstrapComplete = true;
+      this.dispatch({ type: "BOOTSTRAP_COMPLETE" });
+      this.fileStore.processQueue().catch((err) => {
+        console.error(
+          "[betterbase-sync] Failed to process file queue after bootstrap recovery:",
+          err,
+        );
+      });
+    } catch (err) {
+      this._bootstrapping = false;
+      this.dispatch({
+        type: "ERROR",
+        error: err instanceof Error ? err.message : "Sync recovery failed",
       });
     }
   }

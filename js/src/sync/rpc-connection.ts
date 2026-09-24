@@ -203,10 +203,17 @@ export class RpcConnection {
 
     const ws = new WebSocket(this.config.url, "betterbase-rpc-v1");
     ws.binaryType = "arraybuffer";
+    // Assign immediately so close() can also cancel a CONNECTING socket:
+    // WebSocket.close() during CONNECTING fails the connection without
+    // it ever opening. Without this, a dispose() landing mid-connect left
+    // the pending socket to open, authenticate, and leak.
+    this.ws = ws;
+
+    let everOpened = false;
 
     return new Promise<void>((resolve, reject) => {
       ws.onopen = () => {
-        this.ws = ws;
+        everOpened = true;
         this.openedAt = Date.now();
         // Send token as first frame (over encrypted TLS channel)
         this.sendRaw({
@@ -219,7 +226,7 @@ export class RpcConnection {
       };
 
       ws.onerror = () => {
-        if (!this.ws) {
+        if (!everOpened) {
           reject(new Error("WebSocket connection failed"));
         }
       };

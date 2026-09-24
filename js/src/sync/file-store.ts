@@ -212,6 +212,34 @@ function cacheKey(spaceId: string, fileId: string): string {
   return `${spaceId}\0${fileId}`;
 }
 
+/**
+ * Delete a file-cache IndexedDB database (default: the shared anonymous
+ * cache). Used to retire an adopted anonymous workspace's cached blobs
+ * alongside its record database — plaintext local-only blobs must not
+ * linger after their records moved to the account.
+ *
+ * Open connections cooperate: deleteDatabase fires `versionchange`, the
+ * shared connection's handler closes it, and the deletion proceeds. If
+ * the database is missing, resolves without error.
+ */
+export async function deleteFileCacheDatabase(
+  dbName: string = IDB_NAME,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(dbName);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+    req.onblocked = () => {
+      // A connection that refuses to close (shouldn't happen — ours close
+      // on versionchange). Don't hang forever.
+      console.warn(
+        `FileStore: deleting ${dbName} blocked by an open connection`,
+      );
+      resolve();
+    };
+  });
+}
+
 // -- meta store helpers --
 
 function metaGet(db: IDBDatabase, key: string): Promise<MetaEntry | undefined> {

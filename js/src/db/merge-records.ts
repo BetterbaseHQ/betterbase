@@ -38,7 +38,9 @@ export interface MergeDatabaseRecordsOptions {
  *   device, and adoption must not resurrect it (put onto a tombstone is
  *   rejected by the store anyway).
  *
- * Throws when a bulk write reports per-record errors — callers run this
+ * Throws when a bulk write reports per-record errors other than
+ * unique-index collisions (those are skipped with a warning — the target
+ * already holds the data under another identity). Callers run this
  * during a scope switch where a silent partial merge would hide data.
  */
 export async function mergeDatabaseRecords(
@@ -50,8 +52,16 @@ export async function mergeDatabaseRecords(
     const records = await source.getAll(def);
     if (records.length === 0) continue;
 
-    const alive = new Set(
+    // One read for each disposition: alive ids re-write (CRDT update),
+    // tombstoned ids skip. Tombstones = present with includeDeleted but
+    // absent from the alive read — cheaper than a per-record get.
+    const aliveIds = new Set(
       (await target.getAll(def)).map(
+        (r) => (r as Record<string, unknown>).id as string,
+      ),
+    );
+    const knownIds = new Set(
+      (await target.getAll(def, { includeDeleted: true })).map(
         (r) => (r as Record<string, unknown>).id as string,
       ),
     );
@@ -67,16 +77,13 @@ export async function mergeDatabaseRecords(
         createdAt?: unknown;
       };
       const id = rest["id"] as string;
-      if (alive.has(id)) {
+      if (aliveIds.has(id) || !knownIds.has(id)) {
         // Alive in the target: re-write so new local edits merge in
-        // (CRDT update descending from the shared history). createdAt is
-        // stripped — it is auto-managed and immutable per record.
+        // (createdAt stripped — auto-managed and immutable per record).
+        // Unknown to the target: write.
         writes.push(rest);
-        continue;
       }
-      const known = await target.get(def, id, { includeDeleted: true });
-      // Tombstoned in the target: respect the deletion. Unknown: write.
-      if (known === null) writes.push(rest);
+      // else: tombstoned in the target — respect the deletion.
     }
     if (writes.length === 0) continue;
 
@@ -85,9 +92,25 @@ export async function mergeDatabaseRecords(
       writes as Parameters<Database["bulkPut"]>[1],
     );
     if (result.errors.length > 0) {
-      throw new Error(
-        `mergeDatabaseRecords: bulkPut failed for ${def.name}: ${JSON.stringify(result.errors[0])}`,
+      // A unique-index collision (identical distinct fields under a
+      // different record id — e.g. two "default" records seeded
+      // independently) means the target already holds this data under
+      // another identity: skip those records rather than fail the whole
+      // adoption. Any other per-record failure is a real error — the
+      // merge is idempotent, so callers can safely retry.
+      const fatal = result.errors.filter(
+        (e) => !/unique/i.test(String((e as { error?: unknown }).error ?? e)),
       );
+      if (fatal.length > 0) {
+        throw new Error(
+          `mergeDatabaseRecords: bulkPut failed for ${def.name}: ${JSON.stringify(fatal[0])}`,
+        );
+      }
+      console.warn(
+        `[betterbase-db] mergeDatabaseRecords: skipped ${result.errors.length} record(s) with unique-field collisions in ${def.name}`,
+      );
+      merged += writes.length - result.errors.length;
+      continue;
     }
     merged += writes.length;
   }

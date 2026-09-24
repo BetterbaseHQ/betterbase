@@ -25,12 +25,36 @@ import { fetchServerMetadata } from "../discovery/metadata.js";
 import type { ServerMetadata } from "../discovery/types.js";
 import { KeyStore } from "./key-store.js";
 
+/** Cheap shape check for cached metadata — fails closed to a refetch. */
+function isPlausibleMetadata(meta: unknown): meta is ServerMetadata {
+  const m = meta as Partial<ServerMetadata> | null;
+  return (
+    typeof m === "object" &&
+    m !== null &&
+    typeof m.accountsEndpoint === "string" &&
+    m.accountsEndpoint.length > 0 &&
+    typeof m.jwksUri === "string" &&
+    m.jwksUri.length > 0
+  );
+}
+
 export class OAuthClient {
   private config: OAuthConfig;
   private metadataPromise: Promise<ServerMetadata> | null = null;
 
   constructor(config: OAuthConfig) {
     this.config = config;
+  }
+
+  /**
+   * The configured storage prefix, if any. Session construction
+   * (`AuthSession.create`/`restore`) must forward this so the session's
+   * localStorage slot and key scope match the client's — otherwise apps
+   * sharing an origin collide on the default slot even with distinct
+   * `storagePrefix`s on their `AuthProvider`s.
+   */
+  get storagePrefix(): string | undefined {
+    return this.config.storagePrefix;
   }
 
   /** Lazily fetch (and persist) server metadata from the domain's .well-known endpoint. */
@@ -43,10 +67,10 @@ export class OAuthClient {
 
   /**
    * Discovery with a localStorage cache: a fresh fetch on every page load
-   * puts a network round-trip (plus a WSSP validation) on the critical
-   * path before tokens can refresh or sessions restore. Cache for 1h;
-   * fall back to stale metadata when the fetch fails (offline-first).
-   * Metadata is public server config, never per-user secrets.
+   * puts a network round-trip on the critical path before tokens can
+   * refresh or sessions restore. Cache for 1h; fall back to stale metadata
+   * when the fetch fails (offline-first). Metadata is public server
+   * config, never per-user secrets.
    */
   private async fetchMetadataCached(): Promise<ServerMetadata> {
     const cacheKey = `betterbase_metadata_${this.config.domain}`;
@@ -58,6 +82,10 @@ export class OAuthClient {
     } catch {
       // Corrupt cache entry — ignore and refetch.
     }
+    // Validate on every read (cache hit or stale fallback): a tampered or
+    // corrupt-shape entry must fail closed to a refetch, not surface as
+    // `undefined` endpoints downstream.
+    if (cached && !isPlausibleMetadata(cached.metadata)) cached = null;
     if (cached && Date.now() - cached.fetchedAt < TTL_MS) {
       return cached.metadata;
     }
