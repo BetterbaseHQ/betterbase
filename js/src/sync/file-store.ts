@@ -321,6 +321,21 @@ function deleteFile(db: IDBDatabase, key: string): Promise<void> {
   });
 }
 
+/** All meta entries queued for upload but not currently in-flight. */
+function metaGetAllQueued(db: IDBDatabase): Promise<MetaEntry[]> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(META_STORE, "readonly");
+    const req = tx.objectStore(META_STORE).getAll();
+    req.onsuccess = () => {
+      const entries = (req.result as MetaEntry[]).filter(
+        (e) => e.uploadStatus === "pending" || e.uploadStatus === "error",
+      );
+      resolve(entries);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // FileStore
 // ---------------------------------------------------------------------------
@@ -562,6 +577,39 @@ export class FileStore {
     } finally {
       this.inflight.delete(key);
     }
+  }
+
+  /**
+   * Copy queued-but-unuploaded files from another (typically anonymous)
+   * store into this one.
+   *
+   * Adoption merges records into the account database, but file bytes live
+   * in the anonymous store's cache — and retirement deletes that cache.
+   * This moves every entry still waiting for its first upload (pending or
+   * errored; never one genuinely in-flight) into this store's upload queue:
+   * `put` re-enqueues under the owning record id, so a connected store
+   * pushes them to the server on its next queue pass.
+   *
+   * Entries already present here are skipped, making the transfer
+   * idempotent alongside the adoption merge. Returns the number of files
+   * transferred.
+   */
+  async transferUnuploadedFrom(from: FileStore): Promise<number> {
+    if (from === this) return 0;
+    const fromDb = await from.dbPromise;
+    const queued = await metaGetAllQueued(fromDb);
+
+    let transferred = 0;
+    for (const meta of queued) {
+      if (this.disposed || from.disposed) break;
+      const blob = await blobGet(fromDb, meta.key);
+      if (!blob) continue; // bytes already gone — nothing to preserve
+      const db = await this.dbPromise;
+      if (await metaHas(db, cacheKey(this.spaceId, meta.fileId))) continue;
+      await this.put(meta.fileId, blob.data, meta.recordId);
+      transferred += 1;
+    }
+    return transferred;
   }
 
   /**

@@ -966,3 +966,62 @@ describe("FileStore LRU eviction", () => {
     });
   });
 });
+
+describe("FileStore.transferUnuploadedFrom", () => {
+  it("moves queued-but-unuploaded files into the target queue", async () => {
+    const from = freshStore();
+    const to = freshStore();
+    await from.put(UUID, data(16), RECORD);
+    await from.put(UUID2, data(24), RECORD);
+
+    const transferred = await to.transferUnuploadedFrom(from);
+    expect(transferred).toBe(2);
+
+    // Target now has both files queued with their owning record
+    const entries = await to.getQueueEntries();
+    expect(entries.map((e) => e.fileId).sort()).toEqual([UUID, UUID2].sort());
+    expect(entries.every((e) => e.recordId === RECORD)).toBe(true);
+    expect(await to.get(UUID)).toEqual(data(16));
+    expect(await to.get(UUID2)).toEqual(data(24));
+  });
+
+  it("skips entries already present in the target", async () => {
+    const from = freshStore();
+    const to = freshStore();
+    await from.put(UUID, data(16), RECORD);
+    await to.put(UUID, data(16), RECORD);
+
+    expect(await to.transferUnuploadedFrom(from)).toBe(0);
+    expect(await to.getQueueEntries()).toHaveLength(1);
+  });
+
+  it("ignores cache-only files without an upload queue entry", async () => {
+    const from = freshStore();
+    const to = freshStore();
+    await from.put(UUID, data(16)); // no recordId — local cache only
+
+    expect(await to.transferUnuploadedFrom(from)).toBe(0);
+    expect(await to.getQueueEntries()).toEqual([]);
+  });
+
+  it("uploads transferred files once the target is connected", async () => {
+    const from = freshStore();
+    const upload = vi.fn().mockResolvedValue({ fileId: UUID });
+    const to = freshStore();
+    await from.put(UUID, data(32), RECORD);
+
+    await to.transferUnuploadedFrom(from);
+    await to.connect(syncConfig(makeFilesClient({ upload })));
+    await to.processQueue();
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(await to.getQueueEntries()).toEqual([]);
+    expect(await to.has(UUID)).toBe(true);
+  });
+
+  it("returns 0 for a self transfer", async () => {
+    const store = freshStore();
+    await store.put(UUID, data(8), RECORD);
+    expect(await store.transferUnuploadedFrom(store)).toBe(0);
+  });
+});
