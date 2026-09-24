@@ -92,3 +92,17 @@ export function buildDocsCollection() {
 }
 
 export type DocsCollection = ReturnType<typeof buildDocsCollection>;
+
+/** Objects-with-id array collection (embedded-item merge tests). */
+export function buildBoardCollection() {
+  return collection("boards")
+    .v(1, {
+      title: t.string(),
+      cards: t.array(
+        t.object({ id: t.string(), text: t.text(), done: t.boolean() }),
+      ),
+    })
+    .build();
+}
+
+export type BoardCollection = ReturnType<typeof buildBoardCollection>;

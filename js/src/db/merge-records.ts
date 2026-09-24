@@ -135,13 +135,33 @@ export async function mergeDatabaseRecords(
     // and text fields against the supplied base, so the union view applies
     // as pure additions instead of racing the field-level conflict
     // resolution (a full-value put without a base can silently lose to the
-    // existing record's newer field states).
+    // existing record's newer field states). Each patch is one
+    // getWithBase + patch round-trip — batching needs engine work (a
+    // base-aware patch_many) and is recorded as follow-up.
     for (const { id, fields } of patches) {
       const { base } = await target.getWithBase(def, id);
-      await target.patch(def, { id, ...fields } as never, {
-        base: base ?? undefined,
-      });
-      merged++;
+      try {
+        await target.patch(def, { id, ...fields } as never, {
+          base: base ?? undefined,
+        });
+        merged++;
+      } catch (e) {
+        // Same tolerance as the bulkPut path: a record deleted while the
+        // merge was in flight (e.g. a remote tombstone landing via a
+        // concurrent sync) or a unique-field collision means "skip this
+        // record", not "fail the adoption" — the merge is idempotent and
+        // a thrown error here blocks the login path.
+        const msg = String((e as Error)?.message ?? e);
+        if (/deleted|not found|unique/i.test(msg)) {
+          console.warn(
+            `[betterbase-db] mergeDatabaseRecords: skipped ${def.name}/${id}: ${msg}`,
+          );
+          continue;
+        }
+        throw new Error(
+          `mergeDatabaseRecords: patch failed for ${def.name}/${id}: ${msg}`,
+        );
+      }
     }
   }
   return merged;
@@ -159,6 +179,17 @@ const SKIPPED_FIELDS = new Set(["id", "createdAt", "updatedAt", "_spaceId"]);
  * absent (or null) on the winning side copy from the other.
  * `createdAt`/`updatedAt` stay absent so the store autofills them — the
  * merged view must land as a fresh edit.
+ *
+ * Approximations (deliberate, adoption-scoped):
+ * - Nested plain objects take the winner's whole value — per-key merge at
+ *   depth 2+ would need schema awareness.
+ * - Element-level deletions are not detected: an item removed from an
+ *   embedded array on the target while the source still holds it is
+ *   re-added by the union (the inverse trade-off of the record-level
+ *   tombstone rule, which is respected).
+ * - A field whose shape drifted between the two records (array on one
+ *   side, scalar on the other) keeps the winner's value and warns —
+ *   shapes are compared at runtime, not against the schema.
  */
 function mergeRecordFields(
   target: Record<string, unknown>,
@@ -188,6 +219,13 @@ function mergeRecordFields(
       fields[key] = value;
     } else if (Array.isArray(current) && Array.isArray(value)) {
       fields[key] = unionArrays(current, value);
+    } else if (Array.isArray(current) !== Array.isArray(value)) {
+      // Shape drift between the two records: keep the winner's value but
+      // say so — silently dropping a side's array is the data-loss class
+      // this merge exists to prevent.
+      console.warn(
+        `[betterbase-db] mergeDatabaseRecords: field ${key} has conflicting shapes (array vs non-array); keeping the newer record's value`,
+      );
     }
   }
   return { fields };
@@ -195,10 +233,12 @@ function mergeRecordFields(
 
 /**
  * Union two arrays without duplicating elements. Objects with an `id`
- * dedupe by identity (conflicts keep the target's version — the account
- * side is authoritative); anything else dedupes by value.
+ * dedupe by identity — on conflict the FIRST argument's version wins, and
+ * callers pass the overall merge winner's array first, so element
+ * conflicts resolve consistently with the scalar policy (whichever
+ * record was written later). Anything else dedupes by value.
  */
-function unionArrays(targetArr: unknown[], sourceArr: unknown[]): unknown[] {
+function unionArrays(winnerArr: unknown[], loserArr: unknown[]): unknown[] {
   const keyOf = (el: unknown): string => {
     if (el !== null && typeof el === "object" && "id" in el) {
       return `id:${String((el as { id: unknown }).id)}`;
@@ -206,8 +246,8 @@ function unionArrays(targetArr: unknown[], sourceArr: unknown[]): unknown[] {
     return `v:${JSON.stringify(el) ?? String(el)}`;
   };
   const out = new Map<string, unknown>();
-  for (const el of targetArr) out.set(keyOf(el), el);
-  for (const el of sourceArr) {
+  for (const el of winnerArr) out.set(keyOf(el), el);
+  for (const el of loserArr) {
     const key = keyOf(el);
     if (!out.has(key)) out.set(key, el);
   }

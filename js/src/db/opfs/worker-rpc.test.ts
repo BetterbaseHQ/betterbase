@@ -396,7 +396,7 @@ describe("RpcClient lifecycle fail-fast (issue #4 hardening)", () => {
     expect(Date.now() - start).toBeLessThan(1_000);
   });
 
-  it("terminate() makes subsequent calls throw synchronously", async () => {
+  it("terminate() makes subsequent calls reject immediately", async () => {
     const t = createMockTransport();
     const client = new RpcClient(t.transport);
     client.terminate();

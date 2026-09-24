@@ -14,6 +14,7 @@ import {
   cleanupOpfsDb,
   buildUsersCollection,
   buildDocsCollection,
+  buildBoardCollection,
 } from "./opfs-helpers.js";
 import type { Database } from "../../src/db/index.js";
 
@@ -310,5 +311,49 @@ describe("mergeDatabaseRecords", () => {
     const after = (await target.db.getAll(docs))[0];
     expect(after.note).toBe("from-anonymous");
     expect(after.title).toBe("t2");
+  });
+
+  it("unions arrays of objects by element id, keeping the merge winner's version on conflict", async () => {
+    const boards = buildBoardCollection();
+    const source = await openFreshOpfsDb([boards]);
+    const target = await openFreshOpfsDb([boards]);
+    openDbs.push(source.db, target.db);
+
+    // Source (anonymous) written LATER — its element edits win conflicts.
+    const src = await target.db.put(boards, {
+      title: "b",
+      cards: [
+        { id: "c1", text: "target version", done: false },
+        { id: "c2", text: "target only", done: false },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 25));
+    await source.db.put(
+      boards,
+      {
+        title: "b2",
+        cards: [
+          { id: "c1", text: "source version", done: true },
+          { id: "c3", text: "source only", done: false },
+        ],
+      },
+      { id: src.id },
+    );
+
+    await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [boards],
+    });
+    const after = (await target.db.getAll(boards))[0];
+    const byId = new Map(after.cards.map((c) => [c.id, c]));
+    // All three elements present (union, no duplication)...
+    expect([...byId.keys()].sort()).toEqual(["c1", "c2", "c3"]);
+    // ...and the conflict keeps the newer side's version.
+    expect(byId.get("c1")).toEqual({
+      id: "c1",
+      text: "source version",
+      done: true,
+    });
   });
 });

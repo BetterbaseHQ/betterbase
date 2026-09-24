@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const releaseMock = vi.fn();
 const rpcCallMock = vi.fn();
+const rpcTerminateMock = vi.fn();
 
 vi.mock("./leader-election.js", () => ({
   electLeader: vi.fn(),
@@ -32,7 +33,7 @@ vi.mock("./worker-rpc.js", () => ({
     call = (...args: unknown[]) => rpcCallMock(...args);
     replaceTransport = vi.fn();
     resubscribeAll = vi.fn();
-    terminate = vi.fn();
+    terminate = rpcTerminateMock;
   },
 }));
 
@@ -96,6 +97,7 @@ describe("TabCoordinator failure handling (AUD-023)", () => {
     FakeBroadcastChannel.instances = [];
     releaseMock.mockClear();
     rpcCallMock.mockReset();
+    rpcTerminateMock.mockReset();
     promoteCallback = null;
     electLeaderMock.mockImplementation(
       async (_db: string, onPromoted: () => void) => {
@@ -152,5 +154,10 @@ describe("TabCoordinator failure handling (AUD-023)", () => {
     );
 
     await result.close();
+
+    // Fail-fast hardening: close() terminates the RpcClient so any
+    // post-close call through a retained Database handle rejects
+    // immediately instead of hanging for the full RPC timeout.
+    expect(rpcTerminateMock).toHaveBeenCalled();
   });
 });

@@ -173,6 +173,7 @@ export class RouterPort implements RpcTransport {
   private router: WorkerRouter;
   private messageHandler: ((msg: WorkerToMainMessage) => void) | null = null;
   private errorHandler: ((error: Error) => void) | null = null;
+
   constructor(router: WorkerRouter) {
     this.router = router;
   }
