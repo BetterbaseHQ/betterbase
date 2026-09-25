@@ -71,9 +71,7 @@ export const spaces = collection("__spaces")
     /** Highest seq seen in the membership log (cursor for incremental fetch). */
     membershipLogSeq: t.optional(t.number()),
     /** Server metadata_version for this space (persisted from pull responses). */
-    metadataVersion: t.optional(t.number()),
     /** Server rewrap_epoch for this space (non-null means rewrap in progress). */
-    rewrapEpoch: t.optional(t.number()),
   })
   .index(["spaceId"], { unique: true })
   .build();

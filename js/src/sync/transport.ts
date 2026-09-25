@@ -254,10 +254,22 @@ export class SyncTransport implements SyncTransportInterface {
    */
   shouldAdvanceEpoch(): boolean {
     if (!this.epochConfig) return false;
+    const advancedAt = this.epochConfig.epochAdvancedAt;
+    // A missing or invalid timestamp must read as "not due", never as
+    // epoch-zero — `?? 0` here made the advance instantly overdue for any
+    // session that never recorded one (the same shape as the space
+    // rotation bug in SpaceManager.shouldRotateSpace)
+    if (
+      advancedAt === undefined ||
+      advancedAt === null ||
+      !Number.isFinite(advancedAt) ||
+      advancedAt <= 0
+    ) {
+      return false;
+    }
     const interval =
       this.epochConfig.epochAdvanceIntervalMs ??
       DEFAULT_EPOCH_ADVANCE_INTERVAL_MS;
-    const advancedAt = this.epochConfig.epochAdvancedAt ?? 0;
     return Date.now() - advancedAt >= interval;
   }
 

@@ -642,26 +642,6 @@ describe("SpaceManager", () => {
     });
   });
 
-  describe("updateSpaceMetadata", () => {
-    it("persists changed metadata and rejects stale versions", async () => {
-      await activate({ metadataVersion: 3, rewrapEpoch: undefined });
-
-      await manager.updateSpaceMetadata("s1", 5, 2);
-      expect(db.records.get("rec-1")!).toMatchObject({
-        metadataVersion: 5,
-        rewrapEpoch: 2,
-      });
-
-      // Stale (older than cached) — must not regress
-      await manager.updateSpaceMetadata("s1", 4, undefined);
-      expect(db.records.get("rec-1")!.metadataVersion).toBe(5);
-
-      // Unchanged — no write
-      db.records.get("rec-1")!.rewrapEpoch = 2;
-      await manager.updateSpaceMetadata("s1", 5, 2);
-    });
-  });
-
   describe("shouldRotateSpace", () => {
     /** Roles and rotation timestamps are fixed at activation — fresh stack per case. */
     const rotationEligible = async (

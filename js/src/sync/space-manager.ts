@@ -1395,43 +1395,6 @@ export class SpaceManager {
   }
 
   /**
-   * Update cached space metadata from a pull response.
-   * Persists the server's space metadata version (membership-log CAS
-   * counter) and rewrap epoch to the spaces record. Only writes when
-   * values actually changed.
-   */
-  async updateSpaceMetadata(
-    spaceId: string,
-    metadataVersion: number | undefined,
-    rewrapEpoch: number | undefined,
-  ): Promise<void> {
-    const spaceRecord = await this.findBySpaceId(spaceId);
-    if (!spaceRecord) return;
-
-    const cachedVersion = spaceRecord.metadataVersion as number | undefined;
-    const versionChanged =
-      metadataVersion !== undefined && metadataVersion !== cachedVersion;
-
-    // Reject stale metadata versions (replay protection)
-    if (
-      metadataVersion !== undefined &&
-      cachedVersion !== undefined &&
-      metadataVersion < cachedVersion
-    ) {
-      return;
-    }
-
-    const rewrapChanged =
-      rewrapEpoch !== (spaceRecord.rewrapEpoch as number | undefined);
-    if (versionChanged || rewrapChanged) {
-      const patch: Record<string, unknown> = { id: spaceRecord.id };
-      if (versionChanged) patch.metadataVersion = metadataVersion;
-      if (rewrapChanged) patch.rewrapEpoch = rewrapEpoch;
-      await this.config.db.patch(spaces, patch as never);
-    }
-  }
-
-  /**
    * Get the UCAN token for a shared space. Returns null if not available.
    */
   getUCAN(spaceId: string): string | null {

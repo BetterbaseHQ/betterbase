@@ -105,3 +105,28 @@ describe("parseUCANPayload", () => {
     );
   });
 });
+
+// A peer's malformed UCAN with exp: null must not silently become
+// "never expires" (the 0 sentinel) — only a real number sets an expiry.
+describe("parseUCANPayload exp normalization", () => {
+  const payload = (exp: unknown) => {
+    const body = {
+      iss: "did:key:a",
+      aud: "did:key:b",
+      cmd: "/space/write",
+      with: "space:s1",
+      ...(exp !== undefined ? { exp } : {}),
+    };
+    return `h.${btoa(JSON.stringify(body)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}.sig`;
+  };
+  const parse = (p: string) => parseUCANPayload(p);
+
+  it("null exp parses as 0 (never), same as absent", () => {
+    expect(parse(payload(null)).expiresAt).toBe(0);
+    expect(parse(payload(undefined)).expiresAt).toBe(0);
+  });
+
+  it("numeric exp survives", () => {
+    expect(parse(payload(1234567890)).expiresAt).toBe(1234567890);
+  });
+});

@@ -218,6 +218,18 @@ export class AuthSession {
 
     if (!state.accessToken || !state.refreshToken) return null;
 
+    // localStorage JSON can carry nulls where the typed fields say
+    // `number | undefined` (older writers, tampering). A null crossing into
+    // `Date.now() - x` arithmetic reads as instantly-expired/overdue —
+    // normalize numerics to undefined so downstream guards fail safe.
+    const asNumber = (v: unknown): number | undefined =>
+      typeof v === "number" && Number.isFinite(v) ? v : undefined;
+    // expiresAt is required by the type; an invalid value reads as
+    // long-expired so restore triggers a refresh (fail-safe)
+    state.expiresAt = asNumber(state.expiresAt) ?? 0;
+    state.epoch = asNumber(state.epoch);
+    state.epochAdvancedAt = asNumber(state.epochAdvancedAt);
+
     // Initialize KeyStore (keys should already be there from previous session)
     const session = new AuthSession(config, state);
     try {

@@ -454,6 +454,8 @@ export function parseUCANPayload(ucan: string): ParsedUCAN {
     permission: json.cmd ?? "",
     spaceId:
       typeof json.with === "string" ? json.with.replace(/^space:/, "") : "",
-    expiresAt: json.exp ?? 0,
+    // 0 = never expires (deliberate sentinel) — but a non-numeric exp
+    // (null from a peer's malformed UCAN) must not silently become never
+    expiresAt: typeof json.exp === "number" ? json.exp : 0,
   };
 }

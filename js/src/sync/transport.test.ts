@@ -166,3 +166,27 @@ describe("SyncTransport.pull failure classification (AUD-024)", () => {
     expect(failure.retryable).toBe(false);
   });
 });
+
+// Fail-safe rotation arithmetic (the Date.now() - null class): a missing or
+// invalid epochAdvancedAt must read as "not due" — the pre-fix `?? 0`
+// collapsed null/undefined to epoch-zero and made the advance instantly
+// overdue for any session that never recorded one.
+describe("SyncTransport.shouldAdvanceEpoch fail-safe", () => {
+  it("returns false for undefined, null, and non-finite advancedAt", () => {
+    const mk = (advancedAt: unknown) => {
+      return new SyncTransport({
+        spaceId: "s1",
+        syncCrypto: {} as never,
+        epochConfig: {
+          epoch: 1,
+          epochKey: new Uint8Array(32),
+          epochAdvancedAt: advancedAt as number | undefined,
+        },
+      } as never);
+    };
+    expect(mk(undefined).shouldAdvanceEpoch()).toBe(false);
+    expect(mk(null).shouldAdvanceEpoch()).toBe(false);
+    expect(mk(Number.NaN).shouldAdvanceEpoch()).toBe(false);
+    expect(mk(0).shouldAdvanceEpoch()).toBe(false);
+  });
+});

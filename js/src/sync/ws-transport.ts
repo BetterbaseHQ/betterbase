@@ -425,20 +425,20 @@ export class WSTransport implements SyncTransportInterface {
     // Handle epoch changes for shared spaces
     for (const [spaceId, spaceResult] of pullResult.spaces) {
       if (spaceId === this.config.personalSpaceId) continue;
-      if (spaceResult.epoch === undefined) continue;
+      if (spaceResult.epoch == null) continue;
 
       const localEpoch = this.config.spaceManager.getSpaceEpoch(spaceId) ?? 0;
       if (spaceResult.epoch <= localEpoch) continue;
       try {
         if (
-          spaceResult.rewrapEpoch !== undefined &&
+          spaceResult.rewrapEpoch != null &&
           this.config.spaceManager.isAdmin(spaceId)
         ) {
           await this.config.spaceManager.completeInterruptedRewrap(
             spaceId,
             spaceResult.rewrapEpoch,
           );
-        } else if (spaceResult.rewrapEpoch === undefined) {
+        } else if (spaceResult.rewrapEpoch == null) {
           await this.config.spaceManager.adoptServerEpoch(
             spaceId,
             spaceResult.epoch,
@@ -449,19 +449,12 @@ export class WSTransport implements SyncTransportInterface {
       }
     }
 
-    // Persist space metadata and refresh member caches for shared spaces
-    for (const [spaceId, spaceResult] of pullResult.spaces) {
+    // Refresh member caches for shared spaces. (Space metadata — epoch,
+    // rewrap state — is deliberately NOT persisted to the spaces record:
+    // every consumer reads the wire values each pull, and caching them
+    // here previously wrote mislabeled/unclearable state every cycle.)
+    for (const [spaceId] of pullResult.spaces) {
       if (spaceId === this.config.personalSpaceId) continue;
-
-      this.config.spaceManager
-        .updateSpaceMetadata(
-          spaceId,
-          spaceResult.epoch,
-          spaceResult.rewrapEpoch,
-        )
-        .catch((err) => {
-          console.error(`Failed to update space metadata for ${spaceId}:`, err);
-        });
 
       this.config.spaceManager.refreshMembers(spaceId);
     }

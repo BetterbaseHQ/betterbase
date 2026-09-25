@@ -312,10 +312,11 @@ impl WasmTypedDb {
         let data_val = js_to_value(data)?;
         let w_opts = parse_opaque_opts(write_opts)?;
         let put_opts = parse_put_options(options)?;
-        let result = self
+        let mut result = self
             .typed()?
             .put(&def, data_val, w_opts.as_ref(), Some(&put_opts))
             .into_js()?;
+        strip_null_optionals_out(&def, &mut result);
         value_to_js(&result)
     }
 
@@ -352,6 +353,8 @@ impl WasmTypedDb {
         if deleted_peer_spans {
             crate::diagnostics::warn_peer_span_deletion(collection, &patch_opts.id);
         }
+        let mut result = result;
+        strip_null_optionals_out(&def, &mut result);
         value_to_js(&result)
     }
 
@@ -460,7 +463,11 @@ impl WasmTypedDb {
             .into_js()?;
 
         let mut out = serde_json::Map::new();
-        out.insert("records".to_string(), Value::Array(result.records));
+        let mut records = result.records;
+        for data in records.iter_mut() {
+            strip_null_optionals_out(&def, data);
+        }
+        out.insert("records".to_string(), Value::Array(records));
         out.insert("errors".to_string(), Value::Array(result.errors));
         value_to_js(&Value::Object(out))
     }
@@ -505,13 +512,15 @@ impl WasmTypedDb {
         let cb = Arc::new(SendSyncCallback(callback));
         let with_base = include_base.is_truthy();
         let unsub = if with_base {
+            let cb_def = Arc::clone(&def);
             self.typed()?.observe_with_base(
                 def,
                 id,
                 Arc::new(
                     move |rec: Option<betterbase_db::middleware::ObservedRecord>| {
                         let js_val = match rec {
-                            Some(r) => {
+                            Some(mut r) => {
+                                strip_null_optionals_out(&cb_def, &mut r.data);
                                 let obj = js_sys::Object::new();
                                 js_sys::Reflect::set(
                                     &obj,
@@ -535,12 +544,16 @@ impl WasmTypedDb {
                 None,
             )
         } else {
+            let cb_def = Arc::clone(&def);
             self.typed()?.observe(
                 def,
                 id,
                 Arc::new(move |data: Option<Value>| {
                     let js_val = match data {
-                        Some(ref d) => value_to_js(d).unwrap_or(JsValue::NULL),
+                        Some(mut d) => {
+                            strip_null_optionals_out(&cb_def, &mut d);
+                            value_to_js(&d).unwrap_or(JsValue::NULL)
+                        }
                         None => JsValue::NULL,
                     };
                     let _ = cb.0.call1(&JsValue::NULL, &js_val);
@@ -573,12 +586,17 @@ impl WasmTypedDb {
             js_to_value(query_opts).ok()
         };
 
+        let cb_def = Arc::clone(&def);
         let unsub = self.typed()?.observe_query(
             def,
             q,
             Arc::new(move |result| {
+                let mut records = result.records;
+                for data in records.iter_mut() {
+                    strip_null_optionals_out(&cb_def, data);
+                }
                 let mut out = serde_json::Map::new();
-                out.insert("records".to_string(), Value::Array(result.records));
+                out.insert("records".to_string(), Value::Array(records));
                 out.insert(
                     "total".to_string(),
                     Value::Number(serde_json::Number::from(result.total)),
