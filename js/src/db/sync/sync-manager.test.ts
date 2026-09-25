@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { SyncScheduler } from "./sync-scheduler.js";
 import { SyncManager } from "./sync-manager.js";
 import type {
   CollectionDefHandle,
@@ -755,5 +756,31 @@ describe("SyncManager push-side poison isolation", () => {
     expect(result.pushed).toBe(0);
     expect(result.errors).toHaveLength(1);
     expect(transport.push).toHaveBeenCalledTimes(1); // no retry storm
+  });
+});
+
+// Dispose rejects queued callers that DID await (correct API), but the
+// fire-and-forget wiring (engine auto-sync) must never leak — vitest fails
+// this file on any unhandled rejection, so the un-awaited schedule below is
+// the pin.
+describe("SyncScheduler dispose hygiene", () => {
+  it("un-awaited queued schedules do not become unhandled rejections", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const result = () => gate.then(() => ({ pushed: 0, errors: [] }));
+    const manager = {
+      push: result,
+      sync: result,
+      syncAll: () => gate.then(() => new Map()),
+    } as never;
+    const scheduler = new SyncScheduler({ syncManager: manager });
+
+    const first = scheduler.schedulePush({ name: "notes" } as never);
+    // Arrives during the running sync → queued behind the cooldown
+    void scheduler.schedulePush({ name: "notes" } as never);
+    scheduler.dispose();
+    release();
+    await first.catch(() => {});
+    await new Promise((r) => setTimeout(r, 10));
   });
 });

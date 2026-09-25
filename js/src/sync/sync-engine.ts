@@ -584,7 +584,12 @@ export class SyncEngine {
       if (engine._disposed) return;
       if (event.type === "remote") return;
       const def = collectionMap.get(event.collection);
-      if (def) scheduler.schedulePush(def);
+      if (def) {
+        // Fire-and-forget: a dispose racing the queued follow-up rejects
+        // the returned promise — handled here so teardown never leaks an
+        // unhandled rejection
+        scheduler.schedulePush(def).catch(() => {});
+      }
     });
 
     // Connect FileStore
@@ -732,12 +737,14 @@ export class SyncEngine {
 
   /** Schedule a throttled push for one collection. */
   schedulePush(def: CollectionDef): void {
-    this.scheduler?.schedulePush(def);
+    // Returns void — callers cannot await, so a dispose racing the queued
+    // follow-up must not leak an unhandled rejection
+    this.scheduler?.schedulePush(def).catch(() => {});
   }
 
   /** Schedule a throttled sync for one collection. */
   scheduleSync(def: CollectionDef): void {
-    this.scheduler?.scheduleSync(def);
+    this.scheduler?.scheduleSync(def).catch(() => {});
   }
 
   /** Flush all spaces — push + pull everything. */
