@@ -601,7 +601,7 @@ fn existing_observe_works_without_middleware() {
     let _unsub = adapter.observe(
         Arc::new(todos_def()),
         record.id.clone(),
-        Arc::new(move |data| obs_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| obs_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
 

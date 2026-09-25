@@ -8,7 +8,7 @@ use betterbase_db::{
     collection::builder::{collection, CollectionDef},
     crdt::{self, MIN_SESSION_ID},
     query::types::{Query, SortDirection, SortEntry, SortInput},
-    reactive::{adapter::ReactiveQueryResult, ReactiveAdapter},
+    reactive::adapter::{ReactiveAdapter, ReactiveQueryResult, RecordView},
     schema::node::t,
     storage::{
         adapter::Adapter,
@@ -367,8 +367,8 @@ fn reactive_observe_through_write_and_flush() {
     let _unsub = ra.observe(
         Arc::new(users_def()),
         created.id.clone(),
-        Arc::new(move |data: Option<Value>| {
-            log_clone.lock().unwrap().push(data);
+        Arc::new(move |rec: Option<RecordView>| {
+            log_clone.lock().unwrap().push(rec.map(|v| v.data));
         }),
         None,
     );
@@ -1108,8 +1108,8 @@ fn observe_record_delete_fires_none() {
     let _unsub = ra.observe(
         Arc::new(users_def()),
         created.id.clone(),
-        Arc::new(move |data: Option<Value>| {
-            log_clone.lock().unwrap().push(data);
+        Arc::new(move |rec: Option<RecordView>| {
+            log_clone.lock().unwrap().push(rec.map(|v| v.data));
         }),
         None,
     );
@@ -1165,7 +1165,7 @@ fn unsubscribe_stops_callbacks() {
     let unsub = ra.observe(
         Arc::new(users_def()),
         created.id.clone(),
-        Arc::new(move |_data: Option<Value>| {
+        Arc::new(move |_rec: Option<RecordView>| {
             *count_clone.lock().unwrap() += 1;
         }),
         None,
@@ -1249,7 +1249,7 @@ fn observe_query_tracks_changes() {
         assert!(entries.len() >= 2, "should have at least 2 callbacks");
         let latest = entries.last().unwrap();
         assert_eq!(latest.records.len(), 1);
-        assert_eq!(latest.records[0]["name"], json!("Alice"));
+        assert_eq!(latest.records[0].data["name"], json!("Alice"));
     }
 
     // Add another record
@@ -1281,7 +1281,7 @@ fn observe_query_tracks_changes() {
             1,
             "should have 1 record after deleting Bob"
         );
-        assert_eq!(latest.records[0]["name"], json!("Alice"));
+        assert_eq!(latest.records[0].data["name"], json!("Alice"));
     }
 }
 
@@ -1309,7 +1309,7 @@ fn multiple_observers_same_record() {
     let _unsub_a = ra.observe(
         Arc::new(users_def()),
         created.id.clone(),
-        Arc::new(move |_data: Option<Value>| {
+        Arc::new(move |_rec: Option<RecordView>| {
             *count_a_clone.lock().unwrap() += 1;
         }),
         None,
@@ -1318,7 +1318,7 @@ fn multiple_observers_same_record() {
     let _unsub_b = ra.observe(
         Arc::new(users_def()),
         created.id.clone(),
-        Arc::new(move |_data: Option<Value>| {
+        Arc::new(move |_rec: Option<RecordView>| {
             *count_b_clone.lock().unwrap() += 1;
         }),
         None,
@@ -1792,8 +1792,8 @@ fn reactive_remote_changes_trigger_observe() {
     let _unsub = ra.observe(
         Arc::new(users_def()),
         created.id.clone(),
-        Arc::new(move |data: Option<Value>| {
-            log_clone.lock().unwrap().push(data);
+        Arc::new(move |rec: Option<RecordView>| {
+            log_clone.lock().unwrap().push(rec.map(|v| v.data));
         }),
         None,
     );

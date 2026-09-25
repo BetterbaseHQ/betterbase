@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use betterbase_db::{
     collection::builder::{collection, CollectionDef},
     crdt::MIN_SESSION_ID,
-    reactive::{ChangeEvent, ReactiveAdapter},
+    reactive::{adapter::RecordView, ChangeEvent, ReactiveAdapter},
     schema::node::t,
     storage::{
         adapter::Adapter,
@@ -82,7 +82,7 @@ fn observe_fires_callback_after_flush_with_current_record() {
     let _unsub = ra.observe(
         Arc::new(users_def()),
         record.id.clone(),
-        Arc::new(move |data| calls_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| calls_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
 
@@ -105,7 +105,7 @@ fn observe_fires_none_for_nonexistent_record() {
     let _unsub = ra.observe(
         Arc::new(users_def()),
         "does-not-exist",
-        Arc::new(move |data| calls_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| calls_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
 
@@ -136,7 +136,7 @@ fn observe_fires_after_put_to_same_id() {
     let _unsub = ra.observe(
         Arc::new(users_def()),
         record.id.clone(),
-        Arc::new(move |data| calls_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| calls_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
 
@@ -191,7 +191,7 @@ fn observe_unsubscribe_stops_notifications() {
     let unsub = ra.observe(
         Arc::new(users_def()),
         record.id.clone(),
-        Arc::new(move |data| calls_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| calls_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
 
@@ -222,13 +222,81 @@ fn observe_unsubscribe_stops_notifications() {
 }
 
 // ============================================================================
+// Reactive delivery must carry each record's stored metadata — the wire
+// boundary used to strip it, so every downstream reader saw records with
+// no space attribution and middleware enrichment degraded to defaults
+// (the shared-space misattribution bug).
+// ===========================================================================
+
+#[test]
+fn reactive_delivery_carries_record_metadata() {
+    use betterbase_db::query::types::Query;
+    use betterbase_db::reactive::ReactiveQueryResult;
+
+    let def = users_def();
+    let ra = make_adapter(&def);
+
+    let mut opts = put_opts();
+    opts.meta = Some(serde_json::json!({ "spaceId": "space-shared-1" }));
+    let alice = ra
+        .put(&def, json!({ "name": "Alice", "email": "a@x.com" }), &opts)
+        .expect("put with meta");
+
+    // Single-record observe delivers the meta
+    let seen: Arc<Mutex<Vec<Option<RecordView>>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_c = Arc::clone(&seen);
+    let _unsub = ra.observe(
+        Arc::new(users_def()),
+        alice.id.clone(),
+        Arc::new(move |rec| seen_c.lock().unwrap().push(rec)),
+        None,
+    );
+    ra.wait_for_flush();
+
+    // Query subscription delivers the meta on every record
+    let calls: Arc<Mutex<Vec<ReactiveQueryResult>>> = Arc::new(Mutex::new(Vec::new()));
+    let calls_c = Arc::clone(&calls);
+    let _unsub_q = ra.observe_query(
+        Arc::new(users_def()),
+        Query::default(),
+        Arc::new(move |r| calls_c.lock().unwrap().push(r)),
+        None,
+    );
+    ra.wait_for_flush();
+    {
+        let log = calls.lock().unwrap();
+        let alice_rec = log[0]
+            .records
+            .iter()
+            .find(|r| r.data["name"] == json!("Alice"))
+            .expect("alice in query results");
+        assert_eq!(
+            alice_rec.meta.as_ref().and_then(|m| m.get("spaceId")),
+            Some(&json!("space-shared-1")),
+            "query delivery must carry stored meta"
+        );
+    }
+
+    let observed = seen.lock().unwrap();
+    let view = observed
+        .iter()
+        .flatten()
+        .find(|v| v.data["name"] == json!("Alice"))
+        .expect("observe delivered alice");
+    assert_eq!(
+        view.meta.as_ref().and_then(|m| m.get("spaceId")),
+        Some(&json!("space-shared-1")),
+        "single-record observe must carry stored meta"
+    );
+}
+
 // observe_query — basic callback
 // ============================================================================
 
 #[test]
 fn observe_query_fires_callback_after_flush_with_current_results() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::ReactiveQueryResult;
+    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
 
     let def = users_def();
     let ra = make_adapter(&def);
@@ -267,7 +335,7 @@ fn observe_query_fires_callback_after_flush_with_current_results() {
 #[test]
 fn observe_query_fires_after_write_to_same_collection() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::ReactiveQueryResult;
+    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
 
     let def = users_def();
     let ra = make_adapter(&def);
@@ -304,7 +372,7 @@ fn observe_query_fires_after_write_to_same_collection() {
 #[test]
 fn observe_query_unsubscribe_stops_notifications() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::ReactiveQueryResult;
+    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
 
     let def = users_def();
     let ra = make_adapter(&def);
@@ -482,7 +550,7 @@ fn double_flush_is_safe_second_flush_is_no_op() {
     let _unsub = ra.observe(
         Arc::new(users_def()),
         "some-id",
-        Arc::new(move |data| calls_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| calls_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
 
@@ -508,7 +576,7 @@ fn wait_for_flush_is_equivalent_to_flush() {
     let _unsub = ra.observe(
         Arc::new(users_def()),
         "no-id",
-        Arc::new(move |data| calls_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| calls_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
 
@@ -538,7 +606,7 @@ fn observe_before_initialize_fires_only_after_initialize_and_flush() {
     let _unsub = ra.observe(
         Arc::new(users_def()),
         "test-id",
-        Arc::new(move |data| calls_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| calls_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
 
@@ -573,7 +641,7 @@ fn unsubscribe_before_initialize_prevents_callback_from_ever_firing() {
     let unsub = ra.observe(
         Arc::new(users_def()),
         "some-id",
-        Arc::new(move |data| calls_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| calls_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
 
@@ -595,7 +663,7 @@ fn unsubscribe_before_initialize_prevents_callback_from_ever_firing() {
 #[test]
 fn observe_query_before_initialize_fires_after_init() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::ReactiveQueryResult;
+    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
 
     let def = users_def();
 
@@ -689,7 +757,7 @@ fn panicking_on_change_does_not_prevent_flush() {
     let _unsub2 = ra.observe(
         Arc::new(users_def()),
         record.id.clone(),
-        Arc::new(move |data| calls_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| calls_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
     ra.flush();
@@ -744,7 +812,7 @@ fn panicking_observe_callback_does_not_prevent_subsequent_callbacks() {
     let _unsub1 = ra.observe(
         Arc::new(users_def()),
         "test-id",
-        Arc::new(|_data: Option<Value>| panic!("callback panic")),
+        Arc::new(|_rec: Option<RecordView>| panic!("callback panic")),
         None,
     );
 
@@ -754,7 +822,7 @@ fn panicking_observe_callback_does_not_prevent_subsequent_callbacks() {
     let _unsub2 = ra.observe(
         Arc::new(users_def()),
         "test-id",
-        Arc::new(move |data| calls_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| calls_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
 
@@ -785,8 +853,8 @@ fn apply_remote_changes_notifies_observe_callback() {
     let _unsub = ra.observe(
         Arc::new(users_def()),
         "r1".to_string(),
-        Arc::new(move |val: Option<Value>| {
-            log_c.lock().unwrap().push(val);
+        Arc::new(move |rec: Option<RecordView>| {
+            log_c.lock().unwrap().push(rec.map(|v| v.data));
         }),
         None,
     );
@@ -1167,7 +1235,7 @@ fn observe_fires_none_after_delete() {
     let _unsub = ra.observe(
         Arc::new(users_def()),
         record.id.clone(),
-        Arc::new(move |data| calls_clone.lock().unwrap().push(data)),
+        Arc::new(move |view| calls_clone.lock().unwrap().push(view.map(|v| v.data))),
         None,
     );
 
@@ -1194,7 +1262,7 @@ fn observe_fires_none_after_delete() {
 #[test]
 fn observe_query_count_decreases_after_delete() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::ReactiveQueryResult;
+    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
 
     let def = users_def();
     let ra = make_adapter(&def);
@@ -1350,7 +1418,7 @@ fn observe_on_error_fires_on_failure() {
 #[test]
 fn observe_query_on_error_path_wired_up() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::ReactiveQueryResult;
+    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
 
     let def = users_def();
     let ra = make_adapter(&def);

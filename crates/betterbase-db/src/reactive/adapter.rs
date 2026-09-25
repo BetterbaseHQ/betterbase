@@ -34,7 +34,7 @@ use crate::{
     types::{
         ApplyRemoteOptions, ApplyRemoteResult, BatchResult, BulkDeleteResult, BulkPatchResult,
         DeleteOptions, GetOptions, ListOptions, PatchManyResult, PatchOptions, PushSnapshot,
-        PutOptions, QueryResult, RemoteRecord, StoredRecordWithMeta,
+        PutOptions, QueryResult, RemoteRecord, SerializedRecord, StoredRecordWithMeta,
     },
 };
 
@@ -47,12 +47,41 @@ use super::{event::ChangeEvent, event_emitter::EventEmitter, query_fields::extra
 /// The result type delivered to `observe_query` callbacks.
 #[derive(Debug, Clone)]
 pub struct ReactiveQueryResult {
-    /// Materialized `data` values of matching records.
-    pub records: Vec<Value>,
+    /// Matching records: data view + stored metadata.
+    pub records: Vec<RecordView>,
     /// Total count of matching records (before pagination).
     pub total: usize,
     /// Records that caused errors during query execution.
     pub errors: Vec<Value>,
+}
+
+/// A record delivered through the reactive layer: the materialized data
+/// view plus its stored metadata. Callbacks previously received bare
+/// `data` values, which dropped per-record meta (e.g. space routing) at
+/// the reactive boundary — every downstream surface then read records
+/// with no space attribution.
+#[derive(Debug, Clone)]
+pub struct RecordView {
+    pub data: Value,
+    pub meta: Option<Value>,
+}
+
+impl From<SerializedRecord> for RecordView {
+    fn from(r: SerializedRecord) -> Self {
+        RecordView {
+            data: r.data,
+            meta: r.meta,
+        }
+    }
+}
+
+impl From<StoredRecordWithMeta> for RecordView {
+    fn from(r: StoredRecordWithMeta) -> Self {
+        RecordView {
+            data: r.data,
+            meta: r.meta,
+        }
+    }
 }
 
 impl ReactiveQueryResult {
@@ -81,7 +110,7 @@ struct RecordSub {
     id: u64,
     record_id: String,
     def: Arc<CollectionDef>,
-    callback: Arc<dyn Fn(Option<Value>) + Send + Sync>,
+    callback: Arc<dyn Fn(Option<RecordView>) + Send + Sync>,
     /// Base-aware variant — when set, delivered instead of `callback`, with
     /// the record's CRDT binary atomically paired with the data.
     crdt_callback: Option<Arc<dyn Fn(Option<ObservedRecord>) + Send + Sync>>,
@@ -97,8 +126,8 @@ pub struct ObservedRecord {
 }
 
 /// Placeholder for the data callback when only the crdt_callback is used.
-fn unused_callback() -> Arc<dyn Fn(Option<Value>) + Send + Sync> {
-    Arc::new(|_data: Option<Value>| {})
+fn unused_callback() -> Arc<dyn Fn(Option<RecordView>) + Send + Sync> {
+    Arc::new(|_data: Option<RecordView>| {})
 }
 
 struct QuerySub {
@@ -256,7 +285,7 @@ impl<B: StorageBackend> ReactiveAdapter<B> {
         &self,
         def: Arc<CollectionDef>,
         id: impl Into<String>,
-        callback: Arc<dyn Fn(Option<Value>) + Send + Sync>,
+        callback: Arc<dyn Fn(Option<RecordView>) + Send + Sync>,
         on_error: Option<Arc<dyn Fn(LessDbError) + Send + Sync>>,
     ) -> Unsubscribe {
         self.observe_impl(def, id, callback, None, on_error)
@@ -280,7 +309,7 @@ impl<B: StorageBackend> ReactiveAdapter<B> {
         &self,
         def: Arc<CollectionDef>,
         id: impl Into<String>,
-        callback: Arc<dyn Fn(Option<Value>) + Send + Sync>,
+        callback: Arc<dyn Fn(Option<RecordView>) + Send + Sync>,
         crdt_callback: Option<Arc<dyn Fn(Option<ObservedRecord>) + Send + Sync>>,
         on_error: Option<Arc<dyn Fn(LessDbError) + Send + Sync>>,
     ) -> Unsubscribe {
@@ -455,7 +484,7 @@ impl<B: StorageBackend> ReactiveAdapter<B> {
                             ccb(observed);
                         }));
                     } else {
-                        let data = maybe_record.map(|r| r.data);
+                        let data = maybe_record.map(RecordView::from);
                         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             (sub.callback)(data);
                         }));
@@ -485,7 +514,11 @@ impl<B: StorageBackend> ReactiveAdapter<B> {
             match result {
                 Ok(query_result) => {
                     let reactive_result = ReactiveQueryResult {
-                        records: query_result.records.into_iter().map(|r| r.data).collect(),
+                        records: query_result
+                            .records
+                            .into_iter()
+                            .map(RecordView::from)
+                            .collect(),
                         total: query_result.total.unwrap_or(0),
                         errors: Vec::new(),
                     };

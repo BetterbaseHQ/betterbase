@@ -2,39 +2,23 @@
  * Shared-space lifecycle — the richest SDK↔server contract: space
  * creation, membership log, UCAN delegation, encrypted invitation
  * delivery through the accounts mailbox, acceptance on a second account,
- * and bidirectional convergence in the shared space.
+ * and bidirectional convergence in the shared space (distinct channel
+ * keys, distinct membership chains).
  *
- * KNOWN DEFECT (skip until fixed — tracked for a dedicated investigation):
- * the scenario surfaces a real cross-layer bug where a record written to
- * a shared space ends up attributed to (and stored under) a personal
- * space. Evidence from repeated runs:
- *
- *   - A's record, pushed under the shared space, is confirmed server-side
- *     in the shared space (correct).
- *   - B writes "from-b" with {space: shared}; the SERVER row for that
- *     record lands in A's PERSONAL space (verified via psql: space_id =
- *     A-personal for B's record id).
- *   - On A, the record arrives at applyRemoteChanges already tagged
- *     {spaceId: A-personal}; reads coalesce to the personal space.
- *   - Chunk attribution in WSClient.pull is keyed by each chunk's own
- *     `space` field (code-verified), and the Rust apply paths thread
- *     record.meta through insert/merge/tombstone (code-verified) — so the
- *     misattribution happens in the interplay, not the obvious hops.
- *   - The outcome FLAPS between runs (sometimes tagged correctly) — a
- *     race, prime suspects: the push-side grouping fallback
- *     `record.meta?.spaceId ?? personalSpaceId` (ws-transport.ts) combined
- *     with a path that re-pushes an applied remote record as dirty, or
- *     the per-space prepulled-changes transport handoff.
- *
- * This suite earned its keep on day one: this is the second real defect
- * it has surfaced (the first was the SyncScheduler dispose leak).
+ * This scenario caught the third real defect of the integration tier:
+ * the reactive/wasm read boundary dropped per-record metadata on query
+ * results and subscriptions, so every shared-space record read back
+ * attributed to the personal space (and space-scoped queries silently
+ * matched nothing). Fixed by threading RecordView {data, meta} through
+ * the reactive layer and emitting the meta wire key at every wasm exit
+ * point — pinned here end to end.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { AuthSession } from "../src/auth/session.js";
+import { stackConfig, type IntegrationConfig } from "./helpers/stack.ts";
 import { provisionAccount, type SdkIdentity } from "./helpers/account.ts";
+import { makeEngine, cleanupDatabases } from "./helpers/engine.ts";
 import { notes } from "./helpers/collections.ts";
-import { cleanupDatabases, makeEngine } from "./helpers/engine.ts";
-import { type IntegrationConfig, stackConfig } from "./helpers/stack.ts";
 
 let config: IntegrationConfig;
 let identityA: SdkIdentity;
@@ -64,9 +48,7 @@ afterAll(async () => {
 });
 
 describe("shared space across accounts", () => {
-  // See the module comment: skipped for the documented personal-space
-  // misattribution defect. Re-enable when fixed.
-  it.skip("invite → accept → bidirectional convergence in the shared space", async (ctx) => {
+  it("invite → accept → bidirectional convergence in the shared space", async (ctx) => {
     if (!config.available) return ctx.skip();
     const stamp = `${Date.now()}`;
 
@@ -117,7 +99,9 @@ describe("shared space across accounts", () => {
     }
     expect(sawShared).toBe(true);
 
-    // B writes into the shared space; A must pull it back
+    // B writes into the shared space; A must pull it back — and the
+    // query result must carry the shared-space attribution (the fixed
+    // regression: queries used to drop meta and read back personal)
     await engineB.db.put(
       notes,
       { title: "from-b", body: stamp },
@@ -130,6 +114,15 @@ describe("shared space across accounts", () => {
     });
     expect(fromB.records).toHaveLength(1);
     expect(fromB.records[0]!._spaceId).toBe(spaceId);
+
+    // A space-scoped query finds the shared record and nothing personal
+    const scoped = await engineA.db.query(notes, { space: spaceId } as never);
+    expect(
+      scoped.records
+        .filter((r) => r.body === stamp)
+        .map((r) => r.title)
+        .sort(),
+    ).toEqual(["from-a", "from-b"]);
 
     engineA.dispose();
     engineB.dispose();

@@ -17,7 +17,7 @@ use wasm_bindgen::prelude::*;
 use betterbase_db::{
     collection::builder::CollectionDef,
     query::types::{Query, SortDirection, SortEntry, SortInput},
-    reactive::adapter::ReactiveAdapter,
+    reactive::adapter::{ReactiveAdapter, RecordView},
     storage::traits::{StorageLifecycle, StorageRead, StorageSync, StorageWrite},
     types::{
         DeleteOptions, GetOptions, ListOptions, PatchOptions, PutOptions, StoredRecordWithMeta,
@@ -328,7 +328,11 @@ impl WasmDb {
         let result = self.adapter.query(&def, &q).into_js()?;
 
         let total = result.total;
-        let mut records: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
+        let mut records: Vec<Value> = result
+            .records
+            .into_iter()
+            .map(|r| record_data_with_meta(r.data, r.meta))
+            .collect();
         for data in records.iter_mut() {
             strip_null_optionals_out(&def, data);
         }
@@ -386,7 +390,11 @@ impl WasmDb {
         let opts = parse_put_options(options)?;
         let mut result = self.adapter.bulk_put(&def, records_val, &opts).into_js()?;
 
-        let mut data: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
+        let mut data: Vec<Value> = result
+            .records
+            .into_iter()
+            .map(|r| record_data_with_meta(r.data, r.meta))
+            .collect();
         for d in data.iter_mut() {
             strip_null_optionals_out(&def, d);
         }
@@ -447,11 +455,12 @@ impl WasmDb {
                         let js_val = match rec {
                             Some(mut r) => {
                                 strip_null_optionals_out(&cb_def, &mut r.data);
+                                let merged = record_data_with_meta(r.data, r.meta);
                                 let obj = js_sys::Object::new();
                                 js_sys::Reflect::set(
                                     &obj,
                                     &JsValue::from_str("data"),
-                                    &value_to_js(&r.data).unwrap_or(JsValue::NULL),
+                                    &value_to_js(&merged).unwrap_or(JsValue::NULL),
                                 )
                                 .ok();
                                 js_sys::Reflect::set(
@@ -474,11 +483,12 @@ impl WasmDb {
             self.adapter.observe(
                 def,
                 id,
-                Arc::new(move |record: Option<Value>| {
+                Arc::new(move |record: Option<RecordView>| {
                     let js_val = match record {
-                        Some(mut data) => {
-                            strip_null_optionals_out(&cb_def, &mut data);
-                            value_to_js(&data).unwrap_or(JsValue::NULL)
+                        Some(mut view) => {
+                            strip_null_optionals_out(&cb_def, &mut view.data);
+                            let merged = record_data_with_meta(view.data, view.meta);
+                            value_to_js(&merged).unwrap_or(JsValue::NULL)
                         }
                         None => JsValue::NULL,
                     };
@@ -509,7 +519,11 @@ impl WasmDb {
             def,
             q,
             Arc::new(move |result| {
-                let mut records = result.records.clone();
+                let mut records: Vec<Value> = result
+                    .records
+                    .iter()
+                    .map(|r| record_data_with_meta(r.data.clone(), r.meta.clone()))
+                    .collect();
                 for data in records.iter_mut() {
                     strip_null_optionals_out(&cb_def, data);
                 }
@@ -696,8 +710,12 @@ fn strip_null_optionals_out(def: &CollectionDef, data: &mut Value) {
     }
 }
 
-fn record_to_js_data(record: StoredRecordWithMeta) -> Result<JsValue, JsValue> {
-    let mut data = match record.data {
+/// Record data with metadata merged under the wire key, as a serde Value.
+/// Shared by the query paths (which batch records into one response) and
+/// `record_to_js_data` — meta must survive every read boundary or
+/// middleware enrichment (space routing) silently degrades to defaults.
+fn record_data_with_meta(data: Value, meta: Option<Value>) -> Value {
+    let mut map = match data {
         Value::Object(map) => map,
         other => {
             let mut m = serde_json::Map::new();
@@ -705,10 +723,14 @@ fn record_to_js_data(record: StoredRecordWithMeta) -> Result<JsValue, JsValue> {
             m
         }
     };
-    if let Some(meta) = record.meta {
-        data.insert(META_WIRE_KEY.to_string(), meta);
+    if let Some(meta) = meta {
+        map.insert(META_WIRE_KEY.to_string(), meta);
     }
-    value_to_js(&Value::Object(data))
+    Value::Object(map)
+}
+
+fn record_to_js_data(record: StoredRecordWithMeta) -> Result<JsValue, JsValue> {
+    value_to_js(&record_data_with_meta(record.data, record.meta))
 }
 
 /// Parse a JsValue into a `Query`, handling sort input parsing manually.
