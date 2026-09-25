@@ -36,6 +36,8 @@ interface StackConfig {
   accountsUrl: string;
   syncUrl: string;
   clientId?: string;
+  /** PID of the Node process owning this sidecar (zombie detection). */
+  ownerPid?: number;
 }
 
 function exec(
@@ -115,8 +117,11 @@ async function findCode(
   email: string,
   budgetMs: number,
 ): Promise<string | null> {
+  // The [\s\S] gap is bounded by a negative lookahead so a message for a
+  // DIFFERENT recipient cannot be crossed (concurrent provisions interleave
+  // in the container log).
   const pattern = new RegExp(
-    `To: ${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?Your verification code is: (\\d{6})`,
+    `To: ${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:(?!To:)[\\s\\S])*?Your verification code is: (\\d{6})`,
   );
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
@@ -156,6 +161,7 @@ export async function setup(): Promise<() => Promise<void>> {
     config.reason = `stack not reachable (accounts: ${accountsUp}, sync: ${syncUp}) — start it with \`just e2e-up\``;
   }
 
+  config.ownerPid = process.pid;
   if (!config.available) {
     console.warn(`[sdk-integration] skipping: ${config.reason}`);
   }
@@ -196,17 +202,28 @@ export async function setup(): Promise<() => Promise<void>> {
   await new Promise<void>((resolve) => {
     server!.once("error", async (err: NodeJS.ErrnoException) => {
       if (err.code === "EADDRINUSE") {
-        // vitest can invoke globalSetup more than once per run (browser
-        // environments); if a healthy sidecar is already listening, reuse it.
         try {
           const res = await fetch(`http://127.0.0.1:${SIDECAR_PORT}/config`);
-          if (res.ok) {
-            console.log("[sdk-integration] reusing existing sidecar");
+          const existing = (await res.json()) as StackConfig;
+          // A crashed run can leave a zombie sidecar holding the port
+          // with a stale config — reuse only a LIVE owner's sidecar.
+          const ownerAlive = existing.ownerPid
+            ? process.kill(existing.ownerPid, 0) === true
+            : false;
+          if (res.ok && ownerAlive) {
+            // Same-run second globalSetup invocation (browser
+            // environments): reuse the healthy sidecar.
+            console.log("[sdk-integration] reusing live sidecar");
             resolve();
             return;
           }
+          if (existing.ownerPid) {
+            console.warn(
+              "[sdk-integration] stale sidecar (owner gone) holds the port; run `lsof -ti :25499 | xargs kill` and retry",
+            );
+          }
         } catch {
-          // fall through to reject
+          // No healthy sidecar answered — fall through to the hard error.
         }
       }
       throw err;

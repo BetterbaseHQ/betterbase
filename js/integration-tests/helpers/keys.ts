@@ -134,7 +134,7 @@ export async function unwrapRootKey(
   wrapped: Uint8Array,
   wrappingKey: CryptoKey,
 ): Promise<Uint8Array> {
-  return aesKwUnwrap(wrapped, unwrappingKey);
+  return aesKwUnwrap(wrapped, wrappingKey);
 }
 
 export async function wrapWithRootKey(
@@ -273,4 +273,19 @@ export async function encryptAppKeypairBlob(
   combined.set(iv);
   combined.set(new Uint8Array(ciphertext), iv.length);
   return base64Encode(combined);
+}
+
+export async function decryptAppKeypairBlob(
+  blob: string,
+  wrappingKey: CryptoKey,
+): Promise<JsonWebKey> {
+  const combined = base64DecodeToBytes(blob);
+  const iv = combined.slice(0, 12);
+  const ciphertext = combined.slice(12);
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    wrappingKey,
+    ciphertext,
+  );
+  return JSON.parse(new TextDecoder().decode(plaintext));
 }

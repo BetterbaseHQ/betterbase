@@ -10,11 +10,11 @@
  *     record stops being pushed and batch-mates still sync;
  *   - the first account's record is untouched.
  */
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AuthSession } from "../src/auth/session.js";
 import { provisionAccount, type SdkIdentity } from "./helpers/account.ts";
 import { notes } from "./helpers/collections.ts";
-import { makeEngine } from "./helpers/engine.ts";
+import { cleanupDatabases, makeEngine } from "./helpers/engine.ts";
 import { type IntegrationConfig, stackConfig } from "./helpers/stack.ts";
 
 /**
@@ -46,6 +46,10 @@ beforeAll(async () => {
     { client: identityB.client },
     identityB.auth,
   );
+});
+
+afterAll(async () => {
+  await cleanupDatabases();
 });
 
 describe("deterministic ids across accounts", () => {

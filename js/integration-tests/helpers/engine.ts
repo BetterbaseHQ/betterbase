@@ -4,11 +4,20 @@ import type { AuthSession } from "../../src/auth/session.js";
  * Engine factory for integration scenarios: real OPFS database (own worker),
  * real SyncEngine over the live stack, bootstrapped to ready (or thrown).
  */
-import { createDatabase } from "../../src/db/index.js";
+import { createDatabase, deleteDatabase } from "../../src/db/index.js";
 import { SyncEngine } from "../../src/sync/sync-engine.js";
 import type { SdkIdentity } from "./account.ts";
 import { documents, notes } from "./collections.ts";
 import type { IntegrationConfig } from "./stack.ts";
+
+/** Databases created this run — cleaned in afterAll so OPFS doesn't
+ * accumulate garbage across repeated suite runs. */
+const createdDbs: string[] = [];
+
+export async function cleanupDatabases(): Promise<void> {
+  await Promise.allSettled(createdDbs.map((name) => deleteDatabase(name)));
+  createdDbs.length = 0;
+}
 
 export async function makeEngine(
   config: IntegrationConfig,
@@ -16,6 +25,7 @@ export async function makeEngine(
   session: AuthSession,
   dbName: string,
 ): Promise<SyncEngine> {
+  createdDbs.push(dbName);
   const adapter = await createDatabase(dbName, [notes, documents], {
     worker: new Worker(new URL("./db-worker.ts", import.meta.url), {
       type: "module",

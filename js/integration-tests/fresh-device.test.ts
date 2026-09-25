@@ -4,11 +4,11 @@
  * existing data must not rotate epochs, must converge, and a converged
  * system doing another full cycle must stay put (quiescence).
  */
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AuthSession } from "../src/auth/session.js";
 import { provisionAccount, type SdkIdentity } from "./helpers/account.ts";
 import { notes } from "./helpers/collections.ts";
-import { makeEngine } from "./helpers/engine.ts";
+import { cleanupDatabases, makeEngine } from "./helpers/engine.ts";
 import { type IntegrationConfig, stackConfig } from "./helpers/stack.ts";
 
 let config: IntegrationConfig;
@@ -24,6 +24,10 @@ beforeAll(async () => {
     { client: identity.client },
     identity.auth,
   );
+});
+
+afterAll(async () => {
+  await cleanupDatabases();
 });
 
 describe("fresh device pull hygiene", () => {

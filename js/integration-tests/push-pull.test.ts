@@ -7,11 +7,11 @@
  * This is the foundation every other integration scenario builds on; if
  * this breaks, the SDK↔server contract itself broke.
  */
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AuthSession } from "../src/auth/session.js";
 import { provisionAccount, type SdkIdentity } from "./helpers/account.ts";
 import { notes } from "./helpers/collections.ts";
-import { makeEngine } from "./helpers/engine.ts";
+import { cleanupDatabases, makeEngine } from "./helpers/engine.ts";
 import { type IntegrationConfig, stackConfig } from "./helpers/stack.ts";
 
 let config: IntegrationConfig;
@@ -30,6 +30,10 @@ beforeAll(async () => {
     { client: identity.client },
     identity.auth,
   );
+});
+
+afterAll(async () => {
+  await cleanupDatabases();
 });
 
 describe("sdk↔server: push/pull convergence", () => {

@@ -274,25 +274,57 @@ export async function authorize(
     account.authToken,
   )) as { app_keypair_blob?: string; wrapped_scoped_key?: string };
 
-  // First consent for this grant: explicit absence → safe to generate.
-  // (This harness never re-consents an existing grant — if that changes,
-  // the fail-closed unwrap paths must be exercised, not skipped.)
-  if (grant.wrapped_scoped_key || grant.app_keypair_blob) {
+  let scopedKey: Uint8Array;
+  let wrappedScopedKeyB64: string;
+  let appKeypair: { publicKeyJwk: JsonWebKey; privateKeyJwk: JsonWebKey };
+
+  if (grant.wrapped_scoped_key && grant.app_keypair_blob) {
+    // Returning device: the grant already has key material — recover it
+    // with this device's root key (fail-closed: an undecryptable wrapper
+    // must throw, never generate replacements that strand the identity).
+    const stored = await keys.unwrapWithRootKey(
+      keys.base64DecodeToBytes(grant.wrapped_scoped_key),
+      account.rootKey,
+    );
+    scopedKey = stored;
+    wrappedScopedKeyB64 = grant.wrapped_scoped_key;
+    const recoverWrap = await keys.deriveAppKeypairKey(
+      scopedKey,
+      account.userId,
+      ctx.client_id,
+    );
+    const privateKeyJwk = await keys.decryptAppKeypairBlob(
+      grant.app_keypair_blob,
+      recoverWrap,
+    );
+    appKeypair = {
+      privateKeyJwk,
+      publicKeyJwk: {
+        kty: privateKeyJwk.kty,
+        crv: privateKeyJwk.crv,
+        x: privateKeyJwk.x,
+        y: privateKeyJwk.y,
+      },
+    };
+  } else if (!grant.wrapped_scoped_key && !grant.app_keypair_blob) {
+    // First consent for this grant: explicit absence → safe to generate.
+    scopedKey = keys.generateRandomKey();
+    wrappedScopedKeyB64 = keys.base64Encode(
+      await keys.wrapWithRootKey(scopedKey, account.rootKey),
+    );
+    appKeypair = await keys.generateAppKeypair();
+  } else {
     throw new Error(
-      "grant already has key material — harness only supports fresh grants",
+      `grant has partial key material (scoped=${!!grant.wrapped_scoped_key}, keypair=${!!grant.app_keypair_blob}) — refusing to guess`,
     );
   }
-  const scopedKey = keys.generateRandomKey();
-  const wrappedScopedKeyB64 = keys.base64Encode(
-    await keys.wrapWithRootKey(scopedKey, account.rootKey),
-  );
+
   const kid = await keys.computeScopedKeyKid(scopedKey);
   const wrappingKey = await keys.deriveAppKeypairKey(
     scopedKey,
     account.userId,
     ctx.client_id,
   );
-  const appKeypair = await keys.generateAppKeypair();
   const appKeypairBlob = await keys.encryptAppKeypairBlob(
     appKeypair.privateKeyJwk,
     wrappingKey,
