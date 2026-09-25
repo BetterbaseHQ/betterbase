@@ -1,16 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { WSTransport } from "./ws-transport.js";
-import { WSClient } from "./ws-client.js";
-import { PushRejectedError } from "./transport.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpaceManager } from "./space-manager.js";
-import type { EpochConfig } from "./types.js";
-import { INITIAL_EPOCH } from "./types.js";
 import {
   FakeSyncServer,
-  stubWebSocket,
   resetFakeWebSocket,
   SERVER_INITIAL_EPOCH,
+  stubWebSocket,
 } from "./test-helpers.js";
+import { PushRejectedError } from "./transport.js";
+import type { EpochConfig } from "./types.js";
+import { INITIAL_EPOCH } from "./types.js";
+import { WSClient } from "./ws-client.js";
+import { WSTransport } from "./ws-transport.js";
 
 vi.mock("../crypto/webcrypto.js", () => ({
   webcryptoDeriveEpochKey: async (
@@ -32,7 +32,7 @@ function makeSpaceManager(overrides: Partial<SpaceManager> = {}) {
     getSpaceEpoch: vi.fn().mockReturnValue(null),
     hasSpace: vi.fn().mockReturnValue(false),
     getSpaceKey: vi.fn().mockReturnValue(null),
-    updateSpaceMetadata: vi.fn().mockResolvedValue(undefined),
+    completeInterruptedRewrap: vi.fn().mockResolvedValue(undefined),
     refreshMembers: vi.fn(),
     shouldRotateSpace: vi.fn().mockReturnValue(false),
     rotateSpaceKey: vi.fn().mockResolvedValue(undefined),
@@ -244,6 +244,50 @@ describe("WSTransport", () => {
       expect(sentSince).toBe(7);
       transport.commitPersistedCursors("notes");
       expect(cursorStore.set).toHaveBeenCalledWith("notes:space-personal", 8);
+    });
+
+    it("a settled shared-space pull writes nothing: no rotations, no pushes, no cursor churn", async () => {
+      // Regression class of the eternal no-op patch: a pull whose server
+      // state matches local state (same epoch, no rewrap, no records) must
+      // be a pure read. Any rotation, push, or patch here is write
+      // amplification that fires on every cycle.
+      server.handle("pull", (_params, reply) => {
+        const id = reply.socket.sentFrames.find((f) => f.method === "pull")!
+          .id as string;
+        reply.chunk(id, "pull.begin", {
+          space: "shared-1",
+          prev: 0,
+          cursor: 4,
+          epoch: 1,
+        });
+        reply.chunk(id, "pull.commit", {
+          space: "shared-1",
+          count: 0,
+          cursor: 4,
+        });
+        return { _chunks: 2 };
+      });
+      const spaceManager = makeSpaceManager({
+        getActiveSpaceIds: vi.fn().mockReturnValue(["shared-1"]),
+        hasSpace: vi.fn().mockReturnValue(true),
+        getSpaceEpoch: vi.fn().mockReturnValue(1),
+      });
+      const cursorStore = {
+        get: vi.fn().mockResolvedValue(4),
+        set: vi.fn().mockResolvedValue(undefined),
+      };
+      const { ws, transport } = makeHarness({ spaceManager, cursorStore });
+      await connect(ws);
+
+      const result = await transport.pull("notes", 4);
+
+      expect(result.records).toEqual([]);
+      expect(spaceManager.rotateSpaceKey).not.toHaveBeenCalled();
+      expect(spaceManager.completeInterruptedRewrap).not.toHaveBeenCalled();
+      // No push frames left the client during the pull
+      expect(server.sent.filter((f) => f.method === "push")).toEqual([]);
+      // (refreshMembers fires per pull by design — a deduped server read,
+      // not a write; it is deliberately outside this invariant.)
     });
 
     it("does not advance the cursor past a decrypt failure and re-pulls the failed range (AUD-025)", async () => {
