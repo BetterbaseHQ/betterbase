@@ -642,9 +642,12 @@ export class SpaceManager {
           raw.chain_seq,
         );
       } catch (err) {
-        console.error(
-          `[betterbase-sync] Failed to decrypt membership entry (seq ${raw.chain_seq}):`,
-          err,
+        // Expected after a key rotation: entries written under a previous
+        // epoch's key are unreadable by design and the rotation re-appends
+        // the live member state under the new key. Warn, don't error.
+        console.warn(
+          `[betterbase-sync] Skipping membership entry from a previous epoch (space ${spaceId}, seq ${raw.chain_seq}): not decryptable under the current key`,
+          err instanceof Error ? err.message : err,
         );
         continue;
       }
@@ -1087,8 +1090,18 @@ export class SpaceManager {
     const epoch = this.spaceEpochs.get(spaceId);
     if (epoch === undefined) return false;
     const advancedAt = this.spaceEpochAdvancedAt.get(spaceId);
-    // No recorded advancement — space was just created or loaded, don't rotate yet
-    if (advancedAt === undefined) return false;
+    // A missing or invalid timestamp must read as "not due", never as
+    // epoch-zero: `Date.now() - null` is ~1.8e12 and would instantly
+    // "overdue" the rotation (the every-fresh-device rotation bug). Records
+    // hydrated from the db can carry null for unset optionals.
+    if (
+      advancedAt === undefined ||
+      advancedAt === null ||
+      !Number.isFinite(advancedAt) ||
+      advancedAt <= 0
+    ) {
+      return false;
+    }
     // Only admins can advance the epoch on the server — skip for other roles
     // to avoid repeated 403 errors on every pull.
     const role = this.spaceRoles.get(spaceId);
@@ -1600,8 +1613,10 @@ export class SpaceManager {
       });
       this.spaceRoles.set(record.spaceId, record.role as SpaceRole);
 
-      // Populate epochAdvancedAt from persisted record, backfilling if missing
-      if (record.epochAdvancedAt !== undefined) {
+      // Populate epochAdvancedAt from persisted record, backfilling if
+      // missing (null and undefined both mean "never recorded" — unset
+      // optionals can materialize as null in stored records)
+      if (record.epochAdvancedAt != null) {
         this.spaceEpochAdvancedAt.set(record.spaceId, record.epochAdvancedAt);
       } else {
         // Space record missing epochAdvancedAt — backfill with current time

@@ -250,7 +250,8 @@ impl WasmDb {
         let def = self.get_def(collection)?;
         let data_val = js_to_value(data)?;
         let opts = parse_put_options(options)?;
-        let result = self.adapter.put(&def, data_val, &opts).into_js()?;
+        let mut result = self.adapter.put(&def, data_val, &opts).into_js()?;
+        strip_null_optionals_out(&def, &mut result.data);
         record_to_js_data(result)
     }
 
@@ -260,7 +261,10 @@ impl WasmDb {
         let opts = parse_get_options(options)?;
         let result = self.adapter.get(&def, id, &opts).into_js()?;
         match result {
-            Some(record) => record_to_js_data(record),
+            Some(mut record) => {
+                strip_null_optionals_out(&def, &mut record.data);
+                record_to_js_data(record)
+            }
             None => Ok(JsValue::NULL),
         }
     }
@@ -293,7 +297,7 @@ impl WasmDb {
         let def = self.get_def(collection)?;
         let data_val = js_to_value(data)?;
         let opts = parse_patch_options(options)?;
-        let result = self.adapter.patch(&def, data_val, &opts).into_js()?;
+        let mut result = self.adapter.patch(&def, data_val, &opts).into_js()?;
         if opts.base.is_none()
             && betterbase_db::storage::record_manager::last_patch_deletes_peer_spans(
                 &result.pending_patches,
@@ -302,6 +306,7 @@ impl WasmDb {
         {
             crate::diagnostics::warn_peer_span_deletion(collection, &result.id);
         }
+        strip_null_optionals_out(&def, &mut result.data);
         record_to_js_data(result)
     }
 
@@ -323,7 +328,10 @@ impl WasmDb {
         let result = self.adapter.query(&def, &q).into_js()?;
 
         let total = result.total;
-        let records: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
+        let mut records: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
+        for data in records.iter_mut() {
+            strip_null_optionals_out(&def, data);
+        }
         let mut out = serde_json::Map::new();
         out.insert("records".to_string(), Value::Array(records));
         if let Some(total) = total {
@@ -353,7 +361,10 @@ impl WasmDb {
         let def = self.get_def(collection)?;
         let opts = parse_list_options(options)?;
         let result = self.adapter.get_all(&def, &opts).into_js()?;
-        let records: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
+        let mut records: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
+        for data in records.iter_mut() {
+            strip_null_optionals_out(&def, data);
+        }
         value_to_js(&Value::Array(records))
     }
 
@@ -373,9 +384,12 @@ impl WasmDb {
         let records_val: Vec<Value> = serde_wasm_bindgen::from_value(records)
             .map_err(|e| JsValue::from_str(&format!("Invalid records array: {e}")))?;
         let opts = parse_put_options(options)?;
-        let result = self.adapter.bulk_put(&def, records_val, &opts).into_js()?;
+        let mut result = self.adapter.bulk_put(&def, records_val, &opts).into_js()?;
 
-        let data: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
+        let mut data: Vec<Value> = result.records.into_iter().map(|r| r.data).collect();
+        for d in data.iter_mut() {
+            strip_null_optionals_out(&def, d);
+        }
         let mut out = serde_json::Map::new();
         out.insert("records".to_string(), Value::Array(data));
         let errors: Vec<Value> = result
@@ -424,13 +438,15 @@ impl WasmDb {
             // Base-aware variant: the delivered view and its CRDT binary
             // are an atomic pair — the snapshot the UI rendered and the
             // anchor for `patch(def, data, { base })`.
+            let cb_def = Arc::clone(&def);
             self.adapter.observe_with_crdt(
                 def,
                 id,
                 Arc::new(
                     move |rec: Option<betterbase_db::reactive::adapter::ObservedRecord>| {
                         let js_val = match rec {
-                            Some(r) => {
+                            Some(mut r) => {
+                                strip_null_optionals_out(&cb_def, &mut r.data);
                                 let obj = js_sys::Object::new();
                                 js_sys::Reflect::set(
                                     &obj,
@@ -454,12 +470,16 @@ impl WasmDb {
                 None,
             )
         } else {
+            let cb_def = Arc::clone(&def);
             self.adapter.observe(
                 def,
                 id,
                 Arc::new(move |record: Option<Value>| {
                     let js_val = match record {
-                        Some(ref data) => value_to_js(data).unwrap_or(JsValue::NULL),
+                        Some(mut data) => {
+                            strip_null_optionals_out(&cb_def, &mut data);
+                            value_to_js(&data).unwrap_or(JsValue::NULL)
+                        }
                         None => JsValue::NULL,
                     };
                     let _ = cb.0.call1(&JsValue::NULL, &js_val);
@@ -484,11 +504,15 @@ impl WasmDb {
         let q = parse_query(query)?;
         let cb = Arc::new(SendSyncCallback(callback));
 
+        let cb_def = Arc::clone(&def);
         let unsub = self.adapter.observe_query(
             def,
             q,
             Arc::new(move |result| {
-                let records = result.records.clone();
+                let mut records = result.records.clone();
+                for data in records.iter_mut() {
+                    strip_null_optionals_out(&cb_def, data);
+                }
                 let mut out = serde_json::Map::new();
                 out.insert("records".to_string(), Value::Array(records));
                 out.insert(
@@ -663,6 +687,15 @@ const META_WIRE_KEY: &str = "__betterbase_meta";
 /// Serialize a stored record to JS, including metadata alongside data fields.
 /// The TS layer strips the metadata key for user-facing methods and preserves
 /// it for middleware enrichment (e.g., TypedAdapter).
+/// Unset optionals cross into JS as absent keys, never as `null` —
+/// mirrors the write-side convention (`serializeForRust` strips undefined,
+/// `serialize` skips null optionals). See `strip_null_optionals`.
+fn strip_null_optionals_out(def: &CollectionDef, data: &mut Value) {
+    if data.is_object() {
+        betterbase_db::schema::serialize::strip_null_optionals(&def.current_schema, data);
+    }
+}
+
 fn record_to_js_data(record: StoredRecordWithMeta) -> Result<JsValue, JsValue> {
     let mut data = match record.data {
         Value::Object(map) => map,

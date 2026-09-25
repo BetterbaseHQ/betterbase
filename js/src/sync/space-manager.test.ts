@@ -366,6 +366,19 @@ describe("SpaceManager", () => {
       const record = db.records.get("rec-1")!;
       expect(typeof record.epochAdvancedAt).toBe("number");
     });
+
+    // Unset optionals can materialize as null in stored records (the db
+    // validates into full objects). A null epochAdvancedAt once read as
+    // `Date.now() - null` — instantly "overdue" — and every fresh device
+    // rotated every space's keys on its first pull, orphaning pre-rotation
+    // membership entries. Null must hydrate like "never recorded".
+    it("treats a null epochAdvancedAt as never-recorded and never rotates off it", async () => {
+      await activate({ epochAdvancedAt: null });
+
+      const record = db.records.get("rec-1")!;
+      expect(typeof record.epochAdvancedAt).toBe("number");
+      expect(manager.shouldRotateSpace("s1")).toBe(false);
+    });
   });
 
   describe("getMembers — membership log state machine", () => {

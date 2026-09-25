@@ -90,6 +90,14 @@ fn js_has_fn(obj: &JsValue, name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Unset optionals cross into JS as absent keys, never as `null` — same
+/// convention as `WasmDb` (see `strip_null_optionals`).
+fn strip_null_optionals_out(def: &CollectionDef, data: &mut Value) {
+    if data.is_object() {
+        betterbase_db::schema::serialize::strip_null_optionals(&def.current_schema, data);
+    }
+}
+
 impl JsMiddlewareWrapper {
     fn new(js: JsMiddleware) -> Self {
         let has_on_read = js_has_fn(&js, "onRead");
@@ -317,7 +325,10 @@ impl WasmTypedDb {
         let opts = parse_get_options(options)?;
         let result = self.typed()?.get(&def, id, Some(&opts)).into_js()?;
         match result {
-            Some(data) => value_to_js(&data),
+            Some(mut data) => {
+                strip_null_optionals_out(&def, &mut data);
+                value_to_js(&data)
+            }
             None => Ok(JsValue::NULL),
         }
     }
@@ -379,8 +390,12 @@ impl WasmTypedDb {
             .query(&def, Some(&q), q_opts.as_ref())
             .into_js()?;
 
+        let mut records = result.records;
+        for data in records.iter_mut() {
+            strip_null_optionals_out(&def, data);
+        }
         let mut out = serde_json::Map::new();
-        out.insert("records".to_string(), Value::Array(result.records));
+        out.insert("records".to_string(), Value::Array(records));
         out.insert(
             "total".to_string(),
             Value::Number(serde_json::Number::from(result.total)),
@@ -414,7 +429,10 @@ impl WasmTypedDb {
     pub fn get_all(&self, collection: &str, options: JsValue) -> Result<JsValue, JsValue> {
         let def = self.get_def(collection)?;
         let opts = parse_list_options(options)?;
-        let result = self.typed()?.get_all(&def, Some(&opts)).into_js()?;
+        let mut result = self.typed()?.get_all(&def, Some(&opts)).into_js()?;
+        for data in result.records.iter_mut() {
+            strip_null_optionals_out(&def, data);
+        }
         value_to_js(&Value::Array(result.records))
     }
 
