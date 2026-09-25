@@ -1378,10 +1378,18 @@ export function useRecord<TName extends string, TSchema extends SchemaShape>(
 // useQuery — space-aware query observation
 // ---------------------------------------------------------------------------
 
-const EMPTY_QUERY_RESULT: QueryResult<never> = Object.freeze({
+/**
+ * useQuery's result: the observed query snapshot plus `loaded`, false until
+ * the adapter's first emission — "not loaded yet" is distinguishable from
+ * "loaded and genuinely empty" (first-run UIs key off the difference).
+ */
+export type LoadedQueryResult<T> = QueryResult<T> & { loaded: boolean };
+
+const EMPTY_QUERY_RESULT: LoadedQueryResult<never> = Object.freeze({
   records: Object.freeze([]) as never[],
   total: 0,
   errors: Object.freeze([]) as never[],
+  loaded: false,
 });
 
 /**
@@ -1397,13 +1405,13 @@ export function useQuery<TName extends string, TSchema extends SchemaShape>(
   def: CollectionDefHandle<TName, TSchema>,
   query?: QueryOptions,
   queryOptions?: SpaceQueryOptions,
-): QueryResult<CollectionRead<TSchema> & SpaceFields> {
+): LoadedQueryResult<CollectionRead<TSchema> & SpaceFields> {
   const ctx = useContext(BetterbaseContext);
   if (!ctx)
     throw new Error("useQuery: no BetterbaseProvider found in component tree");
   const db = ctx.db;
 
-  type QR = QueryResult<CollectionRead<TSchema> & SpaceFields>;
+  type QR = LoadedQueryResult<CollectionRead<TSchema> & SpaceFields>;
   const snapshotRef = useRef<QR>(EMPTY_QUERY_RESULT as QR);
 
   // Stabilize query and queryOptions
@@ -1437,7 +1445,7 @@ export function useQuery<TName extends string, TSchema extends SchemaShape>(
         def,
         stableQuery.current ?? ({} as QueryOptions),
         (result) => {
-          snapshotRef.current = result as QR;
+          snapshotRef.current = { ...result, loaded: true };
           onStoreChange();
         },
         stableOptions.current,

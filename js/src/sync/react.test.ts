@@ -859,7 +859,7 @@ describe("useSpaces", () => {
 // ---------------------------------------------------------------------------
 
 describe("space-aware useQuery / useRecord", () => {
-  it("useQuery starts empty (never undefined) and delivers enriched results", async () => {
+  it("useQuery starts empty-but-unloaded and delivers enriched results", async () => {
     const h = await mountReady(() => useQuery(notes));
 
     // EMPTY default is a module-level frozen singleton — referential
@@ -868,6 +868,9 @@ describe("space-aware useQuery / useRecord", () => {
     h.rerender();
     expect(h.value).toBe(empty);
     expect(h.value).toMatchObject({ records: [], total: 0 });
+    // Not-loaded is distinguishable from loaded-and-empty — first-run
+    // UIs key off this to avoid flashing "nothing here yet" over data
+    expect(h.value.loaded).toBe(false);
 
     act(() =>
       adapter.emitQuery(notes, {}, undefined, {
@@ -876,6 +879,7 @@ describe("space-aware useQuery / useRecord", () => {
       }),
     );
     expect(h.value.records).toEqual([{ id: "n1", _spaceId: "s-me" }]);
+    expect(h.value.loaded).toBe(true);
   });
 
   it("useQuery passes space options through to the adapter", async () => {

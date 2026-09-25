@@ -82,6 +82,10 @@ export class SyncScheduler {
         slot.cooldownTimer = null;
       }
       if (slot.queued) {
+        // Fire-and-forget callers (engine auto-sync wiring) never attach
+        // handlers — mark the rejection handled so they can't leak as
+        // unhandled; awaiting callers still observe it.
+        slot.queued.promise.catch(() => {});
         slot.queued.reject(new Error("SyncScheduler is disposed"));
         slot.queued = null;
       }

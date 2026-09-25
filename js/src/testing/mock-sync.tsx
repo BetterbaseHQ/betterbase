@@ -39,6 +39,7 @@ export type { Member };
  * code relies on: it never returns undefined, and its records carry the
  * spaces-middleware `_spaceId` field. The stub mirrors both — all records
  * belong to the personal space (`makeFakeSession().getPersonalSpaceId()`).
+ * `loaded` mirrors the real hook: false until the first emission.
  */
 export const STUB_PERSONAL_SPACE_ID = "personal-space-1";
 
@@ -48,15 +49,19 @@ export function useQuery(
   query?: unknown,
 ): {
   records: any[];
+  loaded: boolean;
 } {
   // `never` casts on both ends: instantiating the raw hook's schema generics
   // through a stub signature collapses into TS2589
   const raw = useQueryBase(def as never, query as never) as
     | { records: Array<Record<string, unknown>> }
     | undefined;
-  const cache = useRef<{ raw: unknown; mapped: { records: unknown[] } }>({
+  const cache = useRef<{
+    raw: unknown;
+    mapped: { records: unknown[]; loaded: boolean };
+  }>({
     raw: undefined,
-    mapped: { records: [] },
+    mapped: { records: [], loaded: false },
   });
   if (raw !== cache.current.raw) {
     cache.current = {
@@ -67,10 +72,11 @@ export function useQuery(
             ? r
             : { ...r, _spaceId: STUB_PERSONAL_SPACE_ID },
         ),
+        loaded: raw !== undefined,
       },
     };
   }
-  return cache.current.mapped as { records: never[] };
+  return cache.current.mapped as { records: never[]; loaded: boolean };
 }
 
 // ---------------------------------------------------------------------------
