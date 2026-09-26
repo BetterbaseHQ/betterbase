@@ -2,6 +2,11 @@
 import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { FileStore } from "./file-store.js";
+import {
+  IdbFileStorage,
+  type FileStorage,
+  type MetaEntry,
+} from "./file-storage.js";
 import { FileNotFoundError, type FilesClient } from "./files.js";
 
 // ---------------------------------------------------------------------------
@@ -138,14 +143,9 @@ async function deleteBlobBehindStore(
   spaceId: string,
   fileId: string,
 ): Promise<void> {
-  const db = await (store as unknown as { dbPromise: Promise<IDBDatabase> })
-    .dbPromise;
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction("blobs", "readwrite");
-    tx.objectStore("blobs").delete(`${spaceId}\0${fileId}`);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  await (store as unknown as { storage: IdbFileStorage }).storage.deleteBlob(
+    `${spaceId}\0${fileId}`,
+  );
 }
 
 /** Overwrite a queue entry's persisted state directly — simulates the
@@ -155,20 +155,32 @@ async function forceQueueState(
   fileId: string,
   state: { uploadStatus: string; lastAttemptAt?: number },
 ): Promise<void> {
-  const db = await (store as unknown as { dbPromise: Promise<IDBDatabase> })
-    .dbPromise;
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction("meta", "readwrite");
-    const req = tx.objectStore("meta").get(`_\0${fileId}`);
-    req.onsuccess = () => {
-      const entry = req.result;
-      entry.uploadStatus = state.uploadStatus;
-      entry.lastAttemptAt = state.lastAttemptAt ?? Date.now();
-      tx.objectStore("meta").put(entry);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  const storage = (store as unknown as { storage: FileStorage }).storage;
+  const key = `_\0${fileId}`;
+  const meta = await storage.getMeta(key);
+  if (!meta) throw new Error(`no meta for ${key}`);
+  meta.uploadStatus = state.uploadStatus as MetaEntry["uploadStatus"];
+  meta.lastAttemptAt = state.lastAttemptAt ?? Date.now();
+  await storage.putMeta(meta);
+}
+
+/** A FileStorage whose every operation throws — simulates backend failure. */
+function brokenStorage(): FileStorage {
+  const boom = (): never => {
+    throw new Error("quota exceeded");
+  };
+  return {
+    getMeta: boom,
+    putMeta: boom,
+    metaHas: boom,
+    allMeta: boom,
+    metaForSpace: boom,
+    queuedForSpace: boom,
+    getBlob: boom,
+    putFile: boom,
+    deleteFile: boom,
+    deleteBlob: boom,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -959,11 +971,11 @@ describe("FileStore LRU eviction", () => {
     }
   });
 
-  it("reports zeroed stats when the DB read fails", async () => {
+  it("reports zeroed stats when the storage read fails", async () => {
     const store = freshStore();
     await store.getCacheStats(); // warm the DB
-    const internal = store as unknown as { dbPromise: Promise<IDBDatabase> };
-    internal.dbPromise = Promise.reject(new Error("db gone"));
+    const internal = store as unknown as { storage: FileStorage };
+    internal.storage = brokenStorage();
     expect(await store.getCacheStats()).toEqual({
       totalBytes: 0,
       fileCount: 0,
@@ -1115,14 +1127,9 @@ describe("FileStore.transferUnuploadedFrom — connected target (regression)", (
     const to = freshStore();
     await from.put(UUID, data(16), RECORD);
     await from.put(UUID2, data(24), RECORD);
-    // Break the target's IDB after open
-    const internal = to as unknown as { dbPromise: Promise<IDBDatabase> };
-    const realDb = await internal.dbPromise;
-    const broken = Object.create(realDb);
-    broken.transaction = () => {
-      throw new Error("quota exceeded");
-    };
-    internal.dbPromise = Promise.resolve(broken as IDBDatabase);
+    // Break the target's storage after open
+    const internal = to as unknown as { storage: FileStorage };
+    internal.storage = brokenStorage();
 
     // Rejects (raw IDB failure propagates) — retirement aborts, source
     // bytes survive for the retry

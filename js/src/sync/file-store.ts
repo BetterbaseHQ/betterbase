@@ -24,16 +24,12 @@
  * Encryption happens at upload time (not at queue time) because the
  * epoch key may rotate between queueing and actual upload.
  *
- * All spaces share a single IndexedDB database (`betterbase-file-cache`) with
- * compound keys `[spaceId, fileId]` for isolation without per-space overhead.
- *
- * IDB schema: two stores for efficient metadata-only operations.
- * - "meta"  — lightweight: key, spaceId, fileId, cachedAt, lastAccessedAt, size,
- *             plus optional upload queue fields (uploadStatus, recordId, etc.)
- * - "blobs" — heavy: key, data (Uint8Array)
- *
- * This split means touchAccessTime, getCacheStats, and maybeEvict never
- * load blob data into memory.
+ * Storage is a swappable seam (`FileStorage`) — semantics live here,
+ * persistence lives behind the interface. The default `IdbFileStorage`
+ * keeps the original IndexedDB layout (one shared database, compound
+ * keys `[spaceId, fileId]`, a lightweight `meta` store split from heavy
+ * `blobs` so metadata operations never load bytes); a worker/OPFS
+ * backend implements the same contract (docs/file-store-core.md).
  *
  * Use cases: Drive-style file apps, photo galleries, notes with attachments.
  */
@@ -53,6 +49,18 @@ import {
   webcryptoUnwrapDEK,
   webcryptoDeriveEpochKey,
 } from "../crypto/webcrypto.js";
+import {
+  cacheKey,
+  DEFAULT_SPACE_ID,
+  deleteFileCacheDatabase,
+  isStaleUploading,
+  type FileStorage,
+  type MetaEntry,
+  IdbFileStorage,
+} from "./file-storage.js";
+
+export { deleteFileCacheDatabase };
+export type { FileStorage, MetaEntry };
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -92,6 +100,8 @@ export interface UploadQueueEntry {
 export interface FileStoreConfig {
   /** Override the shared IndexedDB name (default: "betterbase-file-cache"). */
   dbName?: string;
+  /** Custom persistence backend (default: IndexedDB via IdbFileStorage). */
+  storage?: FileStorage;
   /**
    * Max local cache size in bytes. Files awaiting upload are never evicted.
    * Default: Infinity (no automatic eviction).
@@ -168,249 +178,6 @@ export interface CacheStats {
   maxBytes: number;
 }
 
-/** Lightweight metadata — never includes blob data. Upload queue fields are inline. */
-interface MetaEntry {
-  /** Compound key: `${spaceId}\0${fileId}` */
-  key: string;
-  spaceId: string;
-  fileId: string;
-  cachedAt: number;
-  lastAccessedAt: number;
-  size: number;
-  // Upload queue fields — present only when file is queued for upload
-  recordId?: string;
-  uploadStatus?: "pending" | "uploading" | "error";
-  uploadError?: string;
-  queuedAt?: number;
-  attempts?: number;
-  lastAttemptAt?: number;
-}
-
-/**
- * An `uploading` entry whose last attempt started longer ago than this is
- * treated as abandoned (process crash / tab close mid-upload) and reset to
- * `pending` on the next queue scan (AUD-036). Without a reset there is no
- * path back: the scan only picks `pending`/`error`, so the item is excluded
- * from uploads forever and its cache allocation is pinned.
- *
- * The window is deliberately generous: `uploading` also acts as the
- * cross-instance claim (a peer tab's scan skips it), and a slow link can
- * legitimately hold a large upload in flight for many minutes. A reset that
- * races a genuinely-live uploader is safe, not merely rare: the object store
- * create-mode + idempotent metadata commit mean the loser of the race
- * observes an already-recorded file and simply clears its queue state.
- */
-const STALE_UPLOAD_MS = 15 * 60 * 1000;
-
-function isStaleUploading(meta: MetaEntry): boolean {
-  return (
-    meta.uploadStatus === "uploading" &&
-    Date.now() - (meta.lastAttemptAt ?? 0) > STALE_UPLOAD_MS
-  );
-}
-
-/** Heavy blob data — only read when actually needed. */
-interface BlobEntry {
-  /** Compound key: `${spaceId}\0${fileId}` */
-  key: string;
-  data: Uint8Array;
-}
-
-// ---------------------------------------------------------------------------
-// IndexedDB helpers — single shared database for all spaces
-// ---------------------------------------------------------------------------
-
-const IDB_NAME = "betterbase-file-cache";
-const META_STORE = "meta";
-const BLOB_STORE = "blobs";
-const DEFAULT_SPACE_ID = "_";
-
-/** Singleton DB promise shared across all FileStore instances. */
-let sharedDbPromise: Promise<IDBDatabase> | null = null;
-let sharedDbName: string = IDB_NAME;
-
-function getSharedDB(name: string): Promise<IDBDatabase> {
-  if (sharedDbPromise && sharedDbName === name) return sharedDbPromise;
-  sharedDbName = name;
-  sharedDbPromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(name, 1);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(META_STORE)) {
-        const store = db.createObjectStore(META_STORE, { keyPath: "key" });
-        store.createIndex("by-upload-status", ["spaceId", "uploadStatus"]);
-      }
-      if (!db.objectStoreNames.contains(BLOB_STORE)) {
-        db.createObjectStore(BLOB_STORE, { keyPath: "key" });
-      }
-    };
-    request.onblocked = () => {
-      console.warn("FileStore: database upgrade blocked by another tab");
-    };
-    request.onsuccess = () => {
-      const db = request.result;
-      db.onversionchange = () => {
-        db.close();
-        sharedDbPromise = null;
-      };
-      db.onclose = () => {
-        sharedDbPromise = null;
-      };
-      resolve(db);
-    };
-    request.onerror = () => reject(request.error);
-  });
-  return sharedDbPromise;
-}
-
-/** Compound key for IndexedDB: spaceId + null separator + fileId. */
-function cacheKey(spaceId: string, fileId: string): string {
-  return `${spaceId}\0${fileId}`;
-}
-
-/**
- * Delete a file-cache IndexedDB database (default: the shared anonymous
- * cache). Used to retire an adopted anonymous workspace's cached blobs
- * alongside its record database — plaintext local-only blobs must not
- * linger after their records moved to the account.
- *
- * Open connections cooperate: deleteDatabase fires `versionchange`, the
- * shared connection's handler closes it, and the deletion proceeds. If
- * the database is missing, resolves without error.
- */
-export async function deleteFileCacheDatabase(
-  dbName: string = IDB_NAME,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const req = indexedDB.deleteDatabase(dbName);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-    req.onblocked = () => {
-      // A connection that refuses to close (shouldn't happen — ours close
-      // on versionchange). Don't hang forever.
-      console.warn(
-        `FileStore: deleting ${dbName} blocked by an open connection`,
-      );
-      resolve();
-    };
-  });
-}
-
-// -- meta store helpers --
-
-function metaGet(db: IDBDatabase, key: string): Promise<MetaEntry | undefined> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(META_STORE, "readonly");
-    const req = tx.objectStore(META_STORE).get(key);
-    req.onsuccess = () => resolve(req.result as MetaEntry | undefined);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function metaPut(db: IDBDatabase, entry: MetaEntry): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(META_STORE, "readwrite");
-    const req = tx.objectStore(META_STORE).put(entry);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function metaHas(db: IDBDatabase, key: string): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(META_STORE, "readonly");
-    const req = tx.objectStore(META_STORE).count(key);
-    req.onsuccess = () => resolve(req.result > 0);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function metaGetAllForSpace(
-  db: IDBDatabase,
-  spaceId: string,
-): Promise<MetaEntry[]> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(META_STORE, "readonly");
-    const req = tx.objectStore(META_STORE).getAll();
-    req.onsuccess = () => {
-      const all = (req.result as MetaEntry[]) ?? [];
-      resolve(all.filter((e) => e.spaceId === spaceId));
-    };
-    req.onerror = () => reject(req.error);
-  });
-}
-
-/** Every meta entry in the store, across all spaces. */
-function metaGetAll(db: IDBDatabase): Promise<MetaEntry[]> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(META_STORE, "readonly");
-    const req = tx.objectStore(META_STORE).getAll();
-    req.onsuccess = () => resolve((req.result as MetaEntry[]) ?? []);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-// -- blob store helpers --
-
-function blobGet(db: IDBDatabase, key: string): Promise<BlobEntry | undefined> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(BLOB_STORE, "readonly");
-    const req = tx.objectStore(BLOB_STORE).get(key);
-    req.onsuccess = () => resolve(req.result as BlobEntry | undefined);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-// -- atomic multi-store helpers --
-
-function putFile(
-  db: IDBDatabase,
-  meta: MetaEntry,
-  blob: BlobEntry,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction([META_STORE, BLOB_STORE], "readwrite");
-    tx.objectStore(META_STORE).put(meta);
-    tx.objectStore(BLOB_STORE).put(blob);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-function deleteFile(db: IDBDatabase, key: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction([META_STORE, BLOB_STORE], "readwrite");
-    tx.objectStore(META_STORE).delete(key);
-    tx.objectStore(BLOB_STORE).delete(key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-/** Queued entries of one space awaiting their first upload: pending or
- * errored, plus `uploading` entries abandoned by a crash (never one
- * genuinely in flight — see isStaleUploading). */
-function metaGetAllQueued(
-  db: IDBDatabase,
-  spaceId: string,
-): Promise<MetaEntry[]> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(META_STORE, "readonly");
-    const req = tx.objectStore(META_STORE).getAll();
-    req.onsuccess = () => {
-      const entries = (req.result as MetaEntry[]).filter(
-        (e) =>
-          e.spaceId === spaceId &&
-          (e.uploadStatus === "pending" ||
-            e.uploadStatus === "error" ||
-            isStaleUploading(e)),
-      );
-      resolve(entries);
-    };
-    req.onerror = () => reject(req.error);
-  });
-}
-
 // ---------------------------------------------------------------------------
 // FileStore
 // ---------------------------------------------------------------------------
@@ -443,7 +210,8 @@ export class FileStore {
   private maxCacheBytes: number;
   private queueSnapshot: UploadQueueEntry[] = [];
 
-  private dbPromise: Promise<IDBDatabase>;
+  /** Persistence backend — the seam every storage op goes through. */
+  readonly storage: FileStorage;
   private inflight = new Map<string, Promise<Uint8Array | null>>();
   private urlCache = new Map<string, string>();
   private disposed = false;
@@ -459,7 +227,7 @@ export class FileStore {
   constructor(config?: FileStoreConfig) {
     this.onQueueChangeFn = config?.onQueueChange;
     this.maxCacheBytes = config?.maxCacheBytes ?? Infinity;
-    this.dbPromise = getSharedDB(config?.dbName ?? IDB_NAME);
+    this.storage = config?.storage ?? new IdbFileStorage(config?.dbName);
   }
 
   /**
@@ -558,7 +326,7 @@ export class FileStore {
     }
 
     // Eagerly populate the queue snapshot so UI reflects existing entries immediately
-    this.dbPromise.then((db) => this.fireQueueChange(db)).catch(() => {});
+    void this.fireQueueChange().catch(() => {});
 
     // Process any queued uploads now that we're connected
     this.processQueue().catch((err) => {
@@ -642,7 +410,6 @@ export class FileStore {
     const fileData = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
     const effectiveSpaceId = spaceId ?? this.spaceId;
 
-    const db = await this.dbPromise;
     const key = cacheKey(effectiveSpaceId, id);
     const now = Date.now();
 
@@ -663,10 +430,10 @@ export class FileStore {
       this.enqueuedCount += 1;
     }
 
-    await putFile(db, meta, { key, data: fileData });
+    await this.storage.putFile(meta, fileData);
     this.notify();
     if (recordId !== undefined) {
-      await this.fireQueueChange(db);
+      await this.fireQueueChange();
     }
 
     await this.maybeEvict();
@@ -691,11 +458,10 @@ export class FileStore {
     const key = cacheKey(effectiveSpaceId, id);
 
     try {
-      const db = await this.dbPromise;
-      const blob = await blobGet(db, key);
-      if (blob) {
-        this.touchAccessTime(db, key);
-        return blob.data;
+      const data = await this.storage.getBlob(key);
+      if (data) {
+        this.touchAccessTime(key);
+        return data;
       }
     } catch (err) {
       console.error(
@@ -763,9 +529,7 @@ export class FileStore {
    */
   async transferUnuploadedFrom(from: FileStore): Promise<number> {
     if (from === this) return 0;
-    const fromDb = await from.dbPromise;
-    const db = await this.dbPromise;
-    const queued = await metaGetAllQueued(fromDb, from.spaceId);
+    const queued = await from.storage.queuedForSpace(from.spaceId);
 
     let transferred = 0;
     let failed = 0;
@@ -773,10 +537,10 @@ export class FileStore {
       if (this.disposed || from.disposed) {
         throw new Error("FileStore: disposed mid-transfer — source preserved");
       }
-      const blob = await blobGet(fromDb, meta.key);
+      const blob = await from.storage.getBlob(meta.key);
       if (!blob) continue; // bytes already gone — nothing to preserve
       const key = cacheKey(this.spaceId, meta.fileId);
-      if (await metaHas(db, key)) continue;
+      if (await this.storage.metaHas(key)) continue;
       const now = Date.now();
       const target: MetaEntry = {
         key,
@@ -784,7 +548,7 @@ export class FileStore {
         fileId: meta.fileId,
         cachedAt: now,
         lastAccessedAt: now,
-        size: blob.data.byteLength,
+        size: blob.byteLength,
       };
       if (meta.recordId !== undefined) {
         target.recordId = meta.recordId;
@@ -793,7 +557,7 @@ export class FileStore {
         target.attempts = 0;
       }
       try {
-        await putFile(db, target, { key, data: blob.data });
+        await this.storage.putFile(target, blob);
         if (target.recordId !== undefined) this.enqueuedCount += 1;
         transferred += 1;
       } catch {
@@ -801,7 +565,7 @@ export class FileStore {
       }
     }
     if (transferred > 0 || failed > 0) {
-      await this.fireQueueChange(db);
+      await this.fireQueueChange();
       if (this.syncConfig) {
         this.processQueue().catch((err) => {
           console.warn(
@@ -869,10 +633,9 @@ export class FileStore {
     }
 
     try {
-      const db = await this.dbPromise;
-      await deleteFile(db, key);
+      await this.storage.deleteFile(key);
       this.notify();
-      await this.fireQueueChange(db);
+      await this.fireQueueChange();
     } catch (err) {
       console.error("[betterbase-sync] Cache deletion failed:", err);
     }
@@ -891,8 +654,7 @@ export class FileStore {
   async has(id: string, spaceId?: string): Promise<boolean> {
     validateFileId(id);
     try {
-      const db = await this.dbPromise;
-      return await metaHas(db, cacheKey(spaceId ?? this.spaceId, id));
+      return await this.storage.metaHas(cacheKey(spaceId ?? this.spaceId, id));
     } catch (err) {
       console.error("[betterbase-sync] Cache has() check failed:", err);
       return false;
@@ -939,14 +701,13 @@ export class FileStore {
   }
 
   private async doProcessQueue(): Promise<void> {
-    const db = await this.dbPromise;
     while (true) {
       if (!this.syncConfig) break;
-      await this.resetStaleUploading(db);
+      await this.resetStaleUploading();
       // Scan every space — entries queue under whichever space the file
       // belongs to (personal or shared), and a shared space's runtime may
       // register long after its entries were queued.
-      const allMeta = await metaGetAll(db);
+      const allMeta = await this.storage.allMeta();
       const entries = allMeta.filter(
         (m) => m.uploadStatus === "pending" || m.uploadStatus === "error",
       );
@@ -955,10 +716,10 @@ export class FileStore {
       const countBefore = entries.length;
       for (const entry of entries) {
         if (!this.syncConfig) break;
-        await this.processOneUpload(db, entry);
+        await this.processOneUpload(entry);
       }
 
-      const remaining = (await metaGetAll(db)).filter(
+      const remaining = (await this.storage.allMeta()).filter(
         (m) => m.uploadStatus === "pending" || m.uploadStatus === "error",
       );
       // No progress (errored entries, or spaces without a runtime yet) →
@@ -974,8 +735,7 @@ export class FileStore {
    */
   async getQueueEntries(): Promise<UploadQueueEntry[]> {
     try {
-      const db = await this.dbPromise;
-      const allMeta = await metaGetAll(db);
+      const allMeta = await this.storage.allMeta();
       return allMeta
         .filter((m) => m.uploadStatus !== undefined)
         .map(toQueueEntry);
@@ -1026,7 +786,6 @@ export class FileStore {
     },
   ): Promise<{ migrated: number; skipped: number; failed: number }> {
     const fromSpaceId = opts?.fromSpaceId ?? this.spaceId;
-    const db = await this.dbPromise;
     const now = Date.now();
     let migrated = 0;
     let skipped = 0;
@@ -1038,7 +797,7 @@ export class FileStore {
         const fromKey = cacheKey(fromSpaceId, fileId);
         const toKey = cacheKey(toSpaceId, fileId);
 
-        let oldMeta = await metaGet(db, fromKey);
+        let oldMeta = await this.storage.getMeta(fromKey);
         if (oldMeta?.uploadStatus === "uploading") {
           // A pass may hold this entry object mid-upload; migrating under
           // it would let clearUploadState/markUploadError re-write the
@@ -1047,7 +806,7 @@ export class FileStore {
           skipped += 1;
           continue;
         }
-        let oldBlob = oldMeta ? await blobGet(db, fromKey) : null;
+        let oldBlob = oldMeta ? await this.storage.getBlob(fromKey) : null;
         if (!oldBlob) {
           // Bytes not on this device — never cached, or evicted after a
           // completed upload. Pull them from the source space so the
@@ -1078,7 +837,7 @@ export class FileStore {
             lastAccessedAt: now,
             size: fetched.byteLength,
           };
-          oldBlob = { key: fromKey, data: fetched };
+          oldBlob = fetched;
         }
         if (!oldMeta || !oldBlob) {
           skipped += 1;
@@ -1117,9 +876,9 @@ export class FileStore {
               }
             : {}),
         };
-        await putFile(db, newMeta, { key: toKey, data: oldBlob.data });
+        await this.storage.putFile(newMeta, oldBlob);
         if (recordId !== undefined) this.enqueuedCount += 1;
-        await deleteFile(db, fromKey);
+        await this.storage.deleteFile(fromKey);
 
         // Keep any live object URL working under the new key.
         const cachedUrl = this.urlCache.get(fromKey);
@@ -1136,7 +895,7 @@ export class FileStore {
 
     if (migrated > 0) {
       this.notify();
-      await this.fireQueueChange(db);
+      await this.fireQueueChange();
       this.processQueue().catch((err) => {
         console.warn(
           "FileStore: background queue processing failed after migration",
@@ -1211,8 +970,7 @@ export class FileStore {
     oldSpaceId: string,
     newSpaceId: string,
   ): Promise<void> {
-    const db = await this.dbPromise;
-    const oldEntries = await metaGetAllForSpace(db, oldSpaceId);
+    const oldEntries = await this.storage.metaForSpace(oldSpaceId);
     if (oldEntries.length === 0) return;
 
     // A queue pass of OURS in flight means any `uploading` claim was set by
@@ -1225,7 +983,7 @@ export class FileStore {
 
     for (const oldMeta of oldEntries) {
       const newKey = cacheKey(newSpaceId, oldMeta.fileId);
-      const oldBlob = await blobGet(db, oldMeta.key);
+      const oldBlob = await this.storage.getBlob(oldMeta.key);
 
       const newMeta: MetaEntry = {
         ...oldMeta,
@@ -1236,9 +994,9 @@ export class FileStore {
           : {}),
       };
       if (oldBlob) {
-        await putFile(db, newMeta, { key: newKey, data: oldBlob.data });
+        await this.storage.putFile(newMeta, oldBlob);
       } else {
-        await metaPut(db, newMeta);
+        await this.storage.putMeta(newMeta);
       }
       // Migration rewrites queued entries under new keys mid-flight: a queue
       // pass that is already running scanned the old keys and will exit via
@@ -1247,7 +1005,7 @@ export class FileStore {
       // coalesces into the in-flight pass, so it cannot be relied on).
       if (oldMeta.recordId !== undefined) this.enqueuedCount += 1;
 
-      await deleteFile(db, oldMeta.key);
+      await this.storage.deleteFile(oldMeta.key);
 
       const oldUrlKey = oldMeta.key;
       const cachedUrl = this.urlCache.get(oldUrlKey);
@@ -1264,12 +1022,9 @@ export class FileStore {
   // Private — upload queue
   // ---------------------------------------------------------------------------
 
-  private async persistQueueEntry(
-    db: IDBDatabase,
-    entry: MetaEntry,
-  ): Promise<void> {
-    await metaPut(db, entry);
-    await this.fireQueueChange(db);
+  private async persistQueueEntry(entry: MetaEntry): Promise<void> {
+    await this.storage.putMeta(entry);
+    await this.fireQueueChange();
   }
 
   /**
@@ -1285,28 +1040,24 @@ export class FileStore {
    * import can strand hundreds of entries, and per-entry queue-change
    * fires (each a full metadata scan) made recovery O(n²).
    */
-  private async resetStaleUploading(db: IDBDatabase): Promise<void> {
-    const allMeta = await metaGetAll(db);
+  private async resetStaleUploading(): Promise<void> {
+    const allMeta = await this.storage.allMeta();
     const stale = allMeta.filter(isStaleUploading);
     if (stale.length === 0) return;
     for (const entry of stale) {
       entry.uploadStatus = "pending";
-      await metaPut(db, entry);
+      await this.storage.putMeta(entry);
     }
-    await this.fireQueueChange(db);
+    await this.fireQueueChange();
   }
 
-  private async markUploading(
-    db: IDBDatabase,
-    entry: MetaEntry,
-  ): Promise<void> {
+  private async markUploading(entry: MetaEntry): Promise<void> {
     entry.uploadStatus = "uploading";
     entry.lastAttemptAt = Date.now();
-    await this.persistQueueEntry(db, entry);
+    await this.persistQueueEntry(entry);
   }
 
   private async markUploadError(
-    db: IDBDatabase,
     entry: MetaEntry,
     err: unknown,
     fallbackMessage: string,
@@ -1314,55 +1065,45 @@ export class FileStore {
     entry.uploadStatus = "error";
     entry.uploadError = err instanceof Error ? err.message : fallbackMessage;
     entry.attempts = (entry.attempts ?? 0) + 1;
-    await this.persistQueueEntry(db, entry);
+    await this.persistQueueEntry(entry);
   }
 
-  private async clearUploadState(
-    db: IDBDatabase,
-    entry: MetaEntry,
-  ): Promise<void> {
+  private async clearUploadState(entry: MetaEntry): Promise<void> {
     delete entry.uploadStatus;
     delete entry.uploadError;
     delete entry.recordId;
     delete entry.queuedAt;
     delete entry.attempts;
     delete entry.lastAttemptAt;
-    await this.persistQueueEntry(db, entry);
+    await this.persistQueueEntry(entry);
   }
 
   private async readCachedBlobOrDrop(
-    db: IDBDatabase,
     entry: MetaEntry,
-  ): Promise<BlobEntry | null> {
-    const cached = await blobGet(db, entry.key);
+  ): Promise<Uint8Array | null> {
+    const cached = await this.storage.getBlob(entry.key);
     if (cached) return cached;
 
     console.warn(
       `FileStore: cached data evicted for ${entry.fileId}, removing from queue`,
     );
-    await deleteFile(db, entry.key);
-    await this.fireQueueChange(db);
+    await this.storage.deleteFile(entry.key);
+    await this.fireQueueChange();
     return null;
   }
 
-  private async ensureRecordSynced(
-    db: IDBDatabase,
-    entry: MetaEntry,
-  ): Promise<boolean> {
+  private async ensureRecordSynced(entry: MetaEntry): Promise<boolean> {
     if (!this.syncConfig?.ensureSynced) return true;
     try {
       await this.syncConfig.ensureSynced();
       return true;
     } catch (err) {
-      await this.markUploadError(db, entry, err, "Sync failed");
+      await this.markUploadError(entry, err, "Sync failed");
       return false;
     }
   }
 
-  private async processOneUpload(
-    db: IDBDatabase,
-    entry: MetaEntry,
-  ): Promise<void> {
+  private async processOneUpload(entry: MetaEntry): Promise<void> {
     const sync = this.syncConfig;
     if (!sync) return;
 
@@ -1387,12 +1128,12 @@ export class FileStore {
     }
     if (wrapKey === undefined || wrapEpoch === undefined) return;
 
-    await this.markUploading(db, entry);
+    await this.markUploading(entry);
 
-    const cached = await this.readCachedBlobOrDrop(db, entry);
+    const cached = await this.readCachedBlobOrDrop(entry);
     if (!cached) return;
 
-    if (!(await this.ensureRecordSynced(db, entry))) return;
+    if (!(await this.ensureRecordSynced(entry))) return;
 
     const dek = generateDEK();
     try {
@@ -1400,7 +1141,7 @@ export class FileStore {
         spaceId: entry.spaceId,
         recordId: entry.fileId,
       };
-      const encrypted = encryptV4(cached.data, dek, context);
+      const encrypted = encryptV4(cached, dek, context);
 
       let wrappedDEK: Uint8Array;
       if (runtime.useCryptoKey && wrapKey instanceof CryptoKey) {
@@ -1417,17 +1158,17 @@ export class FileStore {
         entry.spaceId === this.spaceId ? undefined : entry.spaceId,
       );
 
-      await this.clearUploadState(db, entry);
+      await this.clearUploadState(entry);
     } catch (err) {
-      await this.markUploadError(db, entry, err, "Upload failed");
+      await this.markUploadError(entry, err, "Upload failed");
     } finally {
       dek.fill(0);
     }
   }
 
-  private async fireQueueChange(db: IDBDatabase): Promise<void> {
+  private async fireQueueChange(): Promise<void> {
     try {
-      const allMeta = await metaGetAll(db);
+      const allMeta = await this.storage.allMeta();
       const entries = allMeta
         .filter((m) => m.uploadStatus !== undefined)
         .map(toQueueEntry);
@@ -1557,11 +1298,9 @@ export class FileStore {
 
     // Cache locally (best-effort)
     try {
-      const db = await this.dbPromise;
       const key = cacheKey(effectiveSpaceId, id);
       const now = Date.now();
-      await putFile(
-        db,
+      await this.storage.putFile(
         {
           key,
           spaceId: effectiveSpaceId,
@@ -1570,7 +1309,7 @@ export class FileStore {
           lastAccessedAt: now,
           size: decrypted.byteLength,
         },
-        { key, data: decrypted },
+        decrypted,
       );
       this.notify();
       await this.maybeEvict();
@@ -1588,12 +1327,13 @@ export class FileStore {
   // Private — LRU cache eviction
   // ---------------------------------------------------------------------------
 
-  private touchAccessTime(db: IDBDatabase, key: string): void {
-    metaGet(db, key)
+  private touchAccessTime(key: string): void {
+    this.storage
+      .getMeta(key)
       .then((meta) => {
         if (!meta) return;
         meta.lastAccessedAt = Date.now();
-        return metaPut(db, meta);
+        return this.storage.putMeta(meta);
       })
       .catch((err) => {
         console.error(
@@ -1621,12 +1361,10 @@ export class FileStore {
   }
 
   private async runEviction(): Promise<void> {
-    const db = await this.dbPromise;
-
     // Reclaim stale-uploading pins even while disconnected (AUD-036)
-    await this.resetStaleUploading(db);
+    await this.resetStaleUploading();
 
-    const allMeta = await metaGetAll(db);
+    const allMeta = await this.storage.allMeta();
     let totalBytes = 0;
     for (const meta of allMeta) {
       totalBytes += meta.size;
@@ -1646,7 +1384,7 @@ export class FileStore {
       // with the queue state) or drop themselves when the blob is gone.
       if (meta.uploadStatus !== undefined) continue;
 
-      await deleteFile(db, meta.key);
+      await this.storage.deleteFile(meta.key);
 
       const url = this.urlCache.get(meta.key);
       if (url) {
@@ -1671,8 +1409,7 @@ export class FileStore {
 
   async getCacheStats(): Promise<CacheStats> {
     try {
-      const db = await this.dbPromise;
-      const entries = await metaGetAll(db);
+      const entries = await this.storage.allMeta();
       let totalBytes = 0;
       for (const entry of entries) {
         totalBytes += entry.size;
