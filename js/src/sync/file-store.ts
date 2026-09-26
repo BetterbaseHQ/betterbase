@@ -4,8 +4,8 @@
  * Provides a high-level file abstraction that works immediately for local
  * cache and progressively upgrades to encrypted sync when connected.
  *
- * **Local-first**: `new FileStore()` works immediately — `put()`, `get()`,
- * `getUrl()` all operate against IndexedDB with no auth required.
+ * **Local-first**: a store works immediately over its storage backend —
+ * `put()`, `get()`, `getUrl()` need no auth.
  *
  * **Progressive sync**: Call `connect()` with sync config when auth resolves.
  * Files put with a `recordId` queue for background upload. `get()` falls
@@ -24,12 +24,12 @@
  * Encryption happens at upload time (not at queue time) because the
  * epoch key may rotate between queueing and actual upload.
  *
- * Storage is a swappable seam (`FileStorage`) — semantics live here,
- * persistence lives behind the interface. The default `IdbFileStorage`
- * keeps the original IndexedDB layout (one shared database, compound
- * keys `[spaceId, fileId]`, a lightweight `meta` store split from heavy
- * `blobs` so metadata operations never load bytes); a worker/OPFS
- * backend implements the same contract (docs/file-store-core.md).
+ * Storage is an explicit `FileStorage` backend — semantics live here,
+ * persistence lives behind the interface: `lazyWorkerFileStorage`
+ * (OPFS/SQLite in a worker, the durable production backend) or
+ * `InMemoryFileStorage` (ephemeral). Entries are addressed by compound
+ * keys `[spaceId, fileId]` inside the backend's namespace
+ * (docs/file-store-core.md).
  *
  * Use cases: Drive-style file apps, photo galleries, notes with attachments.
  */
@@ -52,14 +52,11 @@ import {
 import {
   cacheKey,
   DEFAULT_SPACE_ID,
-  deleteFileCacheDatabase,
   isStaleUploading,
   type FileStorage,
   type MetaEntry,
-  IdbFileStorage,
 } from "./file-storage.js";
 
-export { deleteFileCacheDatabase };
 export type { FileStorage, MetaEntry };
 
 // ---------------------------------------------------------------------------
@@ -98,10 +95,9 @@ export interface UploadQueueEntry {
 
 /** Local-only configuration — no auth required. */
 export interface FileStoreConfig {
-  /** Override the shared IndexedDB name (default: "betterbase-file-cache"). */
-  dbName?: string;
-  /** Custom persistence backend (default: IndexedDB via IdbFileStorage). */
-  storage?: FileStorage;
+  /** Persistence backend — explicit by design: durable (worker/OPFS) or
+   * ephemeral (in-memory) is a property the caller must choose. */
+  storage: FileStorage;
   /**
    * Max local cache size in bytes. Files awaiting upload are never evicted.
    * Default: Infinity (no automatic eviction).
@@ -224,17 +220,14 @@ export class FileStore {
   private version = 0;
   private subscribers = new Set<() => void>();
 
-  constructor(config?: FileStoreConfig) {
-    this.onQueueChangeFn = config?.onQueueChange;
-    this.maxCacheBytes = config?.maxCacheBytes ?? Infinity;
-    this.storage = config?.storage ?? new IdbFileStorage(config?.dbName);
+  constructor(config: FileStoreConfig) {
+    this.onQueueChangeFn = config.onQueueChange;
+    this.maxCacheBytes = config.maxCacheBytes ?? Infinity;
+    this.storage = config.storage;
   }
 
   /**
    * Connect to sync backend. Enables server uploads and network fallback on get().
-   *
-   * If spaceId differs from the current internal spaceId (default "_"),
-   * migrates cached IDB entries to the new spaceId prefix.
    *
    * Re-connecting while already connected is an authoritative rebind: all
    * registered space runtimes are dropped first. Dispose any SyncEngine
@@ -243,7 +236,6 @@ export class FileStore {
    * bootstrap) unless its sweep finds them missing.
    */
   async connect(config: FileStoreSyncConfig): Promise<void> {
-    const oldSpaceId = this.spaceId;
     // A re-connect is an authoritative rebind: runtimes still registered
     // from a previous binding (anonymous → account adoption, account
     // switch without dispose) hold closures over a dead SpaceManager and
@@ -319,11 +311,6 @@ export class FileStore {
       };
     }
     this.spaceRuntimes.set(config.spaceId, runtime);
-
-    // Migrate IDB entries if spaceId changed
-    if (oldSpaceId !== config.spaceId) {
-      await this.migrateSpaceId(oldSpaceId, config.spaceId);
-    }
 
     // Eagerly populate the queue snapshot so UI reflects existing entries immediately
     void this.fireQueueChange().catch(() => {});
@@ -963,62 +950,6 @@ export class FileStore {
     // Backends that hold resources (a worker + leader lock) release them
     // here; fire-and-forget — dispose is synchronous and idempotent.
     void Promise.resolve(this.storage.close?.()).catch(() => {});
-  }
-
-  // ---------------------------------------------------------------------------
-  // Private — IDB migration
-  // ---------------------------------------------------------------------------
-
-  private async migrateSpaceId(
-    oldSpaceId: string,
-    newSpaceId: string,
-  ): Promise<void> {
-    const oldEntries = await this.storage.metaForSpace(oldSpaceId);
-    if (oldEntries.length === 0) return;
-
-    // A queue pass of OURS in flight means any `uploading` claim was set by
-    // this instance against the OLD key — it will never mark the migrated
-    // copy. Without the reset the copy is invisible to queue scans (they
-    // match only pending/error) and strands for the stale window. With no
-    // pass in flight, a recent `uploading` claim may belong to a peer tab —
-    // preserve it (the stale window recovers) rather than double-upload.
-    const ownPassInFlight = this.currentRun !== null;
-
-    for (const oldMeta of oldEntries) {
-      const newKey = cacheKey(newSpaceId, oldMeta.fileId);
-      const oldBlob = await this.storage.getBlob(oldMeta.key);
-
-      const newMeta: MetaEntry = {
-        ...oldMeta,
-        key: newKey,
-        spaceId: newSpaceId,
-        ...(ownPassInFlight && oldMeta.uploadStatus === "uploading"
-          ? { uploadStatus: "pending" as const }
-          : {}),
-      };
-      if (oldBlob) {
-        await this.storage.putFile(newMeta, oldBlob);
-      } else {
-        await this.storage.putMeta(newMeta);
-      }
-      // Migration rewrites queued entries under new keys mid-flight: a queue
-      // pass that is already running scanned the old keys and will exit via
-      // the no-progress heuristic without noticing. Bumping the enqueue
-      // counter is what forces a re-scan (and connect()'s own kick
-      // coalesces into the in-flight pass, so it cannot be relied on).
-      if (oldMeta.recordId !== undefined) this.enqueuedCount += 1;
-
-      await this.storage.deleteFile(oldMeta.key);
-
-      const oldUrlKey = oldMeta.key;
-      const cachedUrl = this.urlCache.get(oldUrlKey);
-      if (cachedUrl) {
-        this.urlCache.delete(oldUrlKey);
-        this.urlCache.set(newKey, cachedUrl);
-      }
-    }
-
-    this.notify();
   }
 
   // ---------------------------------------------------------------------------

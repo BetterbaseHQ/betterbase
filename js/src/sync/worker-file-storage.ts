@@ -143,9 +143,9 @@ export class WorkerFileStorage implements FileStorage {
 
 /**
  * Delete a namespace's OPFS storage (both the SQLite SAH-pool directory
- * and the blob directory). Retirement counterpart to
- * `deleteFileCacheDatabase` — plaintext local-only blobs must not linger
- * after adoption.
+ * and the blob directory) — retirement counterpart to the records
+ * `deleteDatabase`. Plaintext local-only blobs must not linger after
+ * adoption.
  *
  * Refuses while a live store holds the namespace (the same leader lock
  * `createWorkerFileStorage` elects under): the caller closes its storage

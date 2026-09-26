@@ -123,7 +123,22 @@ the main-thread URL cache) over a pre-opened pool (sahpool precedent);
 cold reads go through async `FileSystemFileHandle` reads. Feature-detect
 engine maturity before relying on the hot path.
 
-## Sequencing
+## Post-cleanup state (greenfield — no backwards compat)
+
+The transition-era scaffolding is gone: `IdbFileStorage` and
+`deleteFileCacheDatabase` are deleted (IndexedDB no longer touches file
+storage), `migrateSpaceId` is deleted (per-account namespaces made the
+in-place `"_" → personal` rewrite obsolete — pre-connect entries belong
+to the anonymous namespace and move by explicit transfer), and the
+engine/provider construct no default store: `SyncEngineConfig.fileStore`
+and the provider's `fileStore` prop are required, making the
+durable-vs-ephemeral choice explicit at every construction site.
+`InMemoryFileStorage` covers ephemeral use and the unit suite; all
+example apps cache blobs in per-scope OPFS namespaces via shared
+wiring (`createScopedFileStore`), with the anonymous namespace
+adopted-from and retired like the records databases.
+
+## Sequencing (historical)
 
 - **A1** — TS `FileStorage` seam; extract `IdbFileStorage`; behavioral
   suite runs against the seam. Zero behavior change.

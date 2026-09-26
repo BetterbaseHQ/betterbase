@@ -53,7 +53,6 @@ import {
 import { spaces } from "./spaces-collection.js";
 import { SyncEngine } from "./sync-engine.js";
 import { fetchServerMetadata } from "../discovery/index.js";
-import * as fileStoreModule from "./file-store.js";
 import type { UploadQueueEntry } from "./file-store.js";
 
 vi.mock("./sync-engine.js", () => ({
@@ -63,13 +62,8 @@ vi.mock("../discovery/index.js", () => ({
   fetchServerMetadata: vi.fn(),
 }));
 vi.mock("./file-store.js", () => {
-  // Instances created by the provider itself (no external `fileStore` prop)
-  const created: { dispose: ReturnType<typeof vi.fn> }[] = [];
   class FileStore {
     dispose = vi.fn();
-    constructor(_opts: unknown) {
-      created.push(this as never);
-    }
     subscribe() {
       return () => {};
     }
@@ -87,7 +81,7 @@ vi.mock("./file-store.js", () => {
     }
     async processQueue() {}
   }
-  return { FileStore, __created: created };
+  return { FileStore };
 });
 
 afterEach(() => {
@@ -496,25 +490,7 @@ describe("BetterbaseProvider", () => {
     );
   });
 
-  it("creates and disposes an internal FileStore when none is provided", async () => {
-    const created = (fileStoreModule as unknown as { __created: unknown[] })
-      .__created;
-    created.length = 0;
-
-    // Explicit undefined overrides the base props' external store
-    const { unmount } = mountHook(() => useSyncReady(), {
-      fileStore: undefined,
-    });
-    await ready();
-
-    expect(created).toHaveLength(1);
-    unmount();
-    expect(
-      (created[0] as { dispose: ReturnType<typeof vi.fn> }).dispose,
-    ).toHaveBeenCalledTimes(1);
-  });
-
-  it("never disposes an externally-provided FileStore", async () => {
+  it("never disposes the caller-owned FileStore on unmount", async () => {
     const { unmount } = mountHook(() => useSyncReady());
     await ready();
     unmount();

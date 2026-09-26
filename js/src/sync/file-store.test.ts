@@ -3,7 +3,7 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { FileStore } from "./file-store.js";
 import {
-  IdbFileStorage,
+  InMemoryFileStorage,
   type FileStorage,
   type MetaEntry,
 } from "./file-storage.js";
@@ -91,16 +91,10 @@ const UUID2 = "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d";
 const RECORD = "9a8b7c6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d";
 const RECORD2 = "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d";
 
-let dbCounter = 0;
-
-function freshDbName(): string {
-  return `file-store-test-${++dbCounter}`;
-}
-
 function freshStore(
-  config: Omit<ConstructorParameters<typeof FileStore>[0], "dbName"> = {},
+  config: Omit<ConstructorParameters<typeof FileStore>[0], "storage"> = {},
 ) {
-  return new FileStore({ dbName: freshDbName(), ...config });
+  return new FileStore({ storage: new InMemoryFileStorage(), ...config });
 }
 
 function data(bytes: number): Uint8Array {
@@ -143,7 +137,7 @@ async function deleteBlobBehindStore(
   spaceId: string,
   fileId: string,
 ): Promise<void> {
-  await (store as unknown as { storage: IdbFileStorage }).storage.deleteBlob(
+  await (store as unknown as { storage: FileStorage }).storage.deleteBlob(
     `${spaceId}\0${fileId}`,
   );
 }
@@ -154,9 +148,10 @@ async function forceQueueState(
   store: FileStore,
   fileId: string,
   state: { uploadStatus: string; lastAttemptAt?: number },
+  spaceId = "_",
 ): Promise<void> {
   const storage = (store as unknown as { storage: FileStorage }).storage;
-  const key = `_\0${fileId}`;
+  const key = `${spaceId}\0${fileId}`;
   const meta = await storage.getMeta(key);
   if (!meta) throw new Error(`no meta for ${key}`);
   meta.uploadStatus = state.uploadStatus as MetaEntry["uploadStatus"];
@@ -188,9 +183,9 @@ function brokenStorage(): FileStorage {
 // Validation
 // ---------------------------------------------------------------------------
 
-describe("IdbFileStorage.touchMeta", () => {
+describe("storage touchMeta contract", () => {
   it("updates lastAccessedAt only when the entry exists", async () => {
-    const storage = new IdbFileStorage(freshDbName());
+    const storage = new InMemoryFileStorage();
     const key = "_\0" + UUID;
     await storage.putMeta({
       key,
@@ -208,7 +203,7 @@ describe("IdbFileStorage.touchMeta", () => {
     // A stale touch landing after an eviction delete must be a no-op —
     // a get-then-put across two transactions would re-create the meta
     // as a byteless zombie whose size is counted forever.
-    const storage = new IdbFileStorage(freshDbName());
+    const storage = new InMemoryFileStorage();
     const key = "_\0" + UUID;
     await storage.putMeta({
       key,
@@ -467,9 +462,9 @@ describe("FileStore upload queue", () => {
   it("connect processes pending uploads end to end", async () => {
     const upload = vi.fn().mockResolvedValue({ fileId: UUID });
     const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient({ upload })));
     await store.put(UUID, data(24), RECORD);
 
-    await store.connect(syncConfig(makeFilesClient({ upload })));
     await store.processQueue();
 
     expect(upload).toHaveBeenCalledTimes(1);
@@ -498,7 +493,10 @@ describe("FileStore upload queue", () => {
 
     const store = freshStore();
     await store.put(UUID, data(8), RECORD);
-    await store.connect(syncConfig(makeFilesClient({ upload })));
+    // Connect on the default space: the pre-connect entry belongs to it.
+    await store.connect(
+      syncConfig(makeFilesClient({ upload }), { spaceId: "_" }),
+    );
 
     await store.processQueue();
     expect(await store.getQueueEntries()).toEqual([
@@ -529,9 +527,9 @@ describe("FileStore upload queue", () => {
     const ensureSynced = vi.fn().mockRejectedValue(new Error("push failed"));
     const store = freshStore();
     await store.put(UUID, data(8), RECORD);
-
+    // Connect on the default space: the pre-connect entry belongs to it.
     await store.connect(
-      syncConfig(makeFilesClient({ upload }), { ensureSynced }),
+      syncConfig(makeFilesClient({ upload }), { ensureSynced, spaceId: "_" }),
     );
     await store.processQueue();
 
@@ -549,11 +547,10 @@ describe("FileStore upload queue", () => {
     const upload = vi.fn().mockResolvedValue({ fileId: UUID });
     const ensureSynced = vi.fn().mockResolvedValue(undefined);
     const store = freshStore();
-    await store.put(UUID, data(8), RECORD);
-
     await store.connect(
       syncConfig(makeFilesClient({ upload }), { ensureSynced }),
     );
+    await store.put(UUID, data(8), RECORD);
     await store.processQueue();
 
     expect(ensureSynced).toHaveBeenCalledTimes(1);
@@ -591,16 +588,21 @@ describe("FileStore upload queue", () => {
   it("resets a stale uploading entry and retries it (crash recovery)", async () => {
     const upload = vi.fn().mockResolvedValue({ fileId: UUID });
     const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient({ upload })));
     await store.put(UUID, data(8), RECORD);
 
     // What a crash mid-upload leaves behind: in-flight status, attempt
     // timestamped beyond the stale window, bytes still cached.
-    await forceQueueState(store, UUID, {
-      uploadStatus: "uploading",
-      lastAttemptAt: Date.now() - 16 * 60 * 1000,
-    });
+    await forceQueueState(
+      store,
+      UUID,
+      {
+        uploadStatus: "uploading",
+        lastAttemptAt: Date.now() - 16 * 60 * 1000,
+      },
+      "sp-1",
+    );
 
-    await store.connect(syncConfig(makeFilesClient({ upload })));
     await store.processQueue();
 
     expect(upload).toHaveBeenCalledTimes(1);
@@ -652,19 +654,23 @@ describe("FileStore upload queue", () => {
   });
 
   it("connect rehydrates the queue snapshot from existing entries", async () => {
-    const dbName = freshDbName();
-    const store = new FileStore({ dbName });
+    const store = freshStore();
     await store.put(UUID, data(8), RECORD);
+    expect(store.getQueueSnapshot()).toEqual([
+      expect.objectContaining({ fileId: UUID }),
+    ]);
 
     // Gate the upload so connect()'s background processQueue cannot clear
-    // the entry before the snapshot is observed.
+    // the entry before the snapshot is observed. Connect on the default
+    // space — entries queued pre-connect belong to it (scoped stores get
+    // their entries post-connect or via transferUnuploadedFrom).
     const upload = vi.fn(() => new Promise(() => {}));
-    const store2 = new FileStore({ dbName });
-    expect(store2.getQueueSnapshot()).toEqual([]);
-    await store2.connect(syncConfig(makeFilesClient({ upload })));
+    await store.connect(
+      syncConfig(makeFilesClient({ upload }), { spaceId: "_" }),
+    );
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(store2.getQueueSnapshot()).toEqual([
+    expect(store.getQueueSnapshot()).toEqual([
       expect.objectContaining({ fileId: UUID }),
     ]);
     expect(upload).toHaveBeenCalledTimes(1);
@@ -846,65 +852,6 @@ describe("FileStore download fallback", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Space migration on connect
-// ---------------------------------------------------------------------------
-
-describe("FileStore space migration", () => {
-  it("migrates cached entries from _ to the connected spaceId", async () => {
-    const dbName = freshDbName();
-    const store = new FileStore({ dbName });
-    const bytes = data(20);
-    await store.put(UUID, bytes, RECORD);
-
-    const upload = vi.fn(() => new Promise(() => {}));
-    await store.connect(
-      syncConfig(makeFilesClient({ upload }), { spaceId: "sp-9" }),
-    );
-
-    // Data and queue entries accessible under the new space.
-    expect(await store.get(UUID)).toEqual(bytes);
-    expect(await store.getQueueEntries()).toEqual([
-      expect.objectContaining({ fileId: UUID }),
-    ]);
-
-    // And no longer under the default space: a fresh store on the same DB
-    // with the default space sees nothing.
-    const store2 = new FileStore({ dbName });
-    expect(await store2.has(UUID)).toBe(false);
-  });
-
-  it("migrates a URL cache entry to the new space key", async () => {
-    const originalCreate = URL.createObjectURL;
-    const originalRevoke = URL.revokeObjectURL;
-    URL.createObjectURL = vi.fn(
-      () => "blob:mig-1",
-    ) as unknown as typeof URL.createObjectURL;
-    URL.revokeObjectURL = vi.fn();
-    try {
-      const store = freshStore();
-      await store.put(UUID, data(8));
-      expect(await store.getUrl(UUID)).toBe("blob:mig-1");
-
-      await store.connect(syncConfig(makeFilesClient(), { spaceId: "sp-mig" }));
-
-      // The URL survives under the migrated key without re-creation.
-      expect(await store.getUrl(UUID)).toBe("blob:mig-1");
-      expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
-    } finally {
-      URL.createObjectURL = originalCreate;
-      URL.revokeObjectURL = originalRevoke;
-    }
-  });
-
-  it("connect with the same spaceId does not migrate", async () => {
-    const store = freshStore();
-    await store.put(UUID, data(8));
-    await store.connect(syncConfig(makeFilesClient(), { spaceId: "_" }));
-    expect(await store.has(UUID)).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // LRU eviction
 // ---------------------------------------------------------------------------
 
@@ -1065,8 +1012,10 @@ describe("FileStore.transferUnuploadedFrom", () => {
     const to = freshStore();
     await from.put(UUID, data(32), RECORD);
 
-    await to.transferUnuploadedFrom(from);
+    // Adoption transfers into a CONNECTED target (retirement runs after
+    // the account syncs), so entries land under the personal space.
     await to.connect(syncConfig(makeFilesClient({ upload })));
+    await to.transferUnuploadedFrom(from);
     await to.processQueue();
 
     expect(upload).toHaveBeenCalledTimes(1);
@@ -1216,43 +1165,6 @@ describe("FileStore.transferUnuploadedFrom — connected target (regression)", (
     releaseA();
 
     await Promise.all([firstRun, secondCall]);
-    expect(upload).toHaveBeenCalledTimes(2);
-    expect(await store.getQueueEntries()).toEqual([]);
-  });
-
-  it("re-scans queue entries rewritten by a space-id migration racing an in-flight pass", async () => {
-    // connect() with a changed spaceId rewrites queued entries under new
-    // cache keys. A pass already in flight scanned the OLD keys and exits
-    // via the no-progress heuristic; connect()'s own queue kick coalesces
-    // into that pass, so without the migration enqueue bump the rewritten
-    // entries strand until the next external kick.
-    let releaseA: () => void = () => {};
-    const gateA = new Promise<void>((r) => (releaseA = r));
-    const upload = vi
-      .fn()
-      .mockImplementation(
-        async (
-          _id: string,
-          _enc: Uint8Array,
-          _w: Uint8Array,
-          recordId: string,
-        ) => {
-          if (recordId === RECORD) await gateA;
-          return { fileId: UUID };
-        },
-      );
-    const store = freshStore();
-    await store.connect(syncConfig(makeFilesClient({ upload })));
-    await store.put(UUID, data(16), RECORD);
-    const firstRun = store.processQueue(); // pass hangs mid-upload on A
-    await new Promise((r) => setTimeout(r, 10)); // let the pass enter A
-
-    await store.connect(
-      syncConfig(makeFilesClient({ upload }), { spaceId: "sp-2" }),
-    );
-    releaseA();
-
-    await firstRun;
     expect(upload).toHaveBeenCalledTimes(2);
     expect(await store.getQueueEntries()).toEqual([]);
   });

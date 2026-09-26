@@ -25,7 +25,12 @@ export type {
 } from "./files.js";
 
 // File store (encrypted file cache)
-export { FileStore, deleteFileCacheDatabase } from "./file-store.js";
+export { FileStore } from "./file-store.js";
+export {
+  InMemoryFileStorage,
+  type FileStorage,
+  type MetaEntry,
+} from "./file-storage.js";
 export {
   createWorkerFileStorage,
   deleteFilesNamespace,

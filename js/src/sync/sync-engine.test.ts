@@ -67,6 +67,9 @@ const h = vi.hoisted(() => {
     constructor() {
       fileStores.push(this);
     }
+    connect = vi.fn(async () => {
+      log.push("fileStore.connect");
+    });
     processQueue = vi.fn(async () => {
       log.push("fileStore.processQueue");
     });
@@ -217,6 +220,8 @@ function makeConfig(): SyncEngineConfig {
     },
     syncBaseUrl: "https://sync.test/api/v1",
     accountsBaseUrl: "https://accounts.test",
+    fileStore:
+      new h.FakeFileStore() as unknown as SyncEngineConfig["fileStore"],
   };
 }
 
@@ -436,20 +441,18 @@ describe("SyncEngine", () => {
       expect(jwk.y).toBe("");
     });
 
-    it("disconnects but does not dispose an injected FileStore", async () => {
-      const external = new h.FakeFileStore();
-      const config = {
-        ...makeConfig(),
-        fileStore: external as unknown as SyncEngineConfig["fileStore"],
-      };
-      const engine = await SyncEngine.create(config);
+    it("disconnects and disposes the FileStore (idempotently)", async () => {
+      const engine = await SyncEngine.create(makeConfig());
       await vi.waitFor(() => expect(state(engine).phase).toBe("ready"));
       h.log.length = 0;
 
       engine.dispose();
 
+      // The engine treats the store as its session-scoped collaborator:
+      // teardown releases the backend (workers, locks). Dispose is
+      // idempotent — callers that outlive the engine may dispose again.
       expect(h.log).toContain("fileStore.disconnect");
-      expect(h.log).not.toContain("fileStore.dispose");
+      expect(h.log).toContain("fileStore.dispose");
     });
   });
 

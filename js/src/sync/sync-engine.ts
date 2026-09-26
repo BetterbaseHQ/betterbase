@@ -101,10 +101,9 @@ export interface SyncEngineConfig {
   ) => void | Promise<void>;
   /** Collection names that have edit chain tracking enabled. */
   editChainCollections?: Set<string>;
-  /** Pre-created FileStore instance. If omitted, one is created internally. */
-  fileStore?: FileStore;
-  /** Max local file cache size in bytes. */
-  maxCacheBytes?: number;
+  /** The FileStore — explicit by design: its storage backend (durable
+   * worker namespace vs ephemeral) is a choice the caller makes. */
+  fileStore: FileStore;
   /** Maps collection names to field names containing file IDs (for auto-eviction on remote delete). */
   fileFields?: Record<string, string[]>;
   /** Called on 401 errors. */
@@ -147,7 +146,6 @@ export class SyncEngine {
   private transport: WSTransport;
   private unsubscribeAutoSync: () => void;
   private unsubscribeSpacesWatch: () => void;
-  private ownsFileStore: boolean;
 
   // Mutable callback refs — read at call time, never captured in closures.
   // Callers can update these after creation to avoid stale references.
@@ -174,7 +172,6 @@ export class SyncEngine {
     this.transport = null!;
     this.unsubscribeAutoSync = null!;
     this.unsubscribeSpacesWatch = null!;
-    this.ownsFileStore = false;
   }
 
   // --- State management ---
@@ -248,7 +245,6 @@ export class SyncEngine {
       epochDeriveKey,
       epochAdvancedAt,
       editChainCollections,
-      maxCacheBytes,
     } = config;
 
     // File fields declared on collection definitions are the default map for
@@ -308,8 +304,7 @@ export class SyncEngine {
     );
     (engine as { files: FilesClient }).files = filesClient;
 
-    const fileStore = config.fileStore ?? new FileStore({ maxCacheBytes });
-    engine.ownsFileStore = !config.fileStore;
+    const fileStore = config.fileStore;
     engine._personalSpaceId = personalSpaceId;
     (engine as { fileStore: FileStore }).fileStore = fileStore;
 
@@ -877,9 +872,7 @@ export class SyncEngine {
     this.presenceManager?.dispose();
     this.eventManager?.dispose();
     this.fileStore?.disconnect();
-    if (this.ownsFileStore) {
-      this.fileStore?.dispose();
-    }
+    this.fileStore?.dispose();
     this.spaceManager?.destroy();
     // Best-effort zeroing of JWK private key fields. JS strings are immutable
     // heap objects, so assigning "" replaces the reference but cannot overwrite

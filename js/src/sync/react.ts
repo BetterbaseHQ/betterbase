@@ -185,18 +185,14 @@ export interface BetterbaseProviderProps {
   /** Identity domain (e.g., "betterbase.dev"). Endpoints discovered via .well-known. */
   domain?: string;
   /**
-   * Max local file cache size in bytes. Files awaiting upload are never evicted.
-   * Default: Infinity (no automatic eviction).
+   * The FileStore for local-first file caching. BetterbaseProvider calls
+   * `connect()` when auth resolves and `disconnect()` on unmount or epoch
+   * change, so the store works before auth (local cache only) and
+   * progressively upgrades to sync. Explicit by design: the storage
+   * backend (durable worker namespace vs ephemeral) is the caller's
+   * choice — see `lazyWorkerFileStorage`.
    */
-  maxCacheBytes?: number;
-  /**
-   * Pre-created FileStore instance for local-first file caching.
-   * When provided, BetterbaseProvider calls `connect()` when auth resolves and
-   * `disconnect()` on unmount or epoch change. This allows the FileStore
-   * to work before auth (local cache only) and progressively upgrade to sync.
-   * If omitted, BetterbaseProvider creates one internally.
-   */
-  fileStore?: FileStore;
+  fileStore: FileStore;
   /**
    * Collection names that have edit chain tracking enabled.
    * Records in these collections will include a signed edit chain in the
@@ -287,29 +283,15 @@ export function BetterbaseProvider(
     onRemoteDelete,
     fileFields,
     domain,
-    maxCacheBytes,
     fileStore: externalFileStore,
     children,
   } = props;
 
   // -------------------------------------------------------------------
-  // FileStore: use external or create internal (stable across renders)
+  // FileStore — caller-owned (stable across renders is the caller's job)
   // -------------------------------------------------------------------
 
-  const internalFileStoreRef = useRef<FileStore | null>(null);
-  if (!externalFileStore && !internalFileStoreRef.current) {
-    internalFileStoreRef.current = new FileStore({ maxCacheBytes });
-  }
-  const fileStore = externalFileStore ?? internalFileStoreRef.current!;
-
-  // Dispose internal FileStore on unmount
-  useEffect(() => {
-    if (externalFileStore) return;
-    return () => {
-      internalFileStoreRef.current?.dispose();
-      internalFileStoreRef.current = null;
-    };
-  }, [externalFileStore]);
+  const fileStore = externalFileStore;
 
   // -------------------------------------------------------------------
   // Discovery resolution: fetch server metadata from domain
@@ -512,7 +494,6 @@ export function BetterbaseProvider(
       fileFields,
       syncBaseUrl,
       accountsBaseUrl,
-      maxCacheBytes,
       fileStore,
       children,
     }),
