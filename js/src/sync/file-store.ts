@@ -1329,12 +1329,8 @@ export class FileStore {
 
   private touchAccessTime(key: string): void {
     this.storage
-      .getMeta(key)
-      .then((meta) => {
-        if (!meta) return;
-        meta.lastAccessedAt = Date.now();
-        return this.storage.putMeta(meta);
-      })
+      .touchMeta(key, Date.now())
+      .then(() => {})
       .catch((err) => {
         console.error(
           "[betterbase-sync] Failed to update file access time:",

@@ -62,6 +62,13 @@ export interface FileStorage {
   deleteFile(key: string): Promise<void>;
   /** Blob-only delete; metadata survives (test/recovery surgery). */
   deleteBlob(key: string): Promise<void>;
+  /**
+   * Update `lastAccessedAt` if the entry exists — atomically. The
+   * conditional write is what prevents a concurrent eviction delete from
+   * being overwritten by a stale touch (metadata resurrection); a
+   * get-then-put pair across two transactions cannot guarantee it.
+   */
+  touchMeta(key: string, at: number): Promise<void>;
 }
 
 /** An `uploading` entry untouched for longer than this is abandoned. */
@@ -227,6 +234,25 @@ export class IdbFileStorage implements FileStorage {
 
   deleteBlob(key: string): Promise<void> {
     return this.tx(BLOB_STORE, "readwrite", (store) => store.delete(key));
+  }
+
+  touchMeta(key: string, at: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.dbPromise.then((db) => {
+        const tx = db.transaction(META_STORE, "readwrite");
+        const req = tx.objectStore(META_STORE).get(key);
+        req.onsuccess = () => {
+          // Conditional: absent entry (evicted between get and put)
+          // stays deleted — no resurrection.
+          if (req.result === undefined) return;
+          const entry = req.result as MetaEntry;
+          entry.lastAccessedAt = at;
+          tx.objectStore(META_STORE).put(entry);
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      }, reject);
+    });
   }
 
   /** Single-store request helper resolving with the request result. */

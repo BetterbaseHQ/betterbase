@@ -180,12 +180,50 @@ function brokenStorage(): FileStorage {
     putFile: boom,
     deleteFile: boom,
     deleteBlob: boom,
+    touchMeta: boom,
   };
 }
 
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
+
+describe("IdbFileStorage.touchMeta", () => {
+  it("updates lastAccessedAt only when the entry exists", async () => {
+    const storage = new IdbFileStorage(freshDbName());
+    const key = "_\0" + UUID;
+    await storage.putMeta({
+      key,
+      spaceId: "_",
+      fileId: UUID,
+      cachedAt: 1,
+      lastAccessedAt: 1,
+      size: 4,
+    });
+    await storage.touchMeta(key, 99);
+    expect((await storage.getMeta(key))?.lastAccessedAt).toBe(99);
+  });
+
+  it("never resurrects deleted metadata (eviction race)", async () => {
+    // A stale touch landing after an eviction delete must be a no-op —
+    // a get-then-put across two transactions would re-create the meta
+    // as a byteless zombie whose size is counted forever.
+    const storage = new IdbFileStorage(freshDbName());
+    const key = "_\0" + UUID;
+    await storage.putMeta({
+      key,
+      spaceId: "_",
+      fileId: UUID,
+      cachedAt: 1,
+      lastAccessedAt: 1,
+      size: 4,
+    });
+    await storage.deleteFile(key);
+    await storage.touchMeta(key, 99);
+    expect(await storage.getMeta(key)).toBeUndefined();
+    expect(await storage.metaHas(key)).toBe(false);
+  });
+});
 
 describe("FileStore validation", () => {
   it("rejects non-UUID file IDs on every entry point", async () => {
