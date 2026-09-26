@@ -136,12 +136,17 @@ export class SyncEngine {
   private _listeners = new Set<() => void>();
   private _disposed = false;
   private _bootstrapping = false;
+  /** Personal space ID — `registerFileSpaceRuntimes` skips it (connect() owns it). */
+  private _personalSpaceId: string | null = null;
+  /** Shared spaces with a registered FileStore runtime (reconcile bookkeeping). */
+  private registeredFileSpaces = new Set<string>();
   /** Set once BOOTSTRAP_COMPLETE dispatched; reconnects before it mean bootstrap failed. */
   private _bootstrapComplete = false;
 
   private scheduler: SyncScheduler;
   private transport: WSTransport;
   private unsubscribeAutoSync: () => void;
+  private unsubscribeSpacesWatch: () => void;
   private ownsFileStore: boolean;
 
   // Mutable callback refs — read at call time, never captured in closures.
@@ -168,6 +173,7 @@ export class SyncEngine {
     this.scheduler = null!;
     this.transport = null!;
     this.unsubscribeAutoSync = null!;
+    this.unsubscribeSpacesWatch = null!;
     this.ownsFileStore = false;
   }
 
@@ -289,18 +295,22 @@ export class SyncEngine {
     });
     (engine as { spaceManager: SpaceManager }).spaceManager = spaceManager;
 
-    // 5. Create FilesClient + FileStore
+    // 5. Create FilesClient + FileStore. The client stays personal-space
+    // by default; shared-space file operations pass their space per call,
+    // authorized by the user's UCAN for that space.
     const filesClient = new FilesClient(
       new SyncClient({
         baseUrl: syncBaseUrl,
         spaceId: personalSpaceId,
         getToken,
+        getUCANForSpace: (spaceId) => spaceManager.getUCAN(spaceId) ?? null,
       }),
     );
     (engine as { files: FilesClient }).files = filesClient;
 
     const fileStore = config.fileStore ?? new FileStore({ maxCacheBytes });
     engine.ownsFileStore = !config.fileStore;
+    engine._personalSpaceId = personalSpaceId;
     (engine as { fileStore: FileStore }).fileStore = fileStore;
 
     // 6. Build epoch config
@@ -352,17 +362,33 @@ export class SyncEngine {
         if (engine._disposed) return;
         engine.transport.handleSyncNotification(data);
       },
+      onFile: () => {
+        // A peer uploaded a file — bump the FileStore version so mounted
+        // useFile hooks re-check (their record may have arrived first,
+        // leaving the tile stuck on "unavailable" until this nudge).
+        if (engine._disposed) return;
+        fileStore.invalidate();
+      },
       onInvitation: () => {
         if (engine._disposed) return;
-        spaceManager.checkInvitations(keypair.privateKeyJwk).catch((err) => {
-          console.error(
-            "[betterbase-sync] Failed to check invitations on WS event:",
-            err,
-          );
-        });
+        spaceManager
+          .checkInvitations(keypair.privateKeyJwk)
+          .then(() => {
+            // Accepting an invitation activates a new space — its file
+            // queue entries (if any) become uploadable now.
+            return engine.registerFileSpaceRuntimes();
+          })
+          .catch((err) => {
+            console.error(
+              "[betterbase-sync] Failed to check invitations on WS event:",
+              err,
+            );
+          });
       },
       onRevoked: (data) => {
         if (engine._disposed) return;
+        // The space is gone locally — stop routing its file operations.
+        fileStore.unregisterSpace(data.space);
         spaceManager.handleRevocation(data.space).catch((err) => {
           console.error(
             `[betterbase-sync] Failed to handle revocation for space ${data.space}:`,
@@ -592,6 +618,17 @@ export class SyncEngine {
       }
     });
 
+    // Watch the spaces collection: every path that activates a space
+    // (creation via shareTree/moveToSpace, invitation acceptance,
+    // bootstrap re-activation) writes its __spaces record — that write is
+    // the one reliable signal to (re)register the space's file runtime.
+    engine.unsubscribeSpacesWatch = engine.db.onChange((event) => {
+      if (engine._disposed) return;
+      if (event.collection === spaces.name) {
+        void engine.registerFileSpaceRuntimes().catch(() => {});
+      }
+    });
+
     // Connect FileStore
     if (epoch !== undefined && epochKey) {
       fileStore
@@ -627,6 +664,65 @@ export class SyncEngine {
    * "bootstrapping"/"ready") or ERROR. Safe to run only once, from
    * create().
    */
+  /**
+   * Reconcile FileStore runtimes with SpaceManager's active spaces — a
+   * two-way pass: register runtimes for newly active shared spaces, and
+   * UNREGISTER runtimes for spaces that are gone (revocation destroys
+   * crypto state after the __spaces patch, so the write-triggered sweep
+   * would otherwise resurrect a runtime for a removed space and strand
+   * its eviction-protected queue entries forever). Runtimes read key
+   * state live, so once registered they track rotations without
+   * re-registration.
+   */
+  private async registerFileSpaceRuntimes(): Promise<void> {
+    if (this._disposed) return;
+    const personalSpaceId = this._personalSpaceId;
+    const active = new Set(this.spaceManager.getActiveSpaceIds());
+    active.delete(personalSpaceId ?? "");
+
+    // Spaces whose records read as removed — never keep file runtimes
+    // for them even if crypto state lingers mid-revocation.
+    try {
+      const removed = await this.db.query(spaces, {
+        filter: { status: "removed" },
+      });
+      for (const record of removed.records) {
+        active.delete(record.spaceId);
+      }
+    } catch {
+      // Status query is best-effort — the active-set pass still runs.
+    }
+
+    for (const spaceId of active) {
+      if (this.registeredFileSpaces.has(spaceId)) continue;
+      this.fileStore.registerSpace({
+        spaceId,
+        filesClient: this.files,
+        // Live at upload time: a rotation between queueing and upload
+        // must wrap under the current epoch key.
+        getUploadKey: () => {
+          const epochKey = this.spaceManager.getSpaceKey(spaceId);
+          const epoch = this.spaceManager.getSpaceEpoch(spaceId);
+          if (!epochKey || epoch === undefined) return undefined;
+          return { epochKey, epoch };
+        },
+        // Distributed per-epoch key shares — handles fresh-key rotations
+        // where past epochs can't be derived from the current root
+        // (mirrors record sync, AUD-024).
+        resolveEpochKey: (epoch) =>
+          this.spaceManager.resolveEpochKeyOrNull(spaceId, epoch),
+      });
+      this.registeredFileSpaces.add(spaceId);
+    }
+
+    for (const spaceId of this.registeredFileSpaces) {
+      if (!active.has(spaceId)) {
+        this.fileStore.unregisterSpace(spaceId);
+        this.registeredFileSpaces.delete(spaceId);
+      }
+    }
+  }
+
   private async runBootstrap(): Promise<void> {
     this._bootstrapping = true;
     this.dispatch({ type: "BOOTSTRAP_START" });
@@ -635,12 +731,15 @@ export class SyncEngine {
       if (this._disposed) return;
       await this.scheduler.flushAll();
       if (this._disposed) return;
-      this.spaceManager.checkInvitations(this.privateKeyJwk).catch((err) => {
-        console.error(
-          "[betterbase-sync] Failed to check invitations during bootstrap:",
-          err,
-        );
-      });
+      this.spaceManager
+        .checkInvitations(this.privateKeyJwk)
+        .then(() => this.registerFileSpaceRuntimes())
+        .catch((err) => {
+          console.error(
+            "[betterbase-sync] Failed to check invitations during bootstrap:",
+            err,
+          );
+        });
       const activated = await this.spaceManager.initializeFromSpaces();
       if (this._disposed) return;
       if (activated > 0) {
@@ -652,6 +751,7 @@ export class SyncEngine {
       this._bootstrapping = false;
       this._bootstrapComplete = true;
       this.dispatch({ type: "BOOTSTRAP_COMPLETE" });
+      this.registerFileSpaceRuntimes().catch(() => {});
       this.fileStore.processQueue().catch((err) => {
         console.error(
           "[betterbase-sync] Failed to process file queue after bootstrap:",
@@ -689,6 +789,7 @@ export class SyncEngine {
       this._bootstrapping = false;
       this._bootstrapComplete = true;
       this.dispatch({ type: "BOOTSTRAP_COMPLETE" });
+      this.registerFileSpaceRuntimes().catch(() => {});
       this.fileStore.processQueue().catch((err) => {
         console.error(
           "[betterbase-sync] Failed to process file queue after bootstrap recovery:",
@@ -762,6 +863,7 @@ export class SyncEngine {
     if (this._disposed) return;
     this._disposed = true;
     this.unsubscribeAutoSync?.();
+    this.unsubscribeSpacesWatch?.();
     this.transport?.close();
     this.scheduler?.dispose();
     this.presenceManager?.dispose();

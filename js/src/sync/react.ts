@@ -1035,14 +1035,17 @@ export function useFileCacheStats(): CacheStats | null {
  *
  * Reactive: re-fetches when the FileStore is mutated (e.g. a file arrives
  * in cache after mount). Safe outside BetterbaseProvider — returns
- * `{ url: null, status: 'idle', error: null }` instead of throwing.
+ * `{ url: null, status: "idle", error: null }` instead of throwing.
  *
  * @param id - File ID, or undefined to skip loading.
  * @param type - Optional MIME type for the Blob (e.g. "image/png").
+ * @param spaceId - Space the file belongs to (shared-space routing).
+ *   Defaults to the connected personal space.
  */
 export function useFile(
   id: string | undefined,
   type?: string,
+  spaceId?: string,
 ): { url: string | null; status: FileStatus; error: Error | null } {
   // Safe outside BetterbaseProvider — reads from FileStoreContext
   const fsCtx = useContext(FileStoreContext);
@@ -1078,7 +1081,7 @@ export function useFile(
     let cancelled = false;
     setError(null);
 
-    fileStore.getUrl(id, type).then(
+    fileStore.getUrl(id, type, spaceId).then(
       (result) => {
         if (cancelled) return;
         setUrl(result);
@@ -1094,7 +1097,7 @@ export function useFile(
     return () => {
       cancelled = true;
     };
-  }, [id, type, fileStore, version]);
+  }, [id, type, spaceId, fileStore, version]);
 
   // Reset state when the inputs that identify the file change
   // (not on version-only bumps, which are just re-checks)
@@ -1102,7 +1105,7 @@ export function useFile(
     setUrl(null);
     setStatus(id && fileStore ? "loading" : "idle");
     setError(null);
-  }, [id, fileStore]);
+  }, [id, spaceId, fileStore]);
 
   return { url, status, error };
 }

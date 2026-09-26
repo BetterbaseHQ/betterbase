@@ -71,31 +71,34 @@ export class FilesClient {
     this.syncClient = syncClient;
   }
 
-  private filesPath(): string {
-    return `${this.syncClient.spacePath()}/files`;
+  private filesPath(spaceId?: string): string {
+    return `${this.syncClient.spacePath(spaceId)}/files`;
   }
 
   /**
    * Upload a file with its wrapped DEK.
    *
    * Idempotent: returns created=false if the file already exists.
+   * `spaceId` routes the upload to a shared space (default: the client's
+   * configured space).
    */
   async upload(
     id: string,
     data: Uint8Array | ArrayBuffer,
     wrappedDEK: Uint8Array,
     recordId: string,
+    spaceId?: string,
   ): Promise<FileUploadResult> {
     const body = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
 
-    const response = await fetch(`${this.filesPath()}/${id}`, {
+    const response = await fetch(`${this.filesPath(spaceId)}/${id}`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/octet-stream",
         "Content-Length": String(body.byteLength),
         "X-Wrapped-DEK": bytesToBase64(wrappedDEK),
         "X-Record-ID": recordId,
-        ...(await this.syncClient.getAuthHeaders()),
+        ...(await this.syncClient.getAuthHeaders(spaceId)),
       },
       body: body as unknown as BodyInit,
     });
@@ -120,12 +123,14 @@ export class FilesClient {
 
   /**
    * Download a file and its wrapped DEK.
+   * `spaceId` routes the download to a shared space (default: the client's
+   * configured space).
    */
-  async download(id: string): Promise<FileDownloadResult> {
-    const response = await fetch(`${this.filesPath()}/${id}`, {
+  async download(id: string, spaceId?: string): Promise<FileDownloadResult> {
+    const response = await fetch(`${this.filesPath(spaceId)}/${id}`, {
       method: "GET",
       headers: {
-        ...(await this.syncClient.getAuthHeaders()),
+        ...(await this.syncClient.getAuthHeaders(spaceId)),
       },
     });
 
@@ -157,13 +162,14 @@ export class FilesClient {
   /**
    * Check file existence and get metadata without downloading the body.
    *
-   * Returns null if the file does not exist (404).
+   * Returns null if the file does not exist (404). `spaceId` routes the
+   * request to a shared space (default: the client's configured space).
    */
-  async head(id: string): Promise<FileMetadata | null> {
-    const response = await fetch(`${this.filesPath()}/${id}`, {
+  async head(id: string, spaceId?: string): Promise<FileMetadata | null> {
+    const response = await fetch(`${this.filesPath(spaceId)}/${id}`, {
       method: "HEAD",
       headers: {
-        ...(await this.syncClient.getAuthHeaders()),
+        ...(await this.syncClient.getAuthHeaders(spaceId)),
       },
     });
 

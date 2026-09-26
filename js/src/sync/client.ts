@@ -30,6 +30,12 @@ export interface SyncClientConfig {
   getToken: TokenProvider;
   /** Optional callback to get a UCAN token for shared space authorization */
   getUCAN?: TokenProvider;
+  /**
+   * Per-space UCAN resolution — lets one client authorize operations in any
+   * space the user belongs to (shared-space file routing). Consulted first
+   * when a request names a space; falls back to `getUCAN`.
+   */
+  getUCANForSpace?: (spaceId: string) => string | null;
 }
 
 /**
@@ -50,28 +56,31 @@ export class SyncClient {
   }
 
   /**
-   * Build authentication headers for this space's file endpoints.
+   * Build authentication headers for a space's file endpoints.
    *
    * Includes the Bearer token and, for shared spaces, the X-UCAN header.
+   * `spaceId` overrides the client's default space (shared-space routing);
+   * UCAN resolution prefers `getUCANForSpace`, then `getUCAN`.
    *
    * @throws AuthenticationError if no valid credentials are available
    */
-  async getAuthHeaders(): Promise<Record<string, string>> {
+  async getAuthHeaders(spaceId?: string): Promise<Record<string, string>> {
     const headers: Record<string, string> = {};
     const token = await this.config.getToken();
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
-    if (this.config.getUCAN) {
-      const ucan = await this.config.getUCAN();
-      if (ucan) {
-        headers["X-UCAN"] = ucan;
-      } else if (!token) {
-        throw new AuthenticationError(
-          "No valid authentication available — re-login required",
-        );
-      }
+    let ucan: string | null | undefined;
+    if (spaceId !== undefined && this.config.getUCANForSpace) {
+      // Per-space resolution only — never fall back to the default-space
+      // UCAN for an explicitly named space (wrong-audience delegation).
+      ucan = this.config.getUCANForSpace(spaceId);
+    } else {
+      ucan = this.config.getUCAN ? await this.config.getUCAN() : undefined;
+    }
+    if (ucan) {
+      headers["X-UCAN"] = ucan;
     } else if (!token) {
       throw new AuthenticationError(
         "No valid authentication available — re-login required",
@@ -81,8 +90,8 @@ export class SyncClient {
     return headers;
   }
 
-  /** Build the URL path prefix for this space's API endpoints. */
-  spacePath(): string {
-    return `${this.config.baseUrl}/spaces/${this.config.spaceId}`;
+  /** Build the URL path prefix for a space's API endpoints. */
+  spacePath(spaceId?: string): string {
+    return `${this.config.baseUrl}/spaces/${spaceId ?? this.config.spaceId}`;
   }
 }

@@ -645,7 +645,7 @@ describe("FileStore download fallback", () => {
     await store.connect(syncConfig(makeFilesClient({ download })));
 
     expect(await store.get(UUID)).toEqual(payload);
-    expect(download).toHaveBeenCalledWith(UUID);
+    expect(download).toHaveBeenCalledWith(UUID, undefined);
 
     // Now cached — a second get does not hit the network.
     await store.get(UUID);
@@ -738,11 +738,15 @@ describe("FileStore download fallback", () => {
 
     // Uploads wrap via the CryptoKey path too.
     const upload = vi.fn().mockResolvedValue({ fileId: UUID2 });
-    const internal = store as unknown as { syncConfig: unknown };
-    const config = internal.syncConfig as { filesClient: FilesClient };
-    config.filesClient = makeFilesClient({ upload });
-    await store.put(UUID2, data(12), RECORD);
-    await store.processQueue();
+    const store2 = freshStore();
+    await store2.connect(
+      syncConfig(makeFilesClient({ upload }), {
+        epochKey: key,
+        epochDeriveKey: deriveKey,
+      }),
+    );
+    await store2.put(UUID2, data(12), RECORD);
+    await store2.processQueue();
     const wrappedDEK = (upload.mock.calls[0] as unknown[])[2] as Uint8Array;
     expect(wrappedDEK.byteLength).toBe(44);
     expect(new DataView(wrappedDEK.buffer).getUint32(0, false)).toBe(3);
@@ -1206,5 +1210,326 @@ describe("FileStore.transferUnuploadedFrom — connected target (regression)", (
     await firstRun;
     expect(upload).toHaveBeenCalledTimes(2);
     expect(await store.getQueueEntries()).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-space (shared-space routing)
+// ---------------------------------------------------------------------------
+
+describe("FileStore shared spaces", () => {
+  const SHARED = "11111111-2222-3333-4444-555555555555";
+
+  function sharedConfig(
+    filesClient: FilesClient,
+    extra: Partial<Parameters<FileStore["registerSpace"]>[0]> = {},
+  ) {
+    return {
+      spaceId: SHARED,
+      filesClient,
+      getUploadKey: () => ({
+        epochKey: new Uint8Array(32).fill(0x33),
+        epoch: 5,
+      }),
+      resolveEpochKey: vi.fn(async () => new Uint8Array(32).fill(0x33)),
+      ...extra,
+    };
+  }
+
+  it("uploads route to the entry's space with the space's live epoch key", async () => {
+    const upload = vi.fn().mockResolvedValue({ fileId: UUID });
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient()));
+    store.registerSpace(sharedConfig(makeFilesClient({ upload })));
+
+    await store.put(UUID, data(16), RECORD, SHARED);
+    await store.processQueue();
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    const call = upload.mock.calls[0] as unknown as [
+      string,
+      Uint8Array,
+      Uint8Array,
+      string,
+      string,
+    ];
+    expect(call[0]).toBe(UUID);
+    expect(call[3]).toBe(RECORD);
+    expect(call[4]).toBe(SHARED);
+    // Wrapped under the SHARED space's live epoch (5), not the personal 3.
+    expect(new DataView(call[2].buffer).getUint32(0, false)).toBe(5);
+  });
+
+  it("a rotation between queueing and upload wraps under the fresh epoch", async () => {
+    const upload = vi.fn().mockResolvedValue({ fileId: UUID });
+    let armed = false;
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient()));
+    store.registerSpace(
+      sharedConfig(makeFilesClient({ upload }), {
+        // Key unavailable at queue time (e.g. still adopting a rotation) —
+        // the entry holds; by the time it's available the epoch moved to 9.
+        getUploadKey: () =>
+          armed
+            ? { epochKey: new Uint8Array(32).fill(0x33), epoch: 9 }
+            : undefined,
+      }),
+    );
+
+    await store.put(UUID, data(16), RECORD, SHARED);
+    await store.processQueue();
+    expect(upload).not.toHaveBeenCalled();
+
+    armed = true;
+    await store.processQueue();
+
+    const wrappedDEK = upload.mock.calls[0]![2] as Uint8Array;
+    expect(new DataView(wrappedDEK.buffer).getUint32(0, false)).toBe(9);
+  });
+
+  it("entries for an unregistered space hold as pending, then upload on registerSpace", async () => {
+    const upload = vi.fn().mockResolvedValue({ fileId: UUID });
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient()));
+
+    await store.put(UUID, data(16), RECORD, SHARED);
+    await store.processQueue();
+    expect(upload).not.toHaveBeenCalled();
+
+    // Not an error either — the pass skipped it without touching status.
+    const entries = await store.getQueueEntries();
+    expect(entries).toEqual([
+      expect.objectContaining({
+        fileId: UUID,
+        status: "pending",
+        spaceId: SHARED,
+      }),
+    ]);
+
+    store.registerSpace(sharedConfig(makeFilesClient({ upload })));
+    await vi.waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    expect(upload.mock.calls[0]![4]).toBe(SHARED);
+  });
+
+  it("shared downloads route by space and unwrap via the space's epoch key shares", async () => {
+    const payload = data(40);
+    const download = vi.fn().mockResolvedValue({
+      data: payload,
+      wrappedDEK: wrappedForEpoch(7),
+    });
+    const resolveEpochKey = vi.fn(async () => new Uint8Array(32).fill(0x33));
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient()));
+    store.registerSpace(
+      sharedConfig(makeFilesClient({ download }), { resolveEpochKey }),
+    );
+
+    expect(await store.get(UUID, SHARED)).toEqual(payload);
+    expect(download).toHaveBeenCalledWith(UUID, SHARED);
+    // Epoch 7 > live base epoch 5 — resolved through the distributed
+    // shares, not the personal connect() chain (past epoch 3 → throw).
+    expect(resolveEpochKey).toHaveBeenCalledWith(7);
+
+    // Cached under the shared space's compound key — isolated from personal.
+    expect(await store.has(UUID, SHARED)).toBe(true);
+    expect(await store.has(UUID)).toBe(false);
+  });
+
+  it("shared downloads unwrap with the base space key on exact-epoch match", async () => {
+    const payload = data(40);
+    const download = vi.fn().mockResolvedValue({
+      data: payload,
+      // Same epoch as getUploadKey's live state (5) — base-key fast path.
+      wrappedDEK: wrappedForEpoch(5),
+    });
+    const resolveEpochKey = vi.fn(async () => new Uint8Array(32).fill(0x33));
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient()));
+    store.registerSpace(
+      sharedConfig(makeFilesClient({ download }), { resolveEpochKey }),
+    );
+
+    expect(await store.get(UUID, SHARED)).toEqual(payload);
+    // Exact-epoch match never consults the distributed shares — mirrors
+    // SyncTransport's base-key fast path (epoch 1 invitations have no
+    // server-side key shares to resolve).
+    expect(resolveEpochKey).not.toHaveBeenCalled();
+  });
+
+  it("migrateFilesToSpace re-keys blobs, overrides record IDs, and re-queues", async () => {
+    const upload = vi.fn().mockResolvedValue({ fileId: UUID });
+    const store = freshStore();
+    // Queue while disconnected — no background pass can race the migration.
+    await store.put(UUID, data(24), RECORD);
+
+    const { migrated, skipped } = await store.migrateFilesToSpace(
+      [UUID],
+      SHARED,
+      {
+        recordIdOf: () => RECORD2,
+      },
+    );
+    expect(migrated).toBe(1);
+    expect(skipped).toBe(0);
+
+    // Old personal entry gone; new one queued under the shared space.
+    expect(await store.has(UUID)).toBe(false);
+    expect(await store.has(UUID, SHARED)).toBe(true);
+
+    await store.connect(syncConfig(makeFilesClient()));
+    store.registerSpace(sharedConfig(makeFilesClient({ upload })));
+    await vi.waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    const call = upload.mock.calls[0] as unknown as [
+      string,
+      Uint8Array,
+      Uint8Array,
+      string,
+      string,
+    ];
+    expect(call[0]).toBe(UUID);
+    expect(call[3]).toBe(RECORD2);
+    expect(call[4]).toBe(SHARED);
+  });
+
+  it("migrateFilesToSpace skips files whose bytes are no longer cached", async () => {
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient()));
+    await store.put(UUID, data(24), RECORD);
+    await deleteBlobBehindStore(store, "sp-1", UUID);
+
+    const { migrated, skipped } = await store.migrateFilesToSpace(
+      [UUID],
+      SHARED,
+      {
+        recordIdOf: () => RECORD2,
+      },
+    );
+    expect(migrated).toBe(0);
+    expect(skipped).toBe(1);
+  });
+});
+
+describe("FileStore shared-space hardening", () => {
+  const SHARED = "11111111-2222-3333-4444-555555555555";
+
+  it("transient epoch-share failures propagate instead of deriving a wrong key", async () => {
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient()));
+    // Live base epoch 4; the wrapped DEK claims epoch 7 (a fresh-rotation
+    // epoch — derivation from the base would be guaranteed-wrong).
+    store.registerSpace({
+      spaceId: SHARED,
+      filesClient: makeFilesClient({
+        download: vi.fn().mockResolvedValue({
+          data: data(20),
+          wrappedDEK: wrappedForEpoch(7),
+        }),
+      }),
+      getUploadKey: () => ({
+        epochKey: new Uint8Array(32).fill(0x33),
+        epoch: 4,
+      }),
+      resolveEpochKey: vi.fn(async () => {
+        throw new Error("share fetch transiently failed");
+      }),
+    });
+    await expect(store.get(UUID, SHARED)).rejects.toThrow(
+      /share fetch transiently failed/,
+    );
+  });
+
+  it("rejects wrapped-DEK epochs absurdly far ahead instead of deriving billions", async () => {
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient()));
+    store.registerSpace({
+      spaceId: SHARED,
+      filesClient: makeFilesClient({
+        download: vi.fn().mockResolvedValue({
+          data: data(20),
+          wrappedDEK: wrappedForEpoch(0xffffffff),
+        }),
+      }),
+      getUploadKey: () => ({
+        epochKey: new Uint8Array(32).fill(0x33),
+        epoch: 4,
+      }),
+      // Definitive no-share → falls through to derivation, which must
+      // refuse the distance (peer-controlled epoch, same bound as
+      // SyncTransport's MAX_EPOCH_ADVANCE).
+      resolveEpochKey: vi.fn(async () => null),
+    });
+    await expect(store.get(UUID, SHARED)).rejects.toThrow(/too far ahead/);
+  });
+
+  it("caches resolved epoch-key shares per epoch", async () => {
+    const payload = data(20);
+    let downloads = 0;
+    const resolveEpochKey = vi.fn(async () => new Uint8Array(32).fill(0x33));
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient()));
+    const client = makeFilesClient({
+      download: vi.fn().mockImplementation(async () => {
+        downloads += 1;
+        // Second download returns a DIFFERENT wrapped epoch to force a
+        // fresh decrypt path; the resolver must still be called once per
+        // epoch, not once per download.
+        return {
+          data: payload,
+          wrappedDEK: wrappedForEpoch(downloads === 1 ? 7 : 7),
+        };
+      }),
+    });
+    store.registerSpace({
+      spaceId: SHARED,
+      filesClient: client,
+      getUploadKey: () => ({
+        epochKey: new Uint8Array(32).fill(0x33),
+        epoch: 5,
+      }),
+      resolveEpochKey,
+    });
+    await store.get(UUID, SHARED);
+    await store.evict(UUID, SHARED);
+    await store.get(UUID, SHARED);
+    expect(resolveEpochKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("migrateFilesToSpace skips in-flight uploads and unknown target record ids", async () => {
+    // In-flight upload: an upload that never resolves pins the entry as
+    // `uploading` — migration must leave it alone (its pass holds the
+    // entry object; writing around it would resurrect a deleted key).
+    const store = freshStore();
+    await store.connect(
+      syncConfig(
+        makeFilesClient({
+          upload: vi.fn(() => new Promise(() => {})),
+        }),
+      ),
+    );
+    await store.put(UUID, data(16), RECORD);
+    await vi.waitFor(async () => {
+      const entries = await store.getQueueEntries();
+      if (entries[0]?.status !== "uploading")
+        throw new Error("not uploading yet");
+    });
+
+    const result = await store.migrateFilesToSpace([UUID], SHARED, {
+      recordIdOf: () => RECORD2,
+    });
+    expect(result.migrated).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(await store.has(UUID)).toBe(true); // untouched
+
+    // Explicit remap requested but unavailable: skip rather than queue an
+    // upload under the old space's record id (the target space's server
+    // would reject it).
+    const store2 = freshStore();
+    await store2.put(UUID2, data(16), RECORD);
+    const r2 = await store2.migrateFilesToSpace([UUID2], SHARED, {
+      recordIdOf: () => undefined,
+    });
+    expect(r2.migrated).toBe(0);
+    expect(r2.skipped).toBe(1);
+    expect(await store2.has(UUID2)).toBe(true);
   });
 });

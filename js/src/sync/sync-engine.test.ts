@@ -49,6 +49,7 @@ const h = vi.hoisted(() => {
       spaceManagers.push(this);
     }
     setWSClient = vi.fn();
+    getActiveSpaceIds = vi.fn((): string[] => []);
     initializeFromSpaces = vi.fn(async () => {
       log.push("spaceManager.initializeFromSpaces");
       return behavior.initializeResult;
