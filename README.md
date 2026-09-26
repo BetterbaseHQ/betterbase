@@ -81,7 +81,7 @@ Multi-tab coordination is automatic — one tab leads, others proxy through it.
 ```ts
 const task = await db.put(tasks, { title: "Ship it", done: false });
 const record = await db.get(tasks, task.id);
-await db.patch(tasks, task.id, { done: true });
+await db.patch(tasks, { id: task.id, done: true });
 await db.delete(tasks, task.id);
 
 const { records } = await db.query(tasks, {

@@ -8,9 +8,6 @@
     "url": "https://github.com/BetterbaseHQ/betterbase"
   },
   "type": "module",
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "import": "./src/index.ts",
@@ -24,17 +21,9 @@
       "import": "./src/auth/react.ts",
       "types": "./src/auth/react.ts"
     },
-    "./auth/internals": {
-      "import": "./src/auth/internals.ts",
-      "types": "./src/auth/internals.ts"
-    },
     "./crypto": {
       "import": "./src/crypto/index.ts",
       "types": "./src/crypto/index.ts"
-    },
-    "./crypto/internals": {
-      "import": "./src/crypto/internals.ts",
-      "types": "./src/crypto/internals.ts"
     },
     "./discovery": {
       "import": "./src/discovery/index.ts",
