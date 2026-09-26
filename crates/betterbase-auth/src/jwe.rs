@@ -28,6 +28,12 @@ const AES_KW_OUTPUT_LENGTH: usize = 40;
 
 /// Decrypt a compact JWE string using ECDH-ES+A256KW / A256GCM.
 ///
+/// `apu`/`apv` header parameters, when present, are base64url-decoded and
+/// fed to the Concat KDF as PartyUInfo/PartyVInfo per RFC 7518 §4.6.2
+/// (absent → empty). This must stay in lockstep with every other
+/// implementation of the `keys_jwe` decrypt path — see
+/// docs/sdk-seam-audit.md (D2).
+///
 /// # Arguments
 /// * `jwe` - Compact JWE string (5 base64url parts separated by dots)
 /// * `recipient_private_jwk` - Recipient's P-256 private key as JWK JSON
@@ -96,8 +102,17 @@ pub fn decrypt_jwe(
         sender_public_key.as_affine(),
     );
 
-    // 7. Concat KDF to derive KEK
-    let mut kek_bytes = concat_kdf(shared_secret.raw_secret_bytes().as_slice(), ALG_ID, 256);
+    // 7. Concat KDF to derive KEK.
+    //    apu/apv (RFC 7518 §4.6.2) — base64url-decoded, empty when absent.
+    let party_u = decode_party_info(header.get("apu"))?;
+    let party_v = decode_party_info(header.get("apv"))?;
+    let mut kek_bytes = concat_kdf(
+        shared_secret.raw_secret_bytes().as_slice(),
+        ALG_ID,
+        &party_u,
+        &party_v,
+        256,
+    );
 
     // 8. AES-KW unwrap CEK
     let encrypted_key =
@@ -155,6 +170,20 @@ pub fn encrypt_jwe(
     plaintext: &[u8],
     recipient_public_jwk: &serde_json::Value,
 ) -> Result<String, AuthError> {
+    // Production encryption never sets apu/apv party-info.
+    encrypt_jwe_inner(plaintext, recipient_public_jwk, &[], &[])
+}
+
+/// `encrypt_jwe` with explicit Concat-KDF party-info (RFC 7518 §4.6.2).
+///
+/// `party_u`/`party_v` are emitted as `apu`/`apv` header parameters when
+/// non-empty. Test/vector-only: production callers use `encrypt_jwe`.
+fn encrypt_jwe_inner(
+    plaintext: &[u8],
+    recipient_public_jwk: &serde_json::Value,
+    party_u: &[u8],
+    party_v: &[u8],
+) -> Result<String, AuthError> {
     let recipient_public_key = import_p256_public_jwk(recipient_public_jwk)?;
 
     // Generate ephemeral keypair for ECDH
@@ -166,7 +195,13 @@ pub fn encrypt_jwe(
     let shared_secret = ephemeral_secret.diffie_hellman(&recipient_public_key);
 
     // Concat KDF to derive KEK
-    let mut kek_bytes = concat_kdf(shared_secret.raw_secret_bytes().as_slice(), ALG_ID, 256);
+    let mut kek_bytes = concat_kdf(
+        shared_secret.raw_secret_bytes().as_slice(),
+        ALG_ID,
+        party_u,
+        party_v,
+        256,
+    );
 
     // Generate random CEK
     let mut cek = [0u8; CEK_LENGTH];
@@ -187,11 +222,19 @@ pub fn encrypt_jwe(
 
     // Build protected header with ephemeral public key
     let epk_jwk = encode_point_as_jwk(&ephemeral_point);
-    let header = serde_json::json!({
+    let mut header = serde_json::json!({
         "alg": "ECDH-ES+A256KW",
         "enc": "A256GCM",
         "epk": epk_jwk
     });
+    // apu/apv are optional header parameters — emit only when set, so the
+    // no-party-info header stays byte-identical to the historical format.
+    if !party_u.is_empty() {
+        header["apu"] = serde_json::Value::String(base64url_encode(party_u));
+    }
+    if !party_v.is_empty() {
+        header["apv"] = serde_json::Value::String(base64url_encode(party_v));
+    }
     // AAD for AES-GCM is the base64url-encoded header (RFC 7516 §5.1 step 14).
     // Use canonical_json for deterministic key ordering — header contains the
     // nested `epk` object, so serde_json insertion order is not sufficient.
@@ -234,17 +277,23 @@ pub fn encrypt_jwe(
     ))
 }
 
-/// Concat KDF (NIST SP 800-56A, single-pass for <=256 bits).
+/// Concat KDF (NIST SP 800-56A, single-pass for <=256 bits) for ECDH-ES
+/// per RFC 7518 §4.6.2:
 ///
-/// For ECDH-ES+A256KW:
 ///   SHA-256(00000001 || Z || algID || partyUInfo || partyVInfo || suppPubInfo)
 ///
 /// Where:
 ///   algID = [len(alg):4 BE][alg bytes]
-///   partyUInfo = [0:4 BE] (empty)
-///   partyVInfo = [0:4 BE] (empty)
+///   partyUInfo = [len(apu):4 BE][apu bytes] (empty → [0:4 BE])
+///   partyVInfo = [len(apv):4 BE][apv bytes] (empty → [0:4 BE])
 ///   suppPubInfo = [keydatalen:4 BE]
-fn concat_kdf(z: &[u8], alg: &str, key_data_len_bits: u32) -> Vec<u8> {
+fn concat_kdf(
+    z: &[u8],
+    alg: &str,
+    party_u: &[u8],
+    party_v: &[u8],
+    key_data_len_bits: u32,
+) -> Vec<u8> {
     let mut hasher = Sha256::new();
 
     // Round counter (always 1 for <= 256 bits)
@@ -257,16 +306,29 @@ fn concat_kdf(z: &[u8], alg: &str, key_data_len_bits: u32) -> Vec<u8> {
     hasher.update((alg.len() as u32).to_be_bytes());
     hasher.update(alg.as_bytes());
 
-    // PartyUInfo: empty (length 0)
-    hasher.update(0u32.to_be_bytes());
+    // PartyUInfo: length-prefixed apu bytes (empty when absent)
+    hasher.update((party_u.len() as u32).to_be_bytes());
+    hasher.update(party_u);
 
-    // PartyVInfo: empty (length 0)
-    hasher.update(0u32.to_be_bytes());
+    // PartyVInfo: length-prefixed apv bytes (empty when absent)
+    hasher.update((party_v.len() as u32).to_be_bytes());
+    hasher.update(party_v);
 
     // SuppPubInfo: key data length in bits
     hasher.update(key_data_len_bits.to_be_bytes());
 
     hasher.finalize().to_vec()
+}
+
+/// Decode a JWE `apu`/`apv` header parameter to raw party-info bytes.
+/// Absent (or explicitly null) → empty; present → base64url-decoded.
+fn decode_party_info(value: Option<&serde_json::Value>) -> Result<Vec<u8>, AuthError> {
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+        Some(serde_json::Value::String(b64)) => base64url_decode(b64)
+            .map_err(|e| AuthError::JweFormat(format!("apu/apv decode: {}", e))),
+        Some(_) => Err(AuthError::JweFormat("apu/apv must be a string".to_string())),
+    }
 }
 
 /// Import a P-256 public key from a JWK JSON value.
@@ -467,16 +529,27 @@ mod tests {
     #[test]
     fn concat_kdf_produces_32_bytes() {
         let z = [0u8; 32];
-        let result = concat_kdf(&z, "A256KW", 256);
+        let result = concat_kdf(&z, "A256KW", &[], &[], 256);
         assert_eq!(result.len(), 32);
     }
 
     #[test]
     fn concat_kdf_is_deterministic() {
         let z = [42u8; 32];
-        let r1 = concat_kdf(&z, "A256KW", 256);
-        let r2 = concat_kdf(&z, "A256KW", 256);
+        let r1 = concat_kdf(&z, "A256KW", &[1, 2, 3], &[], 256);
+        let r2 = concat_kdf(&z, "A256KW", &[1, 2, 3], &[], 256);
         assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn concat_kdf_party_info_changes_output() {
+        // Non-empty apu/apv MUST change the derived KEK (RFC 7518 §4.6.2).
+        let z = [7u8; 32];
+        let base = concat_kdf(&z, "A256KW", &[], &[], 256);
+        let with_u = concat_kdf(&z, "A256KW", &[0xDE, 0xAD], &[], 256);
+        let with_v = concat_kdf(&z, "A256KW", &[], &[0xBE, 0xEF], 256);
+        assert_ne!(base, with_u);
+        assert_ne!(base, with_v);
     }
 
     #[test]
@@ -563,6 +636,45 @@ mod tests {
         );
 
         assert!(decrypt_jwe(&tampered_jwe, &private_jwk).is_err());
+    }
+
+    #[test]
+    fn decrypt_jwe_with_apu_apv_header() {
+        // A JWE carrying non-empty apu/apv (RFC 7518 §4.6.2 party info)
+        // must decrypt — the pre-D2 implementation ignored apu/apv and
+        // failed on exactly this input (seam audit D2).
+        let (public_jwk, private_jwk) = generate_test_keypair();
+        let plaintext = b"party info round trip";
+
+        let jwe = encrypt_jwe_inner(plaintext, &public_jwk, b"sender-id", b"receiver-id").unwrap();
+        let decrypted = decrypt_jwe(&jwe, &private_jwk).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn decrypt_jwe_rejects_wrong_party_info() {
+        // Tampering apu fails decryption. (This also changes the AAD — the
+        // protected header — so this is an aggregate-integrity assertion;
+        // the KDF delta itself is proven by
+        // concat_kdf_party_info_changes_output.)
+        let (public_jwk, private_jwk) = generate_test_keypair();
+        let jwe = encrypt_jwe_inner(b"secret", &public_jwk, b"sender-id", b"receiver-id").unwrap();
+
+        // Tamper the apu header value: re-encode the header with a different apu.
+        let parts: Vec<&str> = jwe.split('.').collect();
+        let header_bytes = base64url_decode(parts[0]).unwrap();
+        let mut header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
+        header["apu"] = serde_json::Value::String(base64url_encode(b"other-party"));
+        let bad_header_b64 = base64url_encode(
+            betterbase_crypto::canonical_json(&header)
+                .unwrap()
+                .as_bytes(),
+        );
+        let bad_jwe = format!(
+            "{}.{}.{}.{}.{}",
+            bad_header_b64, parts[1], parts[2], parts[3], parts[4]
+        );
+        assert!(decrypt_jwe(&bad_jwe, &private_jwk).is_err());
     }
 
     #[test]

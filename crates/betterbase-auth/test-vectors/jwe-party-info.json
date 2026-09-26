@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "description": "JWE ECDH-ES+A256KW/A256GCM conformance vector with apu/apv party-info (RFC 7518 §4.6.2). Fixed inputs: recipient key 0x01..0x20, ephemeral key 0xa1..0xc0, CEK 0xC0..0xDF, zero IV, plaintext and party-info below — reproducible from the RFC 7518 pipeline in any language. Every implementation of the keys_jwe decrypt path MUST decrypt this JWE to exactly the plaintext (seam audit D2).",
+  "recipient_private_jwk": {
+    "crv": "P-256",
+    "d": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+    "kty": "EC",
+    "x": "UVw9brnjlrkE0_7Kf1T9zQzB6Ze_N13KUVrQpsO0A18",
+    "y": "RTa-OlDzGPv5pUdZAqIhUCvvDVfgjFOyzApW8X2fk1Q"
+  },
+  "jwe": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImFwdSI6ImRtVmpkRzl5TFdGd2RRIiwiYXB2IjoiZG1WamRHOXlMV0Z3ZGciLCJlbmMiOiJBMjU2R0NNIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoiclJOX2Z2Z3A3dmlvVnh2MDB3ZG1UcWpnSk9CYjJrNG0ybzk2NklSRllGZyIsInkiOiJxSTVJeWFIWk9HUng4VDhsV1hXTzNFdkI0Uk9VNjBGZFktTFRQazA0VVowIn19._oeCxD_Aeued8NbsnERTz2kTpAFZVnTi3WUHzCQsGTOBdvS2m1dB7Q.AAAAAAAAAAAAAAAA._ck8N6SPl6IGbWCJv_kwrElbSGsNoy2mhExj81P4eyl6ljo.mqFc27UkHMe_bD9zNTTKqA",
+  "plaintext": "betterbase jwe party-info vector v1",
+  "party_info": {
+    "apu": "vector-apu",
+    "apv": "vector-apv"
+  }
+}

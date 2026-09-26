@@ -20,7 +20,8 @@ import { generateDEK, wrapDEK, unwrapDEK } from "../../src/crypto/dek.js";
 import { deriveNextEpochKey } from "../../src/crypto/epoch.js";
 import { deriveChannelKey } from "../../src/crypto/channel.js";
 import { encryptV4, decryptV4 } from "../../src/crypto/sync-crypto.js";
-import { encryptJwe } from "../../src/auth/crypto.js";
+import { encryptJwe, decryptJwe } from "../../src/auth/crypto.js";
+import { base64UrlEncode } from "../../src/crypto/base64url.js";
 import {
   importEpochKwKey,
   importEpochDeriveKey,
@@ -296,6 +297,153 @@ describe("WASM ↔ Web Crypto interoperability (browser)", () => {
       const decrypted = await webcryptoDecryptJwe(jwe, privateKey);
       expect(decrypted).toEqual(plaintext);
     });
+
+    // D2: a JWE carrying apu/apv party-info (RFC 7518 §4.6.2) must decrypt
+    // to the same plaintext on BOTH paths. Pre-fix, Rust ignored apu/apv
+    // while Web Crypto consumed them — the two paths disagreed on exactly
+    // this input.
+    it("JWE with apu/apv party-info: both paths decrypt identically (D2)", async () => {
+      // Extractable keypair so the same key can serve both paths: CryptoKey
+      // (Web Crypto) and private JWK (wasm).
+      const keyPair = await crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        ["deriveBits"],
+      );
+      const privateKeyJwk = (await crypto.subtle.exportKey(
+        "jwk",
+        keyPair.privateKey,
+      )) as JsonWebKey;
+      const publicKeyJwk = (await crypto.subtle.exportKey(
+        "jwk",
+        keyPair.publicKey,
+      )) as JsonWebKey;
+
+      const plaintext = new TextEncoder().encode("party info interop");
+      const apu = new TextEncoder().encode("sender-party");
+      const apv = new TextEncoder().encode("receiver-party");
+      const jwe = await buildJweWithPartyInfo(
+        plaintext,
+        keyPair.privateKey,
+        apu,
+        apv,
+      );
+
+      const viaWasm = decryptJwe(jwe, privateKeyJwk);
+      const viaWebCrypto = await webcryptoDecryptJwe(jwe, keyPair.privateKey);
+
+      expect(viaWasm).toEqual(plaintext);
+      expect(viaWebCrypto).toEqual(plaintext);
+    });
+
+    // Minimal ECDH-ES+A256KW/A256GCM builder with apu/apv party-info —
+    // mirrors the RFC 7518 §4.6.2 key schedule so the resulting JWE is a
+    // valid input for both decrypt paths.
+    async function buildJweWithPartyInfo(
+      plaintext: Uint8Array,
+      recipientPrivateKey: CryptoKey,
+      apu: Uint8Array,
+      apv: Uint8Array,
+    ): Promise<string> {
+      const epkKey = await crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        ["deriveBits"],
+      );
+      const epk = (await crypto.subtle.exportKey(
+        "jwk",
+        epkKey.publicKey,
+      )) as JsonWebKey;
+
+      const shared = await crypto.subtle.deriveBits(
+        { name: "ECDH", public: epkKey.publicKey },
+        recipientPrivateKey,
+        256,
+      );
+
+      const u32 = (n: number) => {
+        const b = new Uint8Array(4);
+        new DataView(b.buffer).setUint32(0, n, false);
+        return b;
+      };
+      const lenPrefixed = (bytes: Uint8Array) => {
+        const out = new Uint8Array(4 + bytes.length);
+        out.set(u32(bytes.length));
+        out.set(bytes, 4);
+        return out;
+      };
+      const concat = (...arrays: Uint8Array[]) => {
+        const total = arrays.reduce((n, a) => n + a.length, 0);
+        const out = new Uint8Array(total);
+        let offset = 0;
+        for (const a of arrays) {
+          out.set(a, offset);
+          offset += a.length;
+        }
+        return out;
+      };
+
+      const kdfInput = concat(
+        u32(1),
+        new Uint8Array(shared),
+        lenPrefixed(new TextEncoder().encode("ECDH-ES+A256KW")),
+        lenPrefixed(apu),
+        lenPrefixed(apv),
+        u32(256),
+      );
+      const kekBits = await crypto.subtle.digest("SHA-256", kdfInput);
+      const kek = await crypto.subtle.importKey(
+        "raw",
+        kekBits,
+        { name: "AES-KW" },
+        false,
+        ["wrapKey"],
+      );
+
+      const cek = crypto.getRandomValues(new Uint8Array(32));
+      const cekKey = await crypto.subtle.importKey(
+        "raw",
+        cek,
+        { name: "AES-GCM" },
+        true,
+        ["encrypt"],
+      );
+      const wrappedCek = await crypto.subtle.wrapKey("raw", cekKey, kek, {
+        name: "AES-KW",
+      });
+
+      const header = {
+        alg: "ECDH-ES+A256KW",
+        enc: "A256GCM",
+        epk,
+        apu: base64UrlEncode(apu),
+        apv: base64UrlEncode(apv),
+      };
+      const headerB64 = base64UrlEncode(
+        new TextEncoder().encode(JSON.stringify(header)),
+      );
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+
+      const ctWithTag = await crypto.subtle.encrypt(
+        {
+          name: "AES-GCM",
+          iv,
+          additionalData: new TextEncoder().encode(headerB64),
+        },
+        cekKey,
+        plaintext,
+      );
+      const ct = new Uint8Array(ctWithTag, 0, ctWithTag.byteLength - 16);
+      const tag = new Uint8Array(ctWithTag, ctWithTag.byteLength - 16, 16);
+
+      return [
+        headerB64,
+        base64UrlEncode(new Uint8Array(wrappedCek)),
+        base64UrlEncode(iv),
+        base64UrlEncode(ct),
+        base64UrlEncode(tag),
+      ].join(".");
+    }
 
     it("large payload (4 KB)", async () => {
       const { privateKey, publicKeyJwk } = await generateEphemeralECDHKeyPair();
