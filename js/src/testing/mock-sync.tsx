@@ -4,9 +4,12 @@
  * ```ts
  * // vitest config
  * resolve: {
- *   alias: { "betterbase/sync/react": <path to this file> },
- * },
+ *   alias: { "betterbase/sync/react": "betterbase/testing/mock-sync" },
+ * }
  * ```
+ *
+ * Use the package specifier, not a path to this file — the exports map
+ * resolves it here without coupling app configs to SDK file layout.
  *
  * The real module performs server discovery and opens a WebSocket — not
  * viable in component tests. With the alias, every import in the module
