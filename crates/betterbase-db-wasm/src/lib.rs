@@ -12,6 +12,7 @@ pub mod collection;
 pub mod conversions;
 pub mod diagnostics;
 pub mod error;
+pub mod file_store;
 pub mod middleware;
 pub mod sync;
 pub mod wasm_sqlite;

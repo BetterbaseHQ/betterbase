@@ -960,6 +960,9 @@ export class FileStore {
     }
     this.urlCache.clear();
     this.subscribers.clear();
+    // Backends that hold resources (a worker + leader lock) release them
+    // here; fire-and-forget — dispose is synchronous and idempotent.
+    void Promise.resolve(this.storage.close?.()).catch(() => {});
   }
 
   // ---------------------------------------------------------------------------

@@ -28,7 +28,11 @@ pub enum UploadStatus {
 
 /// Lightweight metadata for one cached file — never includes blob bytes.
 /// Queue fields are present only while the file is queued.
+///
+/// Serde speaks camelCase: this shape crosses the JS boundary verbatim
+/// (the TS `MetaEntry` interface) and persists in the wasm SQLite schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileMeta {
     /// Compound key ([`cache_key`] output).
     #[serde(rename = "key")]

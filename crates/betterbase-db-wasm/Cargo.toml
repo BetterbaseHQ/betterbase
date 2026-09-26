@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 betterbase-db = { path = "../betterbase-db", default-features = false, features = ["js"] }
+betterbase-file-store = { path = "../betterbase-file-store" }
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -24,7 +25,20 @@ getrandom = { version = "0.2", features = ["js"] }
 async-trait = "0.1"
 sqlite-wasm-rs = "0.5"
 sqlite-wasm-vfs = "0.2"
-web-sys = { version = "0.3", features = ["console"] }
+web-sys = { version = "0.3", features = [
+    "console",
+    "WorkerGlobalScope",
+    "Navigator",
+    "StorageManager",
+    "FileSystemDirectoryHandle",
+    "FileSystemFileHandle",
+    "FileSystemGetDirectoryOptions",
+    "FileSystemGetFileOptions",
+    "FileSystemReadWriteOptions",
+    "FileSystemSyncAccessHandle",
+    "File",
+    "Blob",
+] }
 console_error_panic_hook = "0.1"
 
 [dev-dependencies]

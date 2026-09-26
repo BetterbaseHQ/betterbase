@@ -108,10 +108,12 @@ pub trait NetworkFetch {
 ```
 
 Object-URL minting stays main-thread (worker-minted URLs die with the
-worker). Transferables are added at the RPC boundary for blob put/get with
-per-method opt-in; broadcast/fanout paths stay copy-semantics (a
-transferred buffer is detached on second post). Expect one copy
-(wasm→JS) not zero: WASM linear memory cannot transfer.
+worker). Transferables at the RPC boundary are DEFERRED (follow-up):
+current blob crossing is structured-clone copy — cost parity with the
+IndexedDB backend. When added: per-method opt-in, broadcast/fanout paths
+stay copy-semantics (a transferred buffer is detached on second post),
+and expect one copy (wasm→JS) not zero — WASM linear memory cannot
+transfer.
 
 ## OPFS budget (web backend)
 

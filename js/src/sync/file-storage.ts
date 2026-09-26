@@ -69,6 +69,12 @@ export interface FileStorage {
    * get-then-put pair across two transactions cannot guarantee it.
    */
   touchMeta(key: string, at: number): Promise<void>;
+  /**
+   * Release held resources (workers, locks). Optional — backends with
+   * no lifecycle (IndexedDB's shared connection) omit it. FileStore
+   * calls it on dispose().
+   */
+  close?(): void | Promise<void>;
 }
 
 /** An `uploading` entry untouched for longer than this is abandoned. */

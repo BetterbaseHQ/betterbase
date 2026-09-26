@@ -33,6 +33,10 @@
       "import": "./src/sync/index.ts",
       "types": "./src/sync/index.ts"
     },
+    "./sync/files-worker": {
+      "import": "./src/sync/files-worker/init.ts",
+      "types": "./src/sync/files-worker/init.ts"
+    },
     "./sync/react": {
       "import": "./src/sync/react.ts",
       "types": "./src/sync/react.ts"
