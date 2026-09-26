@@ -1,7 +1,7 @@
 /**
  * FileStore-over-WorkerFileStorage integration (browser, real OPFS/WASM).
  *
- * The unit suite pins FileStore semantics over IdbFileStorage; the
+ * The unit suite pins FileStore semantics over InMemoryFileStorage; the
  * files/ worker suite pins the backend contract. This file proves the
  * composition: FileStore's queue, eviction, and migration semantics
  * running on the OPFS backend end to end.

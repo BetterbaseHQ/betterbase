@@ -236,6 +236,21 @@ export class FileStore {
    * bootstrap) unless its sweep finds them missing.
    */
   async connect(config: FileStoreSyncConfig): Promise<void> {
+    // Pre-connect entries live under the CURRENT internal space (default
+    // "_"). With per-namespace stores they are NOT rewritten on connect —
+    // a durable store that received recordId puts before connecting now
+    // owns entries its connected runtime cannot upload. That is a caller
+    // wiring mistake (anonymous bytes move via transferUnuploadedFrom);
+    // surface it instead of stranding silently.
+    if (this.spaceId !== config.spaceId) {
+      const stranded = await this.storage.queuedForSpace(this.spaceId);
+      if (stranded.length > 0) {
+        console.warn(
+          `FileStore: ${stranded.length} queued entr${stranded.length === 1 ? "y is" : "ies are"} under space "${this.spaceId}" but connect() binds "${config.spaceId}" — they will not upload. Move them explicitly (transferUnuploadedFrom) or queue after connect.`,
+        );
+      }
+    }
+
     // A re-connect is an authoritative rebind: runtimes still registered
     // from a previous binding (anonymous → account adoption, account
     // switch without dispose) hold closures over a dead SpaceManager and
@@ -471,21 +486,6 @@ export class FileStore {
     }
   }
 
-  /**
-   * Copy queued-but-unuploaded files from another (typically anonymous)
-   * store into this one.
-   *
-   * Adoption merges records into the account database, but file bytes live
-   * in the anonymous store's cache — and retirement deletes that cache.
-   * This moves every entry still waiting for its first upload (pending or
-   * errored; never one genuinely in-flight) into this store's upload queue:
-   * `put` re-enqueues under the owning record id, so a connected store
-   * pushes them to the server on its next queue pass.
-   *
-   * Entries already present here are skipped, making the transfer
-   * idempotent alongside the adoption merge. Returns the number of files
-   * transferred.
-   */
   /**
    * Copy queued-but-unuploaded files from another (typically anonymous)
    * store into this one.

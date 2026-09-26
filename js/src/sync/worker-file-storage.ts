@@ -9,7 +9,8 @@
  * never collides with a records database of the same name.
  *
  * The behavioral contract is the `FileStorage` interface; the FileStore
- * suite that runs against `IdbFileStorage` runs against this too.
+ * suite runs against `InMemoryFileStorage`; this backend gets the
+ * browser suites.
  */
 
 import type { FileStorage, MetaEntry } from "./file-storage.js";
@@ -39,6 +40,7 @@ export async function createWorkerFileStorage(
  * first operation awaits worker startup and leader election. For
  * call sites that need a synchronous FileStore construction (React
  * state initializers); open failures surface as operation errors.
+ * `close()` is a no-op before the first operation.
  */
 export function lazyWorkerFileStorage(
   namespace: string,
@@ -72,9 +74,11 @@ export function lazyWorkerFileStorage(
     deleteBlob: (key) => call<void>("deleteBlob", key),
     touchMeta: (key, at) => call<void>("touchMeta", key, at),
     close: () => {
-      void get()
-        .then((storage) => storage.close())
-        .catch(() => {});
+      // Never OPEN just to close: a disposed-before-first-op store
+      // (chat's unused signed-out tree) must not spawn a worker +
+      // election purely for teardown.
+      if (!ready) return;
+      void ready.then((storage) => storage.close()).catch(() => {});
     },
   };
 }

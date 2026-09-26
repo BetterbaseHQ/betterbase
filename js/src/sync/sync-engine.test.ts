@@ -433,7 +433,7 @@ describe("SyncEngine", () => {
       expect(h.log).toContain("presence.dispose");
       expect(h.log).toContain("eventManager.dispose");
       expect(h.log).toContain("fileStore.disconnect");
-      expect(h.log).toContain("fileStore.dispose"); // engine owns the store
+      // Storage lifetime is the store creator's, not the engine's. store
       expect(h.log).toContain("spaceManager.destroy");
       expect(h.log.filter((e) => e === "transport.close")).toHaveLength(1);
       expect(jwk.d).toBe("");
@@ -441,18 +441,18 @@ describe("SyncEngine", () => {
       expect(jwk.y).toBe("");
     });
 
-    it("disconnects and disposes the FileStore (idempotently)", async () => {
+    it("disconnects but never disposes the FileStore", async () => {
       const engine = await SyncEngine.create(makeConfig());
       await vi.waitFor(() => expect(state(engine).phase).toBe("ready"));
       h.log.length = 0;
 
       engine.dispose();
 
-      // The engine treats the store as its session-scoped collaborator:
-      // teardown releases the backend (workers, locks). Dispose is
-      // idempotent — callers that outlive the engine may dispose again.
+      // The engine is one collaborator of a caller-owned store (engines
+      // re-create on epoch advance / StrictMode re-runs): teardown may
+      // only unbind sync, never release the storage backend.
       expect(h.log).toContain("fileStore.disconnect");
-      expect(h.log).toContain("fileStore.dispose");
+      expect(h.log).not.toContain("fileStore.dispose");
     });
   });
 

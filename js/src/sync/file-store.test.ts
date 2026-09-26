@@ -653,6 +653,25 @@ describe("FileStore upload queue", () => {
     expect(await store.get(UUID)).toBeNull();
   });
 
+  it("connect warns when pre-connect queue entries will strand", async () => {
+    // Per-namespace semantics: entries queued under the default space are
+    // NOT rewritten on connect. A caller queuing before connect on a
+    // durable store made a wiring mistake — surface it, don't strand
+    // silently (anonymous bytes move via transferUnuploadedFrom).
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const store = freshStore();
+      await store.put(UUID, data(8), RECORD);
+      await store.connect(syncConfig(makeFilesClient()));
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("will not upload"),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("connect rehydrates the queue snapshot from existing entries", async () => {
     const store = freshStore();
     await store.put(UUID, data(8), RECORD);

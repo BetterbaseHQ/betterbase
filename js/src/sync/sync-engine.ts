@@ -871,8 +871,11 @@ export class SyncEngine {
     this.scheduler?.dispose();
     this.presenceManager?.dispose();
     this.eventManager?.dispose();
+    // Disconnect only: the engine is one collaborator of a store whose
+    // storage lifetime belongs to its creator (StrictMode engine re-runs,
+    // epoch-advance recreation). Disposing here would kill the worker
+    // namespace out from under the next engine.
     this.fileStore?.disconnect();
-    this.fileStore?.dispose();
     this.spaceManager?.destroy();
     // Best-effort zeroing of JWK private key fields. JS strings are immutable
     // heap objects, so assigning "" replaces the reference but cannot overwrite

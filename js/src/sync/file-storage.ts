@@ -92,13 +92,19 @@ export function isStaleUploading(meta: MetaEntry): boolean {
 // ---------------------------------------------------------------------------
 
 /** Ephemeral FileStorage over plain maps. Per-instance: two stores never
- * share state — a durable namespace requires the worker backend. */
+ * share state — a durable namespace requires the worker backend.
+ *
+ * Reads return copies, matching the per-read isolation of the durable
+ * backends (worker RPC deserialization / IDB structured clone): a caller
+ * mutating a returned entry never touches stored state without a write.
+ */
 export class InMemoryFileStorage implements FileStorage {
   private meta = new Map<string, MetaEntry>();
   private blobs = new Map<string, Uint8Array>();
 
   async getMeta(key: string): Promise<MetaEntry | undefined> {
-    return this.meta.get(key);
+    const entry = this.meta.get(key);
+    return entry ? { ...entry } : undefined;
   }
 
   async putMeta(entry: MetaEntry): Promise<void> {
@@ -110,7 +116,7 @@ export class InMemoryFileStorage implements FileStorage {
   }
 
   async allMeta(): Promise<MetaEntry[]> {
-    return [...this.meta.values()];
+    return [...this.meta.values()].map((m) => ({ ...m }));
   }
 
   async metaForSpace(spaceId: string): Promise<MetaEntry[]> {
@@ -132,7 +138,7 @@ export class InMemoryFileStorage implements FileStorage {
   }
 
   async getBlob(key: string): Promise<Uint8Array | undefined> {
-    return this.blobs.get(key);
+    return this.blobs.get(key)?.slice();
   }
 
   async putFile(m: MetaEntry, data: Uint8Array): Promise<void> {
