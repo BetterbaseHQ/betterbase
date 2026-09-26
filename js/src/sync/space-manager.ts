@@ -44,10 +44,10 @@ import {
   parseMembershipEntry,
   serializeMembershipEntry,
   buildMembershipSigningMessage,
-  verifyMembershipEntry,
   type MembershipEntryType,
   type MembershipEntryPayload,
 } from "./membership.js";
+import { ensureWasm } from "../wasm-init.js";
 import {
   advanceEpoch,
   rewrapAllDEKs,
@@ -687,8 +687,12 @@ export class SpaceManager {
     const nowSeconds = Math.floor(Date.now() / 1000);
     const decrypted = this.decryptLogEntries(entries, syncCrypto, spaceId);
 
-    for (const { seq, entry: memberEntry } of decrypted) {
-      const valid = verifyMembershipEntry(memberEntry, spaceId);
+    for (const { seq, payloadStr, entry: memberEntry } of decrypted) {
+      // Verify over the ORIGINAL payload string in Rust (single source of
+      // truth for the verification policy, docs/sdk-seam-audit.md D1).
+      // Malformed entries read as false, never throw — one poison entry
+      // must not abort the fold.
+      const valid = ensureWasm().verifyMembershipEntry(payloadStr, spaceId);
       if (!valid) {
         console.warn(
           `Invalid signature on membership entry seq=${seq} in space ${spaceId}`,

@@ -192,10 +192,26 @@ pub fn serialize_membership_entry(entry: &MembershipEntryPayload) -> String {
 
 /// Verify a membership entry's signature.
 ///
-/// 1. Verify signer's public key DID matches expected signer role
-/// 2. Verify ECDSA signature over canonical message
-/// 3. Verify the UCAN's JWT signature against the issuer's public key
-pub fn verify_membership_entry(
+/// Returns `true` only if the entry is fully authenticated:
+/// 1. signer's public key DID matches the expected signer role
+/// 2. ECDSA signature over the canonical message is valid
+/// 3. the UCAN's JWT signature verifies against the issuer's key (for
+///    delegated UCANs the issuer is resolved from the self-describing
+///    did:key, so a forged UCAN cannot ride along on a valid entry
+///    signature)
+///
+/// Any entry that is *malformed* (unparseable UCAN, unresolvable issuer
+/// DID, non-P-256 signer key, undecodable signature) returns `false`
+/// rather than an error: verification is a predicate, and a poison entry
+/// must not take down a caller iterating over the whole membership log.
+/// Every SDK consumes this contract — see docs/sdk-seam-audit.md (D1).
+pub fn verify_membership_entry(entry: &MembershipEntryPayload, space_id: &str) -> bool {
+    // `Ok(false)` (signature/role mismatch) and `Err` (malformed entry)
+    // both mean "not authenticated"; only `Ok(true)` is a pass.
+    verify_membership_entry_inner(entry, space_id).unwrap_or(false)
+}
+
+fn verify_membership_entry_inner(
     entry: &MembershipEntryPayload,
     space_id: &str,
 ) -> Result<bool, SyncError> {
@@ -493,8 +509,84 @@ mod tests {
             recipient_handle: Some(recipient_handle.to_string()),
         };
 
-        let result = verify_membership_entry(&entry, space_id).unwrap();
+        let result = verify_membership_entry(&entry, space_id);
         assert!(result, "Valid membership entry should verify");
+    }
+
+    #[test]
+    fn verify_malformed_entry_is_false_not_error() {
+        // Poison tolerance: malformed entries must read as `false`, never
+        // surface as an error (a fold over the whole log must not abort).
+        let entry = MembershipEntryPayload {
+            ucan: "not-a-jwt".to_string(),
+            entry_type: MembershipEntryType::Accepted,
+            signature: vec![1, 2, 3],
+            signer_public_key: serde_json::json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}),
+            epoch: None,
+            mailbox_id: None,
+            public_key_jwk: None,
+            signer_handle: None,
+            recipient_handle: None,
+        };
+        assert!(!verify_membership_entry(&entry, "space-1"));
+    }
+
+    #[test]
+    fn verify_unresolvable_issuer_is_false_not_error() {
+        // Role + entry signature are all valid; only the issuer DID is
+        // not a decodable P-256 did:key → `false`, not an error.
+        let member_key = betterbase_crypto::generate_p256_keypair();
+        let member_jwk = betterbase_crypto::export_public_key_jwk(member_key.verifying_key());
+        let member_did = betterbase_crypto::encode_did_key(&member_key).unwrap();
+
+        // 'O' is not in the base58 alphabet → decode fails.
+        let ucan = ucan_with_issuer_for_test("did:key:zNotARealP256Key", &member_did);
+        let message = build_membership_signing_message(
+            MembershipEntryType::Accepted,
+            "space-1",
+            &member_did,
+            &ucan,
+            "",
+            "",
+        );
+        let signature = betterbase_crypto::sign(&member_key, &message).unwrap();
+        let entry = MembershipEntryPayload {
+            ucan,
+            entry_type: MembershipEntryType::Accepted,
+            signature,
+            signer_public_key: member_jwk,
+            epoch: None,
+            mailbox_id: None,
+            public_key_jwk: None,
+            signer_handle: None,
+            recipient_handle: None,
+        };
+        assert!(!verify_membership_entry(&entry, "space-1"));
+    }
+
+    #[test]
+    fn verify_non_p256_signer_key_is_false_not_error() {
+        let entry = MembershipEntryPayload {
+            ucan: ucan_with_issuer_for_test("did:key:zSelf", "did:key:zSelf"),
+            entry_type: MembershipEntryType::Delegation,
+            signature: vec![1, 2, 3],
+            signer_public_key: serde_json::json!({"kty": "oct"}), // not a P-256 JWK
+            epoch: None,
+            mailbox_id: None,
+            public_key_jwk: None,
+            signer_handle: None,
+            recipient_handle: None,
+        };
+        assert!(!verify_membership_entry(&entry, "space-1"));
+    }
+
+    /// Build a minimal three-part JWT with the given `iss`/`aud` claims.
+    /// The signature is junk — tests asserting deeper failure modes must
+    /// ensure the entry signature covers this exact UCAN string.
+    fn ucan_with_issuer_for_test(issuer: &str, audience: &str) -> String {
+        let payload = serde_json::json!({"iss": issuer, "aud": [audience]});
+        let b64 = betterbase_crypto::base64url_encode(payload.to_string().as_bytes());
+        format!("h.{b64}.s")
     }
 
     #[test]
@@ -548,8 +640,131 @@ mod tests {
             recipient_handle: None,
         };
 
-        let result = verify_membership_entry(&entry, "space-1").unwrap();
+        let result = verify_membership_entry(&entry, "space-1");
         assert!(!result, "Wrong signer should fail verification");
+    }
+
+    #[test]
+    fn verify_delegated_ucan_resolves_issuer_from_did_key() {
+        // "accepted" entry: the audience signs the entry, the UCAN was
+        // issued by a *different* key (the admin). Verification must
+        // resolve the issuer's public key from the self-describing
+        // did:key and check the UCAN's JWT signature against it.
+        use betterbase_crypto::signing::{export_public_key_jwk, generate_p256_keypair};
+        use betterbase_crypto::ucan::{encode_did_key, issue_root_ucan, UCANPermission};
+
+        let issuer_key = generate_p256_keypair();
+        let issuer_did = encode_did_key(&issuer_key).unwrap();
+
+        let audience_key = generate_p256_keypair();
+        let audience_jwk = export_public_key_jwk(audience_key.verifying_key());
+        let audience_did = encode_did_key(&audience_key).unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let ucan = issue_root_ucan(
+            &issuer_key,
+            &issuer_did,
+            &audience_did,
+            "space-1",
+            UCANPermission::Write,
+            3600,
+            now,
+        )
+        .unwrap();
+
+        let message = build_membership_signing_message(
+            MembershipEntryType::Accepted,
+            "space-1",
+            &audience_did,
+            &ucan,
+            "",
+            "",
+        );
+        let signature = betterbase_crypto::sign(&audience_key, &message).unwrap();
+
+        let entry = MembershipEntryPayload {
+            ucan,
+            entry_type: MembershipEntryType::Accepted,
+            signature,
+            signer_public_key: audience_jwk,
+            epoch: None,
+            mailbox_id: None,
+            public_key_jwk: None,
+            signer_handle: None,
+            recipient_handle: None,
+        };
+
+        let result = verify_membership_entry(&entry, "space-1");
+        assert!(
+            result,
+            "Legitimately delegated UCAN should verify via did:key resolution"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_forged_delegated_ucan() {
+        // The exploit the old TS policy allowed: an "accepted" entry
+        // signed by the member (valid entry signature) carrying a UCAN
+        // whose JWT signature is NOT from the claimed issuer. The entry
+        // must fail because the UCAN itself is unauthenticated.
+        use betterbase_crypto::signing::{export_public_key_jwk, generate_p256_keypair};
+        use betterbase_crypto::ucan::{encode_did_key, issue_root_ucan, UCANPermission};
+
+        let admin_key = generate_p256_keypair();
+        let admin_did = encode_did_key(&admin_key).unwrap();
+
+        let attacker_key = generate_p256_keypair();
+        let attacker_jwk = export_public_key_jwk(attacker_key.verifying_key());
+        let attacker_did = encode_did_key(&attacker_key).unwrap();
+
+        // Forge a UCAN: claims the admin as issuer, but is signed with the
+        // attacker's key — a real ES256 signature, so the only tell is that
+        // the signature doesn't match the claimed issuer's key.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let forged_ucan = issue_root_ucan(
+            &attacker_key,
+            &admin_did, // claimed issuer: the admin
+            &attacker_did,
+            "space-1",
+            UCANPermission::Admin,
+            3600,
+            now,
+        )
+        .unwrap();
+
+        let message = build_membership_signing_message(
+            MembershipEntryType::Accepted,
+            "space-1",
+            &attacker_did,
+            &forged_ucan,
+            "",
+            "",
+        );
+        let signature = betterbase_crypto::sign(&attacker_key, &message).unwrap();
+
+        let entry = MembershipEntryPayload {
+            ucan: forged_ucan,
+            entry_type: MembershipEntryType::Accepted,
+            signature,
+            signer_public_key: attacker_jwk,
+            epoch: None,
+            mailbox_id: None,
+            public_key_jwk: None,
+            signer_handle: None,
+            recipient_handle: None,
+        };
+
+        let result = verify_membership_entry(&entry, "space-1");
+        assert!(
+            !result,
+            "Forged UCAN (unsigned by claimed issuer) must fail"
+        );
     }
 
     #[test]

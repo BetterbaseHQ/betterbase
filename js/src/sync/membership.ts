@@ -5,8 +5,7 @@
  * Payloads are encrypted under the space key so the server only sees opaque bytes.
  */
 
-import { SyncCrypto, encodeDIDKeyFromJwk } from "../crypto/index.js";
-import { verify } from "../crypto/internals.js";
+import { SyncCrypto } from "../crypto/index.js";
 import type { EncryptionContext } from "../crypto/types.js";
 import {
   bytesToBase64Url,
@@ -344,78 +343,6 @@ export function serializeMembershipEntry(
     obj.rn = entry.recipientHandle;
   }
   return JSON.stringify(obj);
-}
-
-/**
- * Verify a membership entry's signature.
- */
-export function verifyMembershipEntry(
-  entry: MembershipEntryPayload,
-  spaceId: string,
-): boolean {
-  let parsed: ParsedUCAN;
-  try {
-    parsed = parseUCANPayload(entry.ucan);
-  } catch {
-    // A malformed UCAN fails verification — one poison entry must not
-    // abort parsing of the whole membership log.
-    return false;
-  }
-  let expectedSignerDID: string;
-  switch (entry.type) {
-    case "d":
-    case "r":
-      expectedSignerDID = parsed.issuerDID;
-      break;
-    case "a":
-    case "x":
-      expectedSignerDID = parsed.audienceDID;
-      break;
-    default:
-      return false;
-  }
-
-  const signerDID = encodeDIDKeyFromJwk(entry.signerPublicKey);
-  if (signerDID !== expectedSignerDID) {
-    return false;
-  }
-
-  const message = buildMembershipSigningMessage(
-    entry.type,
-    spaceId,
-    signerDID,
-    entry.ucan,
-    entry.signerHandle ?? "",
-    entry.recipientHandle ?? "",
-  );
-  const valid = verify(entry.signerPublicKey, message, entry.signature);
-  if (!valid) {
-    return false;
-  }
-
-  // For self-issued UCANs, verify the UCAN's JWT signature
-  if (parsed.issuerDID === parsed.audienceDID) {
-    const ucanValid = verifyUCANSignature(entry.ucan, entry.signerPublicKey);
-    if (!ucanValid) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function verifyUCANSignature(ucan: string, publicKeyJwk: JsonWebKey): boolean {
-  const parts = ucan.split(".");
-  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) return false;
-
-  const signingInput = `${parts[0]}.${parts[1]}`;
-  const signatureBytes = base64UrlToBytes(parts[2]);
-
-  return verify(
-    publicKeyJwk,
-    new TextEncoder().encode(signingInput),
-    signatureBytes,
-  );
 }
 
 // ---------------------------------------------------------------------------

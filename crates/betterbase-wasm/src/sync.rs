@@ -222,9 +222,13 @@ pub fn wasm_serialize_membership_entry(entry_json: &str) -> Result<String, JsVal
 }
 
 #[wasm_bindgen(js_name = "verifyMembershipEntry")]
-pub fn wasm_verify_membership_entry(payload: &str, space_id: &str) -> Result<bool, JsValue> {
-    let entry = parse_membership_entry(payload).map_err(to_js_error)?;
-    verify_membership_entry(&entry, space_id).map_err(to_js_error)
+pub fn wasm_verify_membership_entry(payload: &str, space_id: &str) -> bool {
+    // Malformed payloads read as `false`, never throw — callers fold over
+    // whole membership logs and a poison entry must not abort the fold.
+    match parse_membership_entry(payload) {
+        Ok(entry) => verify_membership_entry(&entry, space_id),
+        Err(_) => false,
+    }
 }
 
 #[wasm_bindgen(js_name = "encryptMembershipPayload")]
