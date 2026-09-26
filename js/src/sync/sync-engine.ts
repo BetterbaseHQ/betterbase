@@ -694,7 +694,15 @@ export class SyncEngine {
     }
 
     for (const spaceId of active) {
-      if (this.registeredFileSpaces.has(spaceId)) continue;
+      // Re-register when either the bookkeeping or the store itself lost
+      // the runtime (an external connect() rebinds the store
+      // authoritatively — see FileStore.connect).
+      if (
+        this.registeredFileSpaces.has(spaceId) &&
+        this.fileStore.hasRuntime(spaceId)
+      ) {
+        continue;
+      }
       this.fileStore.registerSpace({
         spaceId,
         filesClient: this.files,

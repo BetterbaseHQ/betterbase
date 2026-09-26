@@ -63,6 +63,7 @@ const h = vi.hoisted(() => {
   }
 
   class FakeFileStore {
+    registered = new Set<string>();
     constructor() {
       fileStores.push(this);
     }
@@ -72,6 +73,15 @@ const h = vi.hoisted(() => {
     invalidate = vi.fn(() => {
       log.push("fileStore.invalidate");
     });
+    registerSpace = vi.fn((config: { spaceId: string }) => {
+      this.registered.add(config.spaceId);
+      log.push(`fileStore.registerSpace:${config.spaceId}`);
+    });
+    unregisterSpace = vi.fn((spaceId: string) => {
+      this.registered.delete(spaceId);
+      log.push(`fileStore.unregisterSpace:${spaceId}`);
+    });
+    hasRuntime = (spaceId: string) => this.registered.has(spaceId);
     disconnect = vi.fn(() => {
       log.push("fileStore.disconnect");
     });
@@ -119,8 +129,8 @@ const h = vi.hoisted(() => {
     flushAll = vi.fn(async () => {
       log.push("scheduler.flushAll");
     });
-    schedulePush = vi.fn();
-    scheduleSync = vi.fn();
+    schedulePush = vi.fn(async () => {});
+    scheduleSync = vi.fn(async () => {});
     dispose = vi.fn(() => {
       log.push("scheduler.dispose");
     });
@@ -336,6 +346,69 @@ describe("SyncEngine", () => {
 
       expect(state(engine).error).toBe("Session expired — please log in again");
       expect(onAuthError).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("file space runtimes", () => {
+    it("registers a runtime when a __spaces write lands (invitation accept path)", async () => {
+      // accept() itself doesn't call into the engine — its __spaces patch
+      // must be the signal. Capture the change handlers the engine
+      // subscribes via the adapter and replay an accept-shaped write.
+      const handlers: Array<(event: { collection: string }) => void> = [];
+      const cfg = makeConfig();
+      cfg.adapter = {
+        onChange: (fn: (event: { collection: string }) => void) => {
+          handlers.push(fn);
+          return () => {};
+        },
+        getLastSequence: async () => 0,
+        setLastSequence: async () => {},
+      } as unknown as SyncEngineConfig["adapter"];
+
+      const engine = await SyncEngine.create(cfg);
+      await vi.waitFor(() => expect(state(engine).phase).toBe("ready"));
+      expect(handlers.length).toBeGreaterThan(0);
+
+      const spaceManager = h.instances.spaceManagers[0] as unknown as {
+        getActiveSpaceIds: () => string[];
+      };
+      spaceManager.getActiveSpaceIds = () => ["shared-1"];
+
+      const fileStore = h.instances.fileStores[0] as unknown as {
+        registerSpace: ReturnType<typeof vi.fn>;
+      };
+      const callsBefore = fileStore.registerSpace.mock.calls.length;
+      for (const handler of handlers) handler({ collection: "__spaces" });
+
+      await vi.waitFor(() => {
+        if (fileStore.registerSpace.mock.calls.length <= callsBefore) {
+          throw new Error("watch did not register the runtime");
+        }
+      });
+      expect(fileStore.registerSpace).toHaveBeenCalledWith(
+        expect.objectContaining({ spaceId: "shared-1" }),
+      );
+
+      // A second sweep is a no-op — the space is registered and present.
+      const calls = fileStore.registerSpace.mock.calls.length;
+      for (const handler of handlers) handler({ collection: "__spaces" });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(fileStore.registerSpace.mock.calls.length).toBe(calls);
+
+      // If the store loses the runtime behind the engine's back (an
+      // external connect() rebind), the next sweep re-registers it.
+      const realUnregister = h.instances.fileStores[0] as unknown as {
+        unregisterSpace: (id: string) => void;
+        registered: Set<string>;
+      };
+      realUnregister.registered.delete("shared-1");
+      for (const handler of handlers) handler({ collection: "__spaces" });
+      await vi.waitFor(() => {
+        const last = fileStore.registerSpace.mock.calls.length;
+        if (last <= calls) throw new Error("sweep did not re-register");
+      });
+
+      engine.dispose();
     });
   });
 

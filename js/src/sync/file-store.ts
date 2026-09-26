@@ -15,8 +15,9 @@
  * registers its own runtime via `registerSpace()` — uploads then route to
  * the file's space (per-space epoch key at upload time, UCAN auth), and
  * downloads unwrap each file DEK's epoch key through the space's
- * distributed key shares. `migrateFilesToSpace()` moves cached blobs when
- * their records move spaces (share/migrate flows).
+ * distributed key shares. `migrateFilesToSpace()` moves blobs when their
+ * records move spaces (share/migrate flows), fetching from the source
+ * space when they aren't cached locally.
  *
  * `put()` always succeeds by storing data locally, then uploads happen
  * in the background when conditions are met (connected + record synced).
@@ -466,9 +467,22 @@ export class FileStore {
    *
    * If spaceId differs from the current internal spaceId (default "_"),
    * migrates cached IDB entries to the new spaceId prefix.
+   *
+   * Re-connecting while already connected is an authoritative rebind: all
+   * registered space runtimes are dropped first. Dispose any SyncEngine
+   * sharing this store before re-binding — a live engine's bookkeeping
+   * won't re-register its spaces (it re-registers them at its own
+   * bootstrap) unless its sweep finds them missing.
    */
   async connect(config: FileStoreSyncConfig): Promise<void> {
     const oldSpaceId = this.spaceId;
+    // A re-connect is an authoritative rebind: runtimes still registered
+    // from a previous binding (anonymous → account adoption, account
+    // switch without dispose) hold closures over a dead SpaceManager and
+    // would answer upload/download with stale keys and revoked UCANs.
+    // Shared spaces re-register during engine bootstrap; cached bytes and
+    // queue entries are untouched.
+    if (this.syncConfig) this.spaceRuntimes.clear();
     this.syncConfig = config;
     this.spaceId = config.spaceId;
 
@@ -585,6 +599,11 @@ export class FileStore {
    */
   unregisterSpace(spaceId: string): void {
     this.spaceRuntimes.delete(spaceId);
+  }
+
+  /** Whether a runtime is currently registered for the space. */
+  hasRuntime(spaceId: string): boolean {
+    return this.spaceRuntimes.has(spaceId);
   }
 
   /**
@@ -986,10 +1005,12 @@ export class FileStore {
    * `recordId` overridden (record moves assign fresh IDs), marked pending
    * so it uploads under the target space's epoch key, and the source
    * entry is deleted. Failures are per-file (attempt the rest, report
-   * counts): files whose bytes are no longer cached are skipped — without
-   * bytes there is nothing to re-upload — and entries with an in-flight
-   * upload are left alone (their pass holds the old entry object; writing
-   * around it would resurrect a deleted key).
+   * counts): bytes not cached locally are fetched from the source space
+   * first (a share from a device that never held the blobs would
+   * otherwise strand them in the old space) — files the source can't
+   * serve (no runtime, offline, gone) are skipped, and entries with an
+   * in-flight upload are left alone (their pass holds the old entry
+   * object; writing around it would resurrect a deleted key).
    *
    * Kicks the queue; entries upload once the target space has a
    * registered runtime (`registerSpace`).
@@ -1017,12 +1038,8 @@ export class FileStore {
         const fromKey = cacheKey(fromSpaceId, fileId);
         const toKey = cacheKey(toSpaceId, fileId);
 
-        const oldMeta = await metaGet(db, fromKey);
-        if (!oldMeta) {
-          skipped += 1;
-          continue;
-        }
-        if (oldMeta.uploadStatus === "uploading") {
+        let oldMeta = await metaGet(db, fromKey);
+        if (oldMeta?.uploadStatus === "uploading") {
           // A pass may hold this entry object mid-upload; migrating under
           // it would let clearUploadState/markUploadError re-write the
           // deleted old key. Leave it — the next migration attempt (or
@@ -1030,14 +1047,40 @@ export class FileStore {
           skipped += 1;
           continue;
         }
-        const oldBlob = await blobGet(db, fromKey);
+        let oldBlob = oldMeta ? await blobGet(db, fromKey) : null;
         if (!oldBlob) {
-          // Bytes gone (evicted after a completed upload) — nothing to
-          // re-upload. The server copy stays in the old space; peers will
-          // see "Unavailable" for this file. Surface it honestly.
-          console.warn(
-            `FileStore: skipping migration of ${fileId} — no cached bytes to re-upload`,
-          );
+          // Bytes not on this device — never cached, or evicted after a
+          // completed upload. Pull them from the source space so the
+          // migration still re-keys the server copy (records without
+          // bytes render "Unavailable" for every other member forever).
+          // fetchAndDecrypt returns null when there's no runtime for the
+          // source space or the server no longer has the file — skip in
+          // that case; transient network failures propagate and count as
+          // failed (the caller can retry the migration).
+          const fetched = await this.fetchAndDecrypt(fileId, fromSpaceId);
+          if (fetched === null) {
+            console.warn(
+              `FileStore: skipping migration of ${fileId} — no cached bytes and the source space can't serve them`,
+            );
+            skipped += 1;
+            continue;
+          }
+          // Use the bytes we hold — fetchAndDecrypt's cache write is
+          // best-effort, so under quota pressure a re-read could lose
+          // them. A never-cached file has no persisted meta to reuse
+          // anyway (evicted files lose meta with their bytes), so
+          // synthesize it; the target record id comes from recordIdOf.
+          oldMeta = {
+            key: fromKey,
+            spaceId: fromSpaceId,
+            fileId,
+            cachedAt: now,
+            lastAccessedAt: now,
+            size: fetched.byteLength,
+          };
+          oldBlob = { key: fromKey, data: fetched };
+        }
+        if (!oldMeta || !oldBlob) {
           skipped += 1;
           continue;
         }

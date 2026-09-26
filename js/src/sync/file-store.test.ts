@@ -1391,7 +1391,9 @@ describe("FileStore shared spaces", () => {
     expect(call[4]).toBe(SHARED);
   });
 
-  it("migrateFilesToSpace skips files whose bytes are no longer cached", async () => {
+  it("migrateFilesToSpace skips files the source space can't serve", async () => {
+    // Bytes evicted locally AND the server copy is gone (default
+    // download mock rejects FileNotFoundError) — nothing to re-key.
     const store = freshStore();
     await store.connect(syncConfig(makeFilesClient()));
     await store.put(UUID, data(24), RECORD);
@@ -1406,6 +1408,98 @@ describe("FileStore shared spaces", () => {
     );
     expect(migrated).toBe(0);
     expect(skipped).toBe(1);
+  });
+  it("migrateFilesToSpace fetches uncached bytes from the source space", async () => {
+    // The sharing device never held the blobs (uploaded from another
+    // device) — the migration pulls them from the source space's server
+    // copy instead of stranding them under the old record ids.
+    const upload = vi.fn().mockResolvedValue({ fileId: UUID });
+    const download = vi
+      .fn()
+      .mockResolvedValue({ data: data(24), wrappedDEK: wrappedForEpoch(3) });
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient({ download })));
+    // No put — no local meta, no local bytes.
+
+    const { migrated, skipped } = await store.migrateFilesToSpace(
+      [UUID],
+      SHARED,
+      { recordIdOf: () => RECORD2 },
+    );
+    expect(migrated).toBe(1);
+    expect(skipped).toBe(0);
+    expect(download).toHaveBeenCalledWith(UUID, undefined);
+
+    store.registerSpace(sharedConfig(makeFilesClient({ upload })));
+    await vi.waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    const call = upload.mock.calls[0] as unknown as [
+      string,
+      Uint8Array,
+      Uint8Array,
+      string,
+      string,
+    ];
+    expect(call[3]).toBe(RECORD2);
+    expect(call[4]).toBe(SHARED);
+
+    // A shared space as the SOURCE routes the fetch through that space
+    // explicitly (per-space UCAN), not the personal default.
+    const sharedDownload = vi
+      .fn()
+      .mockResolvedValue({ data: data(16), wrappedDEK: wrappedForEpoch(3) });
+    const store2 = freshStore();
+    await store2.connect(syncConfig(makeFilesClient()));
+    store2.registerSpace(
+      sharedConfig(makeFilesClient({ download: sharedDownload })),
+    );
+    const r2 = await store2.migrateFilesToSpace([UUID2], "sp-1", {
+      fromSpaceId: SHARED,
+      recordIdOf: () => RECORD2,
+    });
+    expect(r2.migrated).toBe(1);
+    expect(sharedDownload).toHaveBeenCalledWith(UUID2, SHARED);
+  });
+
+  it("migrateFilesToSpace skips when the source space can't serve the bytes", async () => {
+    // Default download mock rejects FileNotFoundError — nothing to re-key.
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient()));
+
+    const result = await store.migrateFilesToSpace([UUID], SHARED, {
+      recordIdOf: () => RECORD2,
+    });
+    expect(result.migrated).toBe(0);
+    expect(result.skipped).toBe(1);
+  });
+
+  it("connect() drops runtimes from a previous binding", async () => {
+    // Account switch without dispose: the second connect is an
+    // authoritative rebind — the old personal runtime and every shared
+    // runtime (whose closures reference the dead SpaceManager) must go.
+    const personalDownload = vi
+      .fn()
+      .mockResolvedValue({ data: data(8), wrappedDEK: wrappedForEpoch(3) });
+    const sharedDownload = vi
+      .fn()
+      .mockResolvedValue({ data: data(8), wrappedDEK: wrappedForEpoch(3) });
+    const store = freshStore();
+    await store.connect(syncConfig(makeFilesClient()));
+    store.registerSpace(
+      sharedConfig(makeFilesClient({ download: sharedDownload })),
+    );
+
+    await store.connect(
+      syncConfig(makeFilesClient({ download: personalDownload }), {
+        spaceId: "sp-2",
+      }),
+    );
+
+    // New personal runtime answers; the old spaces' runtimes are gone.
+    await store.get(UUID);
+    expect(personalDownload).toHaveBeenCalledTimes(1);
+    expect(await store.get(UUID, SHARED)).toBeNull();
+    expect(await store.get(UUID, "sp-1")).toBeNull();
+    expect(sharedDownload).not.toHaveBeenCalled();
   });
 });
 
