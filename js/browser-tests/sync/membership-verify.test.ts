@@ -38,7 +38,14 @@ describe("membership verifyMembershipEntry (browser)", () => {
       type: o.type,
       signature: sign(
         o.signer.privateKeyJwk,
-        buildMembershipSigningMessage(o.type, spaceId, signerDid, o.ucan, "", ""),
+        buildMembershipSigningMessage(
+          o.type,
+          spaceId,
+          signerDid,
+          o.ucan,
+          "",
+          "",
+        ),
       ),
       signerPublicKey: o.signer.publicKeyJwk,
     };
