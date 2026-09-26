@@ -34,6 +34,51 @@ export async function createWorkerFileStorage(
   return new WorkerFileStorage(rpc, close);
 }
 
+/**
+ * A FileStorage view of a worker namespace that opens lazily — the
+ * first operation awaits worker startup and leader election. For
+ * call sites that need a synchronous FileStore construction (React
+ * state initializers); open failures surface as operation errors.
+ */
+export function lazyWorkerFileStorage(
+  namespace: string,
+  options: WorkerFileStorageOptions,
+): FileStorage {
+  let ready: Promise<WorkerFileStorage> | null = null;
+  const get = () => (ready ??= createWorkerFileStorage(namespace, options));
+  const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
+    get().then((storage) => {
+      const fn = (
+        storage as unknown as Record<
+          string,
+          ((...a: unknown[]) => unknown) | undefined
+        >
+      )[method];
+      if (!fn) throw new Error(`WorkerFileStorage missing ${method}`);
+      // Bound to the instance — an unbound method reads private fields
+      // off undefined.
+      return fn.apply(storage, args) as T;
+    });
+  return {
+    getMeta: (key) => call<MetaEntry | undefined>("getMeta", key),
+    putMeta: (entry) => call<void>("putMeta", entry),
+    metaHas: (key) => call<boolean>("metaHas", key),
+    allMeta: () => call<MetaEntry[]>("allMeta"),
+    metaForSpace: (spaceId) => call<MetaEntry[]>("metaForSpace", spaceId),
+    queuedForSpace: (spaceId) => call<MetaEntry[]>("queuedForSpace", spaceId),
+    getBlob: (key) => call<Uint8Array | undefined>("getBlob", key),
+    putFile: (meta, data) => call<void>("putFile", meta, data),
+    deleteFile: (key) => call<void>("deleteFile", key),
+    deleteBlob: (key) => call<void>("deleteBlob", key),
+    touchMeta: (key, at) => call<void>("touchMeta", key, at),
+    close: () => {
+      void get()
+        .then((storage) => storage.close())
+        .catch(() => {});
+    },
+  };
+}
+
 export class WorkerFileStorage implements FileStorage {
   /** Use `createWorkerFileStorage` — the constructor assumes an
    * already-coordinated RpcClient. */
