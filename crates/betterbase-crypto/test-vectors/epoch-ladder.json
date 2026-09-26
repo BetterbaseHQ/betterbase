@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "description": "Epoch-key selection ladder conformance vectors (AUD-024). Fixed inputs, canonical algorithm: base exact-match -> distributed share -> bounded forward derivation (cap 1000). Any platform implementation must reproduce these outcomes exactly.",
+  "space_id": "11111111-2222-3333-4444-555555555555",
+  "root_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "share_key_hex": "0909090909090909090909090909090909090909090909090909090909090909",
+  "cases": [
+    {
+      "name": "exact-epoch-base",
+      "base_epoch": 3,
+      "base_key": "root-at-3",
+      "dek_epoch": 3,
+      "share_for_epoch": null,
+      "expect": { "source": "base", "key": "root-at-3" }
+    },
+    {
+      "name": "share-beats-derivation",
+      "base_epoch": 3,
+      "base_key": "root-at-3",
+      "dek_epoch": 5,
+      "share_for_epoch": 5,
+      "expect": { "source": "share", "key": "share-key" }
+    },
+    {
+      "name": "share-covers-past-epoch",
+      "base_epoch": 5,
+      "base_key": "root-at-5",
+      "dek_epoch": 2,
+      "share_for_epoch": 2,
+      "expect": { "source": "share", "key": "share-key" }
+    },
+    {
+      "name": "derivation-fallthrough",
+      "base_epoch": 3,
+      "base_key": "root-at-3",
+      "dek_epoch": 5,
+      "share_for_epoch": null,
+      "expect": { "source": "derived", "key": "chain-3-to-5" }
+    },
+    {
+      "name": "epoch-1-base-match-no-shares",
+      "base_epoch": 1,
+      "base_key": "root-at-1",
+      "dek_epoch": 1,
+      "share_for_epoch": null,
+      "expect": { "source": "base", "key": "root-at-1" }
+    },
+    {
+      "name": "unresolvable-past-epoch",
+      "base_epoch": 5,
+      "base_key": "root-at-5",
+      "dek_epoch": 4,
+      "share_for_epoch": null,
+      "expect": null
+    },
+    {
+      "name": "derivation-cap-allowed-at-limit",
+      "base_epoch": 1,
+      "base_key": "root-at-1",
+      "dek_epoch": 1001,
+      "share_for_epoch": null,
+      "expect": { "source": "derived", "key": "chain-1-to-1001" }
+    },
+    {
+      "name": "derivation-cap-exceeded-is-error",
+      "base_epoch": 1,
+      "base_key": "root-at-1",
+      "dek_epoch": 1002,
+      "share_for_epoch": null,
+      "expect": "error"
+    }
+  ],
+  "aliases": {
+    "root-at-3": "derived from root_key over space at epoch 3",
+    "root-at-5": "derived from root_key over space at epoch 5",
+    "root-at-1": "derived from root_key over space at epoch 1",
+    "share-key": "share_key_hex verbatim",
+    "chain-3-to-5": "derived from root-at-3 forward to epoch 5",
+    "chain-1-to-1001": "derived from root-at-1 forward to epoch 1001"
+  }
+}

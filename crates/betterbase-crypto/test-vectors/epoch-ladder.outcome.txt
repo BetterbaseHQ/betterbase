@@ -1,0 +1,8 @@
+exact-epoch-base -> ok-key
+share-beats-derivation -> ok-key
+share-covers-past-epoch -> ok-key
+derivation-fallthrough -> ok-key
+epoch-1-base-match-no-shares -> ok-key
+unresolvable-past-epoch -> ok-none
+derivation-cap-allowed-at-limit -> ok-key
+derivation-cap-exceeded-is-error -> err

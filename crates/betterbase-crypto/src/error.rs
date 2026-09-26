@@ -29,6 +29,9 @@ pub enum CryptoError {
     #[error("Encryption failed: {0}")]
     EncryptionFailed(String),
 
+    #[error("Key share resolution failed: {0}")]
+    ShareResolution(String),
+
     #[error("Decryption failed: {0}")]
     DecryptionFailed(String),
 

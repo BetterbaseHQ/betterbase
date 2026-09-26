@@ -217,6 +217,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "betterbase-file-store"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "betterbase-sync-core"
 version = "0.1.0"
 dependencies = [

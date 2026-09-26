@@ -8,6 +8,7 @@ members = [
     "crates/betterbase-wasm",
     "crates/betterbase-db",
     "crates/betterbase-db-wasm",
+    "crates/betterbase-file-store",
 ]
 
 [workspace.package]

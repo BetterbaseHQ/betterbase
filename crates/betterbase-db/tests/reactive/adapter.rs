@@ -296,7 +296,7 @@ fn reactive_delivery_carries_record_metadata() {
 #[test]
 fn observe_query_fires_callback_after_flush_with_current_results() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
+    use betterbase_db::reactive::ReactiveQueryResult;
 
     let def = users_def();
     let ra = make_adapter(&def);
@@ -335,7 +335,7 @@ fn observe_query_fires_callback_after_flush_with_current_results() {
 #[test]
 fn observe_query_fires_after_write_to_same_collection() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
+    use betterbase_db::reactive::ReactiveQueryResult;
 
     let def = users_def();
     let ra = make_adapter(&def);
@@ -372,7 +372,7 @@ fn observe_query_fires_after_write_to_same_collection() {
 #[test]
 fn observe_query_unsubscribe_stops_notifications() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
+    use betterbase_db::reactive::ReactiveQueryResult;
 
     let def = users_def();
     let ra = make_adapter(&def);
@@ -663,7 +663,7 @@ fn unsubscribe_before_initialize_prevents_callback_from_ever_firing() {
 #[test]
 fn observe_query_before_initialize_fires_after_init() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
+    use betterbase_db::reactive::ReactiveQueryResult;
 
     let def = users_def();
 
@@ -1262,7 +1262,7 @@ fn observe_fires_none_after_delete() {
 #[test]
 fn observe_query_count_decreases_after_delete() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
+    use betterbase_db::reactive::ReactiveQueryResult;
 
     let def = users_def();
     let ra = make_adapter(&def);
@@ -1418,7 +1418,7 @@ fn observe_on_error_fires_on_failure() {
 #[test]
 fn observe_query_on_error_path_wired_up() {
     use betterbase_db::query::types::Query;
-    use betterbase_db::reactive::{adapter::RecordView, ReactiveQueryResult};
+    use betterbase_db::reactive::ReactiveQueryResult;
 
     let def = users_def();
     let ra = make_adapter(&def);

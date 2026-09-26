@@ -388,7 +388,7 @@ impl WasmDb {
         let records_val: Vec<Value> = serde_wasm_bindgen::from_value(records)
             .map_err(|e| JsValue::from_str(&format!("Invalid records array: {e}")))?;
         let opts = parse_put_options(options)?;
-        let mut result = self.adapter.bulk_put(&def, records_val, &opts).into_js()?;
+        let result = self.adapter.bulk_put(&def, records_val, &opts).into_js()?;
 
         let mut data: Vec<Value> = result
             .records
