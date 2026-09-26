@@ -35,6 +35,7 @@ import { DatabaseProvider, useQuery as useQueryBase } from "../db/react.js";
 import { deriveConnectionStatus } from "../sync/connection-status.js";
 export type { EditHistoryEntry } from "../sync/react.js";
 import type { Member } from "../sync/space-manager.js";
+import type { SpaceRole, SpaceStatus } from "../sync/spaces-collection.js";
 export type { Member };
 
 /**
@@ -332,6 +333,45 @@ export function useMembers(spaceId: string | null | undefined): {
   };
 }
 
+type SpaceStatusStub = {
+  status: SpaceStatus | null;
+  epoch: number | null;
+  role: SpaceRole | null;
+  name: string | null;
+};
+
+let spaceStatuses = new Map<string, SpaceStatusStub>();
+
+/**
+ * Stub `useSpaceStatus(spaceId)` — the reactive membership/epoch view apps
+ * use to drive removed-space UX and re-key confirmations. Call again with
+ * new overrides to simulate a rotation (bump `epoch`) or removal
+ * (`status: "removed"`), then trigger a re-render.
+ */
+export function setSpaceStatus(
+  spaceId: string,
+  overrides: Partial<SpaceStatusStub>,
+) {
+  const prev =
+    spaceStatuses.get(spaceId) ??
+    ({ status: null, epoch: null, role: null, name: null } as SpaceStatusStub);
+  spaceStatuses.set(spaceId, { ...prev, ...overrides });
+}
+
+export function useSpaceStatus(spaceId: string | null | undefined): {
+  status: SpaceStatus | null;
+  epoch: number | null;
+  role: SpaceRole | null;
+  name: string | null;
+  ready: boolean;
+} {
+  const record = spaceId ? spaceStatuses.get(spaceId) : undefined;
+  if (!record) {
+    return { status: null, epoch: null, role: null, name: null, ready: false };
+  }
+  return { ...record, ready: true };
+}
+
 let fileUrls = new Map<string, string>();
 let unavailableFiles = new Set<string>();
 
@@ -420,6 +460,7 @@ export function resetSyncMocks(): void {
   for (const key of Object.keys(spaceOps)) delete spaceOps[key];
   fileUrls = new Map();
   spaceMembers = new Map();
+  spaceStatuses = new Map();
   pendingInvitations = [];
   dbAdapter = null;
 }

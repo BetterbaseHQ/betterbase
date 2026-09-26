@@ -107,19 +107,13 @@ vi.mock("./spaces.js", () => ({
   })),
 }));
 
-vi.mock("./reencrypt.js", () => {
-  class EpochMismatchError extends Error {
-    constructor(
-      public currentEpoch: number,
-      public rewrapEpoch: number | null,
-    ) {
-      super(`Epoch mismatch: server at epoch ${currentEpoch}`);
-      this.name = "EpochMismatchError";
-    }
-  }
+vi.mock("./reencrypt.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./reencrypt.js")>();
   return {
-    EpochMismatchError,
-    advanceEpoch: vi.fn(async () => {}),
+    ...actual,
+    // advanceEpoch runs the REAL wire path against the fake server so the
+    // epoch.begin contract (set_min_epoch, conflict shapes) is exercised.
+    advanceEpoch: vi.fn(actual.advanceEpoch),
     rewrapAllDEKs: vi.fn(async () => ({ rewrapped: 0, filesRewrapped: 0 })),
     deriveForward: (
       _key: Uint8Array,
@@ -266,6 +260,9 @@ describe("SpaceManager", () => {
     // clearAllMocks does NOT reset implementations — restore the factory
     // default so later tests don't inherit the last per-test stub
     vi.mocked(decryptJwe).mockReset().mockReturnValue(new Uint8Array(0));
+    // mockReset restores advanceEpoch to the real implementation (the wire
+    // path against the fake server); individual tests may stub it further.
+    vi.mocked(advanceEpoch).mockReset();
     state.verifyResult = true;
     state.destroyedCryptos.length = 0;
     resetFakeWebSocket();
@@ -290,6 +287,9 @@ describe("SpaceManager", () => {
       };
     });
     server.handle("membership.revoke", () => ({}));
+    server.handle("epoch.begin", (params) => ({
+      epoch: (params as { epoch: number }).epoch,
+    }));
     server.handle("epoch.complete", () => ({}));
     server.handle("invitation.delete", () => ({}));
     // Fresh-key rotation (AUD-024): the server stores/replaces wrapped
@@ -974,6 +974,88 @@ describe("SpaceManager", () => {
       expect(persisted.epoch).toBe(2);
       expect(persisted.spaceKey).not.toBe(
         bytesToBase64(new Uint8Array(32).fill(2)),
+      );
+    });
+
+    it("sends epoch.begin(set_min_epoch) on the wire, ordered revoke → begin → shares → complete", async () => {
+      await activate();
+
+      const memberEntry = (aud: string) => ({
+        ucan: ucan(SELF_DID, aud, "/space/write", { with: "space:s1" }),
+        type: "d" as const,
+        signature: new Uint8Array([1, 2, 3, 4]),
+        signerPublicKey: jwkFor(SELF_DID),
+        epoch: 1,
+        // Valid 64-char hex so the victim's revocation notice actually
+        // reaches invitation.create (sendRawMessage validates the ID).
+        mailboxId: "cd".repeat(32),
+        publicKeyJwk: jwkFor(aud),
+      });
+      membershipLog.entries = [
+        {
+          chain_seq: 1,
+          prev_hash: new Uint8Array(0),
+          entry_hash: new Uint8Array(0),
+          payload: new TextEncoder().encode(
+            serializeMembershipEntry(memberEntry("did:key:victim")),
+          ),
+        },
+        {
+          chain_seq: 2,
+          prev_hash: new Uint8Array(0),
+          entry_hash: new Uint8Array(0),
+          payload: new TextEncoder().encode(
+            serializeMembershipEntry(memberEntry("did:key:friend")),
+          ),
+        },
+      ];
+
+      const order: string[] = [];
+      let beginParams: Record<string, unknown> | undefined;
+      server.handle("membership.revoke", (params) => {
+        order.push(`revoke:${(params as { ucan_cid: string }).ucan_cid}`);
+        return {};
+      });
+      server.handle("epoch.begin", (params) => {
+        order.push("epoch.begin");
+        beginParams = params as Record<string, unknown>;
+        return { epoch: 2 };
+      });
+      server.handle("epochKeys.put", () => {
+        order.push("epochKeys.put");
+        return { count: 1 };
+      });
+      server.handle("epoch.complete", () => {
+        order.push("epoch.complete");
+        return {};
+      });
+      server.handle("invitation.create", () => {
+        order.push("notice");
+        return { id: "inv-notice" };
+      });
+
+      await manager.removeMember("s1", "did:key:victim");
+
+      // Revocation must skip the grace period — the min-epoch bump is what
+      // makes the server reject the removed member's stale-epoch writes.
+      expect(beginParams).toMatchObject({
+        space: "s1",
+        epoch: 2,
+        set_min_epoch: true,
+      });
+      // Full chain ordering: every revoke lands before the epoch advance;
+      // shares distribute before completion (crash safety, D-005); the
+      // victim's mailbox notice goes out only after the space is re-keyed.
+      const beginIdx = order.indexOf("epoch.begin");
+      order.forEach((step, i) => {
+        if (step.startsWith("revoke:")) expect(i).toBeLessThan(beginIdx);
+      });
+      expect(order.indexOf("epochKeys.put")).toBeGreaterThan(beginIdx);
+      expect(order.indexOf("epoch.complete")).toBeGreaterThan(
+        order.indexOf("epochKeys.put"),
+      );
+      expect(order.indexOf("notice")).toBeGreaterThan(
+        order.indexOf("epoch.complete"),
       );
     });
   });

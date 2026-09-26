@@ -24,8 +24,8 @@
  * harness share state without coupling app configs to SDK file layout.)
  *
  * Then drive the stub with `setSyncState`, `setSyncDb`, `spaceOp`,
- * `setPendingInvitations`, `setFileUrl` and reset between tests with
- * `resetSyncMocks()`.
+ * `setPendingInvitations`, `setSpaceMembers`, `setSpaceStatus`,
+ * `setFileUrl` and reset between tests with `resetSyncMocks()`.
  */
 
 export * from "./mock-sync.js";

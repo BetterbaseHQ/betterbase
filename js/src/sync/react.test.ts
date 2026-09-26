@@ -28,6 +28,7 @@ import {
   useSync,
   useSpaces,
   useMembers,
+  useSpaceStatus,
   usePendingInvitations,
   useActiveSpaces,
   useRecord,
@@ -967,6 +968,76 @@ describe("useMembers", () => {
 
     expect(mgr.getMembers).not.toHaveBeenCalled();
     expect(h.value).toEqual({ members: [], loading: false, error: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// useSpaceStatus
+// ---------------------------------------------------------------------------
+
+describe("useSpaceStatus", () => {
+  it("serves status and epoch reactively as the local record changes", async () => {
+    const h = await mountReady(() => useSpaceStatus("s1"));
+
+    expect(h.value).toEqual({
+      status: null,
+      epoch: null,
+      role: null,
+      name: null,
+      ready: false,
+    });
+
+    act(() =>
+      adapter.emitQuery(spaces, { filter: { spaceId: "s1" } }, undefined, {
+        records: [
+          {
+            spaceId: "s1",
+            name: "Team",
+            status: "active",
+            role: "write",
+            epoch: 1,
+          },
+        ],
+        total: 1,
+      }),
+    );
+    expect(h.value).toEqual({
+      status: "active",
+      epoch: 1,
+      role: "write",
+      name: "Team",
+      ready: true,
+    });
+
+    // Rotation bumps the epoch and removal flips the status — both are
+    // local writes to the same record, and the hook must follow live.
+    act(() =>
+      adapter.emitQuery(spaces, { filter: { spaceId: "s1" } }, undefined, {
+        records: [
+          {
+            spaceId: "s1",
+            name: "Team",
+            status: "removed",
+            role: "write",
+            epoch: 2,
+          },
+        ],
+        total: 1,
+      }),
+    );
+    expect(h.value.status).toBe("removed");
+    expect(h.value.epoch).toBe(2);
+  });
+
+  it("is inert without a spaceId", async () => {
+    const h = await mountReady(() => useSpaceStatus(undefined));
+    expect(h.value).toEqual({
+      status: null,
+      epoch: null,
+      role: null,
+      name: null,
+      ready: false,
+    });
   });
 });
 

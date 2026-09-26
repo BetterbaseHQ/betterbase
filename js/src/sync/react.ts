@@ -41,7 +41,11 @@ import {
   type SpaceQueryOptions,
   type EditHistoryEntry,
 } from "./spaces-middleware.js";
-import { spaces, type SpaceRole } from "./spaces-collection.js";
+import {
+  spaces,
+  type SpaceRole,
+  type SpaceStatus,
+} from "./spaces-collection.js";
 import { PresenceManager, type PeerPresence } from "./presence.js";
 import { EventManager } from "./event-manager.js";
 import {
@@ -1293,6 +1297,71 @@ export function useActiveSpaces(): QueryResult<SpaceRecord & SpaceFields> {
   return useQuery(spaces, { filter: { status: "active" } }) as QueryResult<
     SpaceRecord & SpaceFields
   >;
+}
+
+// ---------------------------------------------------------------------------
+// useSpaceStatus — reactive membership status and key epoch
+// ---------------------------------------------------------------------------
+
+export interface UseSpaceStatusResult {
+  /** Membership status of this space, or null before the record loads. */
+  status: SpaceStatus | null;
+  /** Key epoch — how many times the space key has been rotated. */
+  epoch: number | null;
+  /** The current user's role in this space. */
+  role: SpaceRole | null;
+  /** Display name of the space. */
+  name: string | null;
+  /** True once the local `__spaces` record for this space has loaded. */
+  ready: boolean;
+}
+
+/**
+ * Observe a shared space's membership status and key epoch reactively.
+ *
+ * Reads the local `__spaces` record — no network. Values update live:
+ * removal patches the record to `status: "removed"`, and every rotation
+ * (removal-driven or scheduled) bumps `epoch` as soon as this device
+ * adopts the new key. Use this to drive removed-space UX or to surface
+ * re-key confirmations.
+ *
+ * With `spaceId` undefined the view is null — note the underlying
+ * query subscription over `__spaces` remains live (writes to any space
+ * record still re-render), so prefer unmounting over parking this hook.
+ * `ready` means "a record for this space exists locally"; for a spaceId
+ * the user never joined it stays false forever (indistinguishable from
+ * still-loading — same tradeoff as useMembers).
+ *
+ * @param spaceId - The space ID to observe, or undefined for a null view.
+ */
+export function useSpaceStatus(
+  spaceId: string | undefined,
+): UseSpaceStatusResult {
+  const ctx = useContext(BetterbaseContext);
+  if (!ctx)
+    throw new Error(
+      "useSpaceStatus: no BetterbaseProvider found in component tree",
+    );
+
+  const spaceQuery = useQuery(
+    spaces,
+    spaceId ? { filter: { spaceId } } : undefined,
+  );
+  const record = spaceQuery.records[0] as
+    | (SpaceRecord & SpaceFields)
+    | undefined;
+
+  if (!spaceId || !record) {
+    return { status: null, epoch: null, role: null, name: null, ready: false };
+  }
+
+  return {
+    status: record.status as SpaceStatus,
+    epoch: record.epoch ?? null,
+    role: record.role as SpaceRole,
+    name: record.name ?? null,
+    ready: true,
+  };
 }
 
 // ---------------------------------------------------------------------------
