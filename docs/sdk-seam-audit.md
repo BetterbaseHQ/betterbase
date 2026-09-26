@@ -1,0 +1,232 @@
+# Rust↔TS Seam Audit — SDK Portability Review
+
+**Date:** 2026-09-26 · **Scope:** `js/src/` (TypeScript) vs `crates/betterbase-wasm` + `crates/betterbase-db-wasm` + core crates · **Motivation:** planned SDKs in other languages (Flutter/Dart, …)
+
+## Purpose
+
+Before building a second-language SDK, verify the partition principle:
+
+> **All logic that must be identical across language SDKs — crypto, wire/serialization formats, protocol semantics, CRDT logic, key management — lives in Rust. The TS layer is idiomatic TS/JS ergonomics + platform glue (Web APIs, React, events, storage backends).**
+
+If the principle is violated, a Dart SDK author would be forced to port from *TypeScript source* — and each port is a fresh chance for silent divergence on frozen v1 contracts.
+
+## Method
+
+Five parallel domain audits (crypto, auth, db, sync-protocol, file-store/space-manager), each classifying every TS module as:
+
+- **WRAP** — thin passthrough to a wasm function (fine)
+- **SHOULD-BE-RUST** — TS re-implements what is (or should be) a Rust core function (flag)
+- **PLATFORM** — browser-platform glue each language SDK reimplements naturally (fine, note)
+- **TS-ERGO** — typing/caching/ergonomics layered over wasm (fine, note if substantial)
+
+## Overall verdict
+
+**The seam is inverted for exactly the code the principle targets.** Primitive crypto (AES-GCM v4, HKDF, DEK wrap, P-256 signing, canonical JSON, edit chains, JWE) is properly Rust and the TS wrappers are exemplary. But **composite protocol logic — the frozen v1 contracts and every protocol state machine — lives in TS**, in two flavors:
+
+1. **Dead Rust twins** — Rust implementations exist, are exported via wasm, and are *never called*; TS re-implements them alongside (`betterbase-wasm/src/sync.rs` composites, membership fns, `rewrapDEKs`, and the entire `betterbase-file-store` core). The Rust core is a *shadow canon*: correct, tested, consumed by nobody.
+2. **No Rust at all** — logic with no Rust counterpart, so a second SDK would port from TypeScript (WS RPC framing, key-rotation orchestration, membership-log fold, pull-assembly, spaceid derivation, session-key separation).
+
+### Root cause
+
+The wasm surface froze before AUD-024/025/026 and the CryptoKey path. Rather than extending Rust, TS absorbed the new protocol semantics locally. Nothing catches it: **there is no CI check that every wasm export has a TS call site** — the dead surface proves the check is missing.
+
+---
+
+## Findings by domain
+
+### 1. Crypto (`js/src/crypto/`)
+
+**Verdict: correctly partitioned except `webcrypto.ts`.** 12 of 13 modules are thin, disciplined passthroughs. The seam is protected by the cross-path conformance suite (`js/browser-tests/crypto/interop.test.ts`).
+
+| Module | LOC | Class | Evidence |
+|---|---|---|---|
+| base64url.ts | 11 | WRAP | One-line `ensureWasm()` passthroughs |
+| channel.ts | 41 | WRAP | All passthroughs |
+| dek.ts | 55 | WRAP | Mirrors `WRAPPED_DEK_SIZE=44` as a TS const (minor) |
+| edit-chain.ts | 107 | WRAP | All 8 fns delegate to wasm |
+| epoch.ts | 44 | WRAP | Both derivations passthrough |
+| index.ts / internals.ts | 56/41 | TS-ERGO | Barrels |
+| json-crypto.ts | 73 | PLATFORM/ERGO | Plain JSON envelope (never signed cross-platform) — fine |
+| signing.ts | 41 | WRAP | Passthroughs |
+| sync-crypto.ts | 122 | WRAP+ERGO | Key-length check + delegate to `encryptV4`/`decryptV4` |
+| types.ts | 30 | TS-ERGO (drift risk) | Hardcodes `4`/`Set([4])` instead of reading wasm `CURRENT_VERSION`/`SUPPORTED_VERSIONS` |
+| ucan.ts | 104 | WRAP | All 5 passthroughs |
+| **webcrypto.ts** | **426** | **PLATFORM + SHOULD-BE-RUST** | Key import / non-extractable `CryptoKey` custody = legitimate platform; **4 functions re-implement Rust crypto** |
+
+**Gap list (webcrypto.ts):**
+
+1. `webcryptoDeriveEpochKey` (webcrypto.ts:148) — re-implements HKDF epoch derivation with hand-copied domain-separation strings → Rust `derive_next_epoch_key` (`betterbase-crypto/src/epoch.rs:35`). The wire-defining strings now live in two languages.
+2. `webcryptoDeriveChannelKey` (webcrypto.ts:201) — same pattern → `derive_channel_key` (`channel.rs:18`).
+3. `webcryptoWrapDEK`/`webcryptoUnwrapDEK` (webcrypto.ts:75/:106) — re-implement the `[epoch:4 BE][AES-KW:40]` wire format → `wrap_dek`/`unwrap_dek` (`dek.rs:39/:73`).
+4. `webcryptoDecryptJwe` (webcrypto.ts:257) — a complete RFC 7518 ECDH-ES+A256KW+A256GCM decryptor → `decrypt_jwe` (`betterbase-auth/src/jwe.rs:45`). **Already diverged**: TS consumes `apu`/`apv` from the protected header; Rust hardcodes them empty.
+5. Private `base64urlDecode` (webcrypto.ts:385) — third TS copy of the codec.
+
+Adjacent (sync domain, same pattern): `deriveForward` (reencrypt.ts:483) and `peekEpoch` (reencrypt.ts:445) re-implement existing, exported, unused wasm bindings; `MAX_EPOCH_ADVANCE=1000` duplicated in TS (transport.ts:878, reencrypt.ts:288); the AUD-024 share-rung of the epoch ladder exists only in Rust — TS `getKEKForEpoch`/`getKEKForEpochCryptoKey` (transport.ts:872/:937) re-implement a simplified two-rung version twice.
+
+**Fixes:** (a) make Rust `concat_kdf` RFC 7518-conformant, add a non-empty `apu`/`apv` vector, pick one decryptor for `keys_jwe`; (b) export HKDF domain-separation bytes from wasm (or publish vectors — prefer vectors); (c) centralize/push DEK framing to a wasm helper; (d) document webcrypto.ts as "platform key-management path — conformance defined by `test-vectors/`".
+
+### 2. Auth (`js/src/auth/`)
+
+**Verdict: primitives correctly partitioned; protocol layer is not.** ~60% of auth TS LOC is legitimately platform glue. Five protocol items have **no Rust definition to port from** — the expensive gap.
+
+| Module | LOC | Class |
+|---|---|---|
+| pkce.ts | 37 | WRAP |
+| crypto.ts | 182 | WRAP + 2 leaks (`hkdfDerive` hardcodes `"betterbase:key-separation:v1"`; `decryptKeysJwe` routes to the TS JWE reimplementation) |
+| jwt.ts | 23 | SHOULD-BE-RUST (`decodeJwtClaim` — JWT payload parsing in TS) |
+| client.ts | 492 | PLATFORM + SHOULD-BE-RUST (callback state machine, key-sep derivation, mailbox flow) |
+| key-store.ts | 598 | PLATFORM mostly; embeds key-policy table + scope-string scheme (protocol knowledge) |
+| session.ts | 782 | PLATFORM + SHOULD-BE-RUST (refresh policy, epoch bookkeeping, expiry semantics) |
+| react.ts | 503 | PLATFORM (clean — no crypto/protocol logic) |
+| errors.ts / types.ts / index.ts / internals.ts | 41/134/31/13 | TS-ERGO; `TokenResponse`/`keys_jwe` shapes are wire formats with no Rust definition |
+
+**Gap list:**
+
+- **A. Session key-separation derivation — no Rust definition** [Critical]. `encryption_key = HKDF(root, salt="betterbase:key-separation:v1", info="betterbase:encrypt:v1")`, `epoch_root = HKDF(…, "betterbase:epoch-root:v1")` — defined only in TS; salt in one file, info constants duplicated in two (client.ts:273-276, session.ts:25-27/147-148, crypto.ts:154-158). Missing: `betterbase_auth::derive_session_keys(root) → { encryption_key, epoch_root_key }`.
+- **B. `webcryptoDecryptJwe`** [Critical] — see crypto domain, item 4. Architectural decision needed *before* any second SDK: split `decrypt_jwe` into parse/KDF-input/unwrap steps so TS performs only WebCrypto key ops over Rust-computed byte layouts; or generate the ephemeral key in Rust and persist it wrapped; or accept the TS impl and pin it with exported vectors.
+- **C. `decodeJwtClaim`** [Important] — unverified decode in TS; nobody checks `exp` or signature. `personalSpaceId` backfill at restore reads unvalidated localStorage. Low exploitability (server enforces authz), but unvalidated-input-to-routing silently differs across ports. Missing: `decode_access_token_claims(token) → Claims`.
+- **D. Token refresh policy** [Important] — `MAX_RETRIES=3`, `BASE_RETRY_MS=1000`, 300 s refresh buffer, default TTL 3600, 4xx→dead / network→retry classification (session.ts:54-55, 594-648, 716-733). Missing: pure `RefreshPolicy` in betterbase-auth (`classify_error`, `next_delay`, `should_refresh`).
+- **E. OAuth callback state machine + mailbox flow ordering** [Important] — client.ts:189-373: state↔verifier↔thumbprint↔ephemeral-key association, `keys_jwk`/thumbprint param shapes, "sync scope requires `keys_jwe` success else fail login", register-mailbox-then-refresh sequence. This ordering is the wire contract with the accounts server. Missing: `finalize_oauth_callback(token_response, …) → CallbackOutcome`.
+- **F. Key-policy table in key-store.ts** [Suggestion] — `importRawToCryptoKey` (L234-247) KeyId→algorithm mapping, `INITIAL_EPOCH` imported from TS `sync/types.ts:79` (no Rust counterpart). Export one `KeyId`-schema/constants module from betterbase-auth.
+
+Minor: client.ts swallows post-mailbox-registration refresh failure with `console.error` (L359-363) — a protocol outcome silently degraded; becomes an explicit outcome variant when E moves to Rust.
+
+### 3. DB (`js/src/db/`, excl. opfs/ and react.ts)
+
+**Verdict: data plane sound; control plane leaks.** CRDT merge, schema validation/coercion, serialization, and key/session management are Rust-authoritative. Three control-plane items live in TS while already-drifted Rust mirrors exist unused.
+
+| Module | LOC | Class | Notes |
+|---|---|---|---|
+| collection.ts | 274 | TS-ERGO | Blueprint builder; Rust `builder.rs:447` re-validates authoritatively |
+| conversions.ts | 207 | WRAP (drift risk) | JS-native ↔ canonical-representation; conventions mirror `schema/serialize.rs` by implicit agreement |
+| schema.ts | 66 | TS-ERGO | Tag constructors only |
+| types.ts | 569 | TS-ERGO | Wire shapes are hand-maintained mirrors of Rust `types.rs` |
+| merge-records.ts | 322 | **SHOULD-BE-RUST** | Adoption merge *policy* in TS + regex over Rust error strings |
+| middleware/typed-adapter.ts | 388 | **SHOULD-BE-RUST (or bless-one)** | Live re-implementation of Rust `middleware/typed_adapter.rs` + unused wasm `WasmTypedDb` |
+| sync/sync-manager.ts | 628 | **SHOULD-BE-RUST** | Sync policy TS-authoritative; Rust mirror drifted and unused |
+| sync/sync-scheduler.ts | 170 | **SHOULD-BE-RUST** | Duplicated in Rust `sync/scheduler.rs` (tokio — not wasm-viable as written) |
+| createOpfsDb.ts / delete-database.ts | 73/134 | PLATFORM | Correctly quarantined |
+| index.ts | 139 | TS-ERGO | Barrel |
+
+**Gap list:**
+
+1. **Sync orchestration policy — Rust mirror exists, is dead, and already drifted** [Critical]. TS has `pushWithConflictRetry` (sync-manager.ts:203), permanent-rejection **bisection isolation** (:304), protocol error-code classification (`classifyPushRejection` :596+), and per-collection `deleteStrategy` (:559) — none in Rust `sync/manager.rs`. `JsSyncTransport` is `#[allow(dead_code)]`. Decide the home: make Rust canonical (port the four TS-only behaviors, wire through db-wasm, reduce TS to a config shim) **or** delete/quarantine the mirror.
+2. **`merge-records.ts` — policy in TS, classified by regex over Rust error strings** [Critical]. `mergeRecordFields` (:261), `unionArrays` (:308); disposition depends on `/unique/i` (:172) and `/\b(deleted|not found|unique)\b/i` (:217) against `error.rs:67-81` wordings. A reworded Rust error silently changes adoption behavior. Fix: engine-side `adopt_records` with structured variants (`Tombstoned`/`UniqueCollision`/`Fatal`), including base-aware batched patch (the TS comment at :200 already identifies the need).
+3. **Middleware adapter semantics exist twice as live-quality code** [Important]. Nothing in `js/src` references `WasmTypedDb`; the live path runs the TS re-implementation. Route through `WasmTypedDb`, or bless the TS adapter as "host-language hook runner" and strip the Rust mirror.
+4. **`SyncScheduler` duplication** [Important] — fold into gap 1's decision; the Rust copy needs a wasm-compatible timer strategy if it becomes canonical.
+5. **Cross-language wire conventions maintained by implicit agreement** [Important] — canonical-rep edge cases (dates in unions never convert back, untyped Date→string, `undefined`-stripping vs `strip_null_optionals`) enforced only by separate per-language unit tests. Fix: golden vector tests (TS write→Rust read byte-identical) + generate TS wire types from Rust serde (ts-rs/typify).
+6. **Stringly-typed server-protocol codes at the seam** [Suggestion] — `classifyPushRejection` duplicates the server contract; `mapDeleteStrategy` (:564-580) silently drops unknown strategies.
+7. **Rust builder `panic!`s on reserved fields** [Suggestion] — `builder.rs:451` traps where it should return `Err` (a Dart SDK hitting `build()` directly gets a wasm trap).
+
+### 4. Sync protocol/transport (`js/src/sync/` core)
+
+**Verdict: the seam is inverted for exactly the code the principle targets.** Every composite in `betterbase-wasm/src/sync.rs` is declared in `wasm-init.ts:139–210` and **never invoked** — TS re-implements from wasm *primitives*. Both frozen v1 contracts are TS-owned: WS RPC framing has **no Rust implementation at all**; envelope v4 is duplicated with the TS side ahead (AUD-024, CryptoKey path).
+
+| Module | LOC | Class | Notes |
+|---|---|---|---|
+| cbor.ts | 7 | WRAP* | Re-exports cborg — wraps the *wrong engine* for frozen formats |
+| channel-crypto.ts | 32 | WRAP | Clean |
+| client.ts | 97 | PLATFORM | HTTP auth headers/UCAN routing |
+| connection-status.ts | 36 | TS-ERGO | |
+| delete-tree.ts | 334 | TS-ERGO | Cascade semantics re-derived per SDK (note) |
+| encoding.ts | 43 | PLATFORM | base64url duplicated vs wasm |
+| event-manager.ts | 141 | **SHOULD-BE-RUST (partial)** | `{d,name,payload},t` wrapper + `EVENT_MAX_AGE=60s` = cross-client wire contract |
+| files.ts | 198 | PLATFORM | |
+| handle.ts | 55 | TS-ERGO | |
+| invitations.ts | 242 | **SHOULD-BE-RUST (partial)** | `InvitationPayloadWire` (L157-171) is a wire schema, TS-only |
+| membership.ts | 388 (post-D1; was 461) | **SHOULD-BE-RUST (High)** | Verify twin **deleted** (D1 resolved — wasm `verifyMembershipEntry` is the sole implementation); parse/serialize/build + payload encrypt/decrypt remain as TS twins of exported, unused Rust fns — switch pending |
+| move-to-space.ts / share-tree.ts | 201/190 | TS-ERGO | |
+| presence.ts | 260 | **SHOULD-BE-RUST (partial)** + PLATFORM | `{d,t}` wrapper + `PRESENCE_MAX_AGE=120s` replay windows are cross-client |
+| reencrypt.ts | 500 | **SHOULD-BE-RUST (High)** | `peekEpoch`/`deriveForward` duplicate existing wasm; rotation semantics (freshKey, CAS) TS-only |
+| rpc-connection.ts | 480 | **SHOULD-BE-RUST (Critical)** + PLATFORM | Frozen v1 framing in TS (cborg); reconnect/backoff legitimately platform |
+| spaceid.ts | 76 | **SHOULD-BE-RUST (High)** | UUID5/SHA-1 personal-space derivation, TS-only, must match server bit-for-bit |
+| stable-stringify.ts | 26 | TS-ERGO | Cache keys only (NOT wire canonical JSON — that's wasm `canonicalJSON`); third near-copy in db/react.ts:37 |
+| sync-engine.ts | 896 | PLATFORM | Bootstrap/reconnect lifecycle — fine |
+| sync-state.ts | 54 | TS-ERGO | |
+| transport.ts | 1183 | **SHOULD-BE-RUST (Critical)** | Entire frozen envelope v4 pipeline duplicated against a dead Rust twin; TS ahead (AUD-024) |
+| types.ts | 105 | WRAP/TS | `INITIAL_EPOCH=1`, `Change` shape — protocol constants defined only in TS |
+| url.ts | 13 | PLATFORM | |
+| ws-client.ts | 404 | **SHOULD-BE-RUST (partial)** | Pull chunk-assembly state machine (L181-262) is protocol |
+| ws-frames.ts | 468 | **SHOULD-BE-RUST (Critical)** | The frozen v1 contract itself — defined only in TS |
+| ws-transport.ts | 811 | **SHOULD-BE-RUST (partial)** + PLATFORM | Cursor staging/monotonicity + gap detection (AUD-025) is protocol state |
+
+**Gap list (sorted by severity):**
+
+1. **WS RPC framing (frozen `betterbase-rpc-v1`) exists only in TS** [Critical]. rpc-connection.ts:197/:285 (cborg encode/decode), :281 (0xF6 keepalive), :221 (auth-first-frame), :47 (4 MiB limit); ws-frames.ts:9-27 (frame types, close codes). **Missing in `betterbase-sync-core`** — add `frames.rs` (frame enums, CBOR, close codes, keepalive, auth frame, chunk envelopes) + wasm `encodeFrame`/`decodeFrame`.
+2. **Envelope v4 pipeline duplicated; Rust twin dead and stale** [Critical]. transport.ts:59/:82/:840-905/:888/:1080/:1123/:1160 ≡ `transport.rs`/`envelope.rs`/`padding.rs`/`epoch_cache.rs`. Wasm surface lacks `resolveEpochKey` (AUD-024) + CryptoKey path → TS grew features locally. Fix: extend with an epoch-key resolver, switch transport.ts over, delete ~400L of TS twin.
+3. **Pull chunk-assembly in TS** [Critical]. ws-client.ts:181-262: `pull.begin` duplicate detection, per-chunk cursor discipline, `pull.commit` count verification, AUD-025 continuation rules. Pure reducer → sync-core, wasm-exposed.
+4. **Membership: full TS duplicate + demonstrated divergence** [High]. membership.ts:268/:283/:322/:352/:195/:213/:434 all have unused Rust twins. **Divergence:** TS verifies the UCAN JWT signature *only for self-issued UCANs* (membership.ts:398-405, `if issuerDID === audienceDID`); Rust `verify_membership_entry` (membership.rs:186-247) verifies for *all* entries, resolving issuer DID→JWK for delegated UCANs. Two "must-be-identical" verifiers disagree today.
+5. **Epoch rotation: `peekEpoch`/`deriveForward` duplicated; `rewrap_deks` stale** [High]. reencrypt.ts:445/:483 vs existing wasm; `rewrapAllDEKs` (reencrypt.ts:135) owns freshKey (AUD-024), `observed_wrapped_dek` CAS + conflict retry (AUD-026), file-DEK leg, and the server's `"conflict"`/`"epoch_conflict"` error vocabulary (reencrypt.ts:84-95) — Rust is batch-only, pre-AUD-024/026.
+6. **`personalSpaceId` UUID5 derivation TS-only** [High]. spaceid.ts:38-76 — Web Crypto SHA-1, namespace constant, NUL-join; comment: "MUST produce the same result as the server's". No Rust counterpart.
+7. **Personal-space CryptoKey path = second TS implementation of wrapped-DEK/epoch formats** [High] — see crypto domain.
+8. **Presence/event wire wrapper + replay windows** [Medium] — presence.ts:218, event-manager.ts:84 (cborg `{d,t}` wrapper; 120 s/60 s windows).
+9. **Invitation payload wire schema TS-only** [Medium] — invitations.ts:157-171.
+10. **Protocol constants scattered in TS** [Medium] — `INITIAL_EPOCH`, `Change` shape, close/error codes.
+
+Suggestions: dedupe `stable-stringify.ts` vs `db/react.ts:37` and document that it is *not* wire canonical JSON; reconcile `encoding.ts` base64url with wasm.
+
+### 5. File storage & space management
+
+**Verdict: the architecture is right, the migration is half-done, and the half that's done is the easy half.** Rust owns persistence (excellent `WasmFileStore`) and all crypto primitives, so the *envelope format* cannot drift. Every *policy and state machine* lives in TS; Rust canonicals for four of the six exist but are **dead code exercised only by their own unit tests** (`select_eviction_victims`, `next_claim_batch`, `plan_space_migration`, `reset_stale_claims`, `apply_re_key`, `select_epoch_key` — no wasm exposure). `docs/file-store-core.md` states the intent ("Semantics move to Rust"); the core was built; the wiring never happened.
+
+| Module | LOC | Class | Notes |
+|---|---|---|---|
+| file-storage.ts | 222 | PLATFORM + dup | `FileStorage` = hand-maintained mirror of Rust `StorageBackend`; `isStaleUploading`/`queuedForSpace`/`STALE_UPLOAD_MS` duplicate `queue.rs`; `cacheKey` duplicates `meta.rs::cache_key` |
+| file-store.ts | 1357 | **~52% SHOULD-BE-RUST**, 25% ERGO, 10% WRAP, 10% PLATFORM | ~700L engine logic; of those ~590 duplicate existing-but-unwired Rust; ~110 (`transferUnuploadedFrom`, CryptoKey custody, `getUploadKey` live reads) have **no Rust counterpart** |
+| worker-file-storage.ts | 222 | PLATFORM | Hardcodes blob/pool dir names Rust already exports (third copy of the convention) |
+| files-worker/init.ts | 99 | PLATFORM | Correct per design doc |
+| space-manager.ts | 2159 | **SHOULD-BE-RUST (majority)** | Rotation orchestration, membership-log folding, fresh-key share distribution, epoch adoption policy — all protocol, all TS-only |
+| spaces-collection.ts | 63 | **SHOULD-BE-RUST (wire schema)** | `__spaces` is a synced wire format carrying credentials+epoch+cursor; parity pinned only by this TS file |
+| spaces-middleware.ts | 186 | PLATFORM (+protocol edges) | `onQuery` coalescing, `shouldResetSyncState` encode sync semantics |
+| spaces.ts | 90 | WRAP | |
+| react.ts | 1951 | PLATFORM | Verified pure React glue — no hidden protocol logic |
+
+**Gap list (sorted by severity):**
+
+- **G1. Upload-queue state machine: TS live, Rust canon unwired** [Critical]. file-store.ts:679-713/:977-992/:1040-1110 vs `queue.rs` (`next_claim_batch`, `reset_stale_claims`, `mark_upload_error`, `clear_upload_state`, `is_claimable`). **Already divergent in shape**: TS claims lazily one-at-a-time gated on `getUploadKey()` availability; Rust claims the whole batch upfront with no upload-key concept (design-doc `KeySource` unbuilt).
+- **G2. Epoch-key selection ladder: three copies, canonical one unused** [Critical]. TS copy 1: file-store.ts:1124-1205 + `MAX_EPOCH_DERIVE_DISTANCE` (:151) + personal derivation chains (:280-330); TS copy 2: records transport (ws-transport.ts:641); Rust: `betterbase-crypto/src/epoch.rs:133` `select_epoch_key` — unexposed, and *less complete* than the TS copies it's meant to replace (no share cache / CryptoKey path).
+- **G3. Key-rotation orchestration exists only in TS** [Critical — no Rust counterpart]. space-manager.ts:783-1000 (`doRemoveMember` 12-step sequence with `EpochMismatchError` recovery ladder), 1124-1207 (`rotateSpaceKey`), 1252-1364 (`completeInterruptedRewrap` + D-005 recursion bounds), 1368-1380 (`adoptServerEpoch`), :78 (`freshSpaceKey`). Highest-complexity state machine in the codebase; crash-safety ordering (shares-before-rewrap), CAS retries, grace-period revocation, give-up bounds. A mis-ordered port can irrecoverably rewrite DEKs under an undistributed key. Fix: Rust state machine over an injected transport trait (WS RPC callbacks). **Start here for Flutter planning.**
+- **G4. Membership-log folding determines key distribution — TS-only** [Important, security-adjacent]. space-manager.ts:674-751 (`parseMembershipLog`), 1816-1855 (`collectMemberState`, order-sensitive), 815-875 (parallel fold in `doRemoveMember`). Computes *who receives fresh epoch keys*; a subtle ordering/expiry bug delivers epoch keys to removed members. Already needed one order-sensitivity fix (AUD-024). Fix: pure fold in sync-core over decrypted entries.
+- **G5. Eviction policy duplicated; tie-break already divergent** [Important]. file-store.ts:1293-1340 (sort by `lastAccessedAt` only, stable insertion order) vs `eviction.rs` (sort by `(last_accessed_at, cached_at, key)`). Cross-platform caches evict different files on ties.
+- **G6. Migration planning duplicated; transfer has no Rust counterpart** [Important]. file-store.ts:765-880 vs `migration.rs` — skip rules match today, but TS counts transient fetch failures as `failed` and synthesizes meta; `MigrationOutcome` has no `failed` field. `transferUnuploadedFrom` (file-store.ts:517-580) has no Rust equivalent.
+- **G7. `__spaces` wire schema pinned only in TS** [Important]. Field names, `epoch`/`epochAdvancedAt`/`membershipLogSeq`/`members` semantics + AUD-034 epoch-relabeling (space-manager.ts:1078-1086) + `shouldRotateSpace` (:1089-1121). `DEFAULT_EPOCH_ADVANCE_INTERVAL_MS` exists in both `crypto/types.ts:19` and `crypto/types.rs:12`.
+- **G8. Boundary constants/naming triplicated** [Suggestion]. `STALE_UPLOAD_MS` (TS:79 vs `queue.rs` vs the SQL in db-wasm `file_store.rs:196`); namespace dir names; `cacheKey` `\0` rule enforced nowhere at the wasm boundary.
+
+---
+
+## Active divergences (fix before any second SDK)
+
+| # | Divergence | Sides | Status |
+|---|---|---|---|
+| D1 | UCAN-signature verification in membership entries | TS: self-issued only (membership.ts:398-405) vs Rust: all entries (membership.rs:186-247) | **Resolved** (2026-09-26): Rust policy adopted as canonical — the UCAN JWT signature is now verified for every entry, with the issuer key resolved from the self-describing did:key. The old TS policy was a security hole: a member could forge an "accepted" entry carrying a UCAN never signed by the admin and be treated as joined (key-distribution relevant). The TS twin is **deleted**; `space-manager.parseMembershipLog` calls the wasm `verifyMembershipEntry` over the original payload string. Error semantics unified: Rust `verify_membership_entry` is now a pure predicate (`bool`) — malformed entries (unparseable UCAN, unresolvable issuer DID, non-P-256 signer key) read as `false`, never an error, so a poison entry cannot abort a log fold in any SDK. Pinned by: `verify_rejects_forged_delegated_ucan` + `verify_delegated_ucan_resolves_issuer_from_did_key` + three poison-tolerance tests (Rust), `browser-tests/sync/membership-verify.test.ts` (real wasm, end-to-end), and the space-manager fold suite. (An interim `decodeDIDKey` binding was added then removed to keep the wasm surface free of dead exports — issuer resolution happens inside the Rust verifier.) The poison-tolerance invariant holds for `parseMembershipLog`; the sibling folds (`doRemoveMember`, `collectMemberState`) are covered by the G4 membership-fold port, which moves them into sync-core. |
+| D2 | JWE Concat-KDF `apu`/`apv` handling | TS consumes header fields (webcrypto.ts:311-316) vs Rust hardcodes empty (jwe.rs) |
+| D3 | File eviction tie-break | TS insertion-order (file-store.ts:1293-1340) vs Rust key-ordered (`eviction.rs`) |
+| D4 | Upload-queue claim shape | TS lazy one-at-a-time + key gate vs Rust batch-upfront (`queue.rs`) |
+| D5 | Sync push policy | TS has conflict-retry/bisection/classification; Rust mirror lacks all three (`sync/manager.rs`) |
+| D6 | Space migration outcome | TS counts fetch failures; Rust `MigrationOutcome` has no `failed` (`migration.rs`) |
+
+## Correctly partitioned (do not touch)
+
+- DB **data plane**: CRDT merge (json-joy-rs), schema validation/coercion/auto-fields, canonical serialization, key/session management — Rust-authoritative, TS thin.
+- All primitive crypto wrappers (12 of 13 `js/src/crypto/*` modules).
+- Platform glue: OPFS/workers, WebSocket reconnect, React hooks, IndexedDB, Web Locks.
+- `sync/react.ts` (1951L) — verified pure UI, no hidden protocol logic.
+- The interop conformance suite (`js/browser-tests/crypto/interop.test.ts`) — model for the vector program below.
+
+## Remediation plan (prioritized)
+
+1. **Reconcile active divergences** (D1–D6): pick the correct policy per item, fix both sides, add a test pinning the agreement. Safety-critical and cheap.
+2. **Wire the dead Rust** (cheapest duplication kill): expose `betterbase-file-store` (queue/eviction/migration) + `select_epoch_key` + the `sync.rs` membership composites via wasm; refactor TS onto them; delete twins.
+3. **Bring stale Rust current**: extend `encrypt_outbound`/`decrypt_inbound`/`rewrap_deks` for AUD-024/025/026 + a key-resolver seam; switch `transport.ts` over; delete ~400L of TS twin.
+4. **Build the missing Rust**: `frames.rs` for `betterbase-rpc-v1`; pull-assembly reducer; membership fold; spaceid; session-key separation; refresh policy; callback finalization; `__spaces` schema constants.
+5. **Design the rotation state machine in Rust** (injected transport trait) — the one domain with zero Rust foundation and highest blast radius. Before any Flutter work.
+6. **Port auth policy** (A–F above) into `betterbase-auth`.
+7. **DB control plane**: decide sync-manager home (Rust canonical vs delete mirror); engine-side `adopt_records` with structured errors; collapse middleware duplication; codegen wire types (ts-rs).
+
+## Conformance vectors
+
+Extend the existing `crates/betterbase-crypto/test-vectors/epoch-ladder.json` pattern ("the cross-platform contract") to cover every frozen contract: RPC frames, envelope v4 round-trips, membership entries (incl. delegated UCANs), JWE (incl. non-empty `apu`/`apv`), DEK framing, HKDF chains, pull-assembly, `__spaces` schema, spaceid. Each SDK's CI runs the vectors; vectors are generated by Rust (`just gen-vectors`).
+
+## CI guard
+
+A check that **every export of `betterbase-wasm` / `betterbase-db-wasm` has at least one call site in `js/src`** (or an explicit `#[wasm_bindgen(js_name = …, internal)]` exemption). This is the check that would have caught the entire dead-surface problem; add it in step 2's first PR.
