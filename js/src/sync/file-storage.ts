@@ -21,6 +21,8 @@
  *   concurrent delete is a no-op (never resurrect metadata).
  */
 
+import { fileIsClaimable } from "./file-policy.js";
+
 /** Compound cache key: spaceId + NUL separator + fileId. */
 export function cacheKey(spaceId: string, fileId: string): string {
   return `${spaceId}\0${fileId}`;
@@ -116,12 +118,13 @@ export class InMemoryFileStorage implements FileStorage {
   }
 
   async queuedForSpace(spaceId: string): Promise<MetaEntry[]> {
+    // Same predicate as the durable backend (db-wasm SQL
+    // `queued_for_space`): pending/errored plus stale-uploading claims —
+    // the canonical Rust claimability check (fileIsClaimable), so the two
+    // backends can never disagree on queue membership.
+    const now = Date.now();
     return this.allMeta().then((all) =>
-      all.filter(
-        (m) =>
-          m.spaceId === spaceId &&
-          (m.uploadStatus === "pending" || m.uploadStatus === "error"),
-      ),
+      all.filter((m) => m.spaceId === spaceId && fileIsClaimable(m, now)),
     );
   }
 

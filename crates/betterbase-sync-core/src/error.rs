@@ -31,6 +31,15 @@ pub enum SyncError {
     #[error("Invalid epoch: new_epoch={new} must be > current_epoch={current}")]
     InvalidEpochAdvance { new: u32, current: u32 },
 
+    #[error(
+        "Epoch advance too far: new_epoch={new} is more than {max_distance} epochs beyond current_epoch={current} (bounded by MAX_EPOCH_DERIVE_DISTANCE)"
+    )]
+    EpochAdvanceTooFar {
+        new: u32,
+        current: u32,
+        max_distance: u32,
+    },
+
     #[error("Missing wrapped DEK for encrypted record")]
     MissingDek,
 

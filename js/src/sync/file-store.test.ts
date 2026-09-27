@@ -365,6 +365,53 @@ describe("storage touchMeta contract", () => {
   });
 });
 
+describe("storage queuedForSpace parity", () => {
+  it("selects pending, errored, and stale-uploading only — matching the durable SQL backend", async () => {
+    const now = Date.now();
+    const staleBefore = now - 15 * 60 * 1000 - 1;
+    const storage = new InMemoryFileStorage();
+    const entry = (fileId: string, extra: Partial<MetaEntry> = {}): MetaEntry => ({
+      key: `sp\0${fileId}`,
+      spaceId: "sp",
+      fileId,
+      cachedAt: 1,
+      lastAccessedAt: 1,
+      size: 4,
+      ...extra,
+    });
+    await storage.putMeta(
+      entry("pending", { uploadStatus: "pending", queuedAt: now }),
+    );
+    await storage.putMeta(
+      entry("error", { uploadStatus: "error", queuedAt: now }),
+    );
+    await storage.putMeta(
+      entry("stale-uploading", {
+        uploadStatus: "uploading",
+        queuedAt: now,
+        lastAttemptAt: staleBefore,
+      }),
+    );
+    await storage.putMeta(
+      entry("fresh-uploading", {
+        uploadStatus: "uploading",
+        queuedAt: now,
+        lastAttemptAt: now,
+      }),
+    );
+    await storage.putMeta(entry("plain-cache"));
+
+    const queued = (await storage.queuedForSpace("sp"))
+      .map((m) => m.fileId)
+      .sort();
+    // The durable backend (db-wasm `queued_for_space`) selects exactly
+    // pending/error plus stale-uploading claims — a live upload must never
+    // be double-claimed by another tab, and plain cache entries are never
+    // re-queued.
+    expect(queued).toEqual(["error", "pending", "stale-uploading"]);
+  });
+});
+
 describe("FileStore validation", () => {
   it("rejects non-UUID file IDs on every entry point", async () => {
     const store = freshStore();

@@ -78,6 +78,20 @@ const NAME_COLLISIONS = {
     "live hits are the WSClient.rewrapDEKs RPC method; wasm batch-rewrap twin is pre-AUD-024/026 — task 12 ports rewrap orchestration to Rust",
   SUPPORTED_VERSIONS:
     "live hits are the TS-hardcoded Set([4]) in crypto/types.ts; same version-constant drift risk as CURRENT_VERSION",
+  // Membership entry-construction twins: the live hits are the same-named
+  // TS functions in sync/membership.ts (entry construction stays TS; the
+  // FOLD is canonical in Rust — G4). The wasm exports are the canonical
+  // twins for future SDKs; the textual check cannot tell them apart.
+  parseMembershipEntry:
+    "live hits are the TS twin in sync/membership.ts (entry construction); wasm export is the canonical twin for future SDKs (G4 residual)",
+  serializeMembershipEntry:
+    "live hits are the TS twin in sync/membership.ts (entry construction); wasm export is the canonical twin for future SDKs (G4 residual)",
+  buildMembershipSigningMessage:
+    "live hits are the TS twin in sync/membership.ts (entry construction); wasm export is the canonical twin for future SDKs (G4 residual)",
+  encryptMembershipPayload:
+    "live hits are the TS twin in sync/membership.ts (entry construction); wasm export is the canonical twin for future SDKs (G4 residual)",
+  decryptMembershipPayload:
+    "live hits are the TS twin in sync/membership.ts (entry construction); wasm export is the canonical twin for future SDKs (G4 residual)",
 };
 
 function walkTs(dir) {

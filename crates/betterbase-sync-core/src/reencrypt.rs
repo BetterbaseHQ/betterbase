@@ -1,7 +1,7 @@
 //! DEK re-wrapping and epoch forward derivation.
 
 use crate::error::SyncError;
-use betterbase_crypto::{derive_next_epoch_key, unwrap_dek, wrap_dek};
+use betterbase_crypto::{derive_next_epoch_key, unwrap_dek, wrap_dek, MAX_EPOCH_DERIVE_DISTANCE};
 use std::collections::HashMap;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -70,6 +70,17 @@ pub fn rewrap_deks(
         return Err(SyncError::InvalidEpochAdvance {
             new: new_epoch,
             current: current_epoch,
+        });
+    }
+    // Bound the derivation ladder the same way the TS shell does via
+    // select_epoch_key: a peer-controlled epoch delta must not turn into a
+    // billion-iteration HKDF loop (wasm is single-threaded — this would
+    // wedge the whole client).
+    if new_epoch - current_epoch > MAX_EPOCH_DERIVE_DISTANCE {
+        return Err(SyncError::EpochAdvanceTooFar {
+            new: new_epoch,
+            current: current_epoch,
+            max_distance: MAX_EPOCH_DERIVE_DISTANCE,
         });
     }
 
@@ -193,6 +204,58 @@ mod tests {
         let (unwrapped2, _) = unwrap_dek(&rewrapped[1].1, &key2).unwrap();
         assert_eq!(unwrapped1, dek1);
         assert_eq!(unwrapped2, dek2);
+    }
+
+    #[test]
+    fn rewrap_deks_rejects_advance_beyond_cap() {
+        let key1 = random_key();
+        let dek = generate_dek().unwrap();
+        let wrapped = crypto_wrap_dek(&dek, &key1, 1).unwrap();
+        let wrapped_deks = vec![("rec-1".to_string(), wrapped.to_vec())];
+
+        let err = rewrap_deks(
+            &wrapped_deks,
+            &key1,
+            1,
+            &random_key(),
+            1 + MAX_EPOCH_DERIVE_DISTANCE + 1,
+            "space-1",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            SyncError::EpochAdvanceTooFar {
+                new: 1002,
+                current: 1,
+                max_distance: 1000
+            }
+        ));
+    }
+
+    #[test]
+    fn rewrap_deks_allows_advance_exactly_at_cap() {
+        let key1 = random_key();
+        let dek = generate_dek().unwrap();
+        let wrapped = crypto_wrap_dek(&dek, &key1, 1).unwrap();
+        let wrapped_deks = vec![("rec-1".to_string(), wrapped.to_vec())];
+
+        let target = derive_forward(&key1, "space-1", 1, 1 + MAX_EPOCH_DERIVE_DISTANCE).unwrap();
+        // Exactly the cap is allowed (the cap bounds the ladder length,
+        // which is MAX_EPOCH_DERIVE_DISTANCE derivations).
+        let rewrapped = rewrap_deks(
+            &wrapped_deks,
+            &key1,
+            1,
+            &target,
+            1 + MAX_EPOCH_DERIVE_DISTANCE,
+            "space-1",
+        )
+        .unwrap();
+        assert_eq!(rewrapped.len(), 1);
+        assert_eq!(
+            peek_epoch(&rewrapped[0].1).unwrap(),
+            1 + MAX_EPOCH_DERIVE_DISTANCE
+        );
     }
 
     #[test]
