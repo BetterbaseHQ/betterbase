@@ -1,0 +1,142 @@
+{
+  "schema": 1,
+  "protocol": "betterbase-rpc-v1",
+  "description": "betterbase-rpc-v1 frame conformance vectors (frozen v1 contract). Frames are CBOR maps with a type discriminator; payloads (params/result/data) are nested CBOR values carried as raw bytes by the codec. The conformance contract is DECODE EQUIVALENCE: any compliant decoder must produce the same logical frame regardless of encoder and key order (CBOR map order is not significant, RFC 8949; encoders differ: ciborium sorts lexicographically, cborg length-first canonical, minicbor struct order). Encode-side conformance is round-trip: decode(encode(f)) == f. Vectors intentionally include multiple key orders.",
+  "keepalive_hex": "f6",
+  "frames": [
+    {
+      "name": "request-subscribe",
+      "hex": "a46269646c7270632d312d616263313233647479706500666d6574686f646973756273637269626566706172616d73a26573696e6365076573706163656473702d31",
+      "expect": {
+        "type": 0,
+        "id": "rpc-1-abc123",
+        "method": "subscribe",
+        "params": "a26573696e6365076573706163656473702d31"
+      },
+      "canonical": true
+    },
+    {
+      "name": "request-subscribe-type-first",
+      "hex": "a4647479706500666d6574686f64697375627363726962656269646c7270632d312d61626331323366706172616d73a26573696e6365076573706163656473702d31",
+      "expect": {
+        "type": 0,
+        "id": "rpc-1-abc123",
+        "method": "subscribe",
+        "params": "a26573696e6365076573706163656473702d31"
+      }
+    },
+    {
+      "name": "request-with-bytes",
+      "hex": "a46269646c7270632d322d646566343536647479706500666d6574686f646c73706163652e63726561746566706172616d73a26873706163655f69646473702d326f726f6f745f7075626c69635f6b65795820abababababababababababababababababababababababababababababababab",
+      "expect": {
+        "type": 0,
+        "id": "rpc-2-def456",
+        "method": "space.create",
+        "params": "a26873706163655f69646473702d326f726f6f745f7075626c69635f6b65795820abababababababababababababababababababababababababababababababab"
+      },
+      "canonical": true
+    },
+    {
+      "name": "auth-frame",
+      "hex": "a3647479706502666d6574686f64646175746866706172616d73a165746f6b656e69745f303168306b336e",
+      "expect": {
+        "type": 2,
+        "method": "auth",
+        "params": "a165746f6b656e69745f303168306b336e"
+      },
+      "canonical": true
+    },
+    {
+      "name": "notification-sync",
+      "hex": "a3647479706502666d6574686f646473796e6366706172616d73a3647072657618296573706163656473702d3166637572736f72182a",
+      "expect": {
+        "type": 2,
+        "method": "sync",
+        "params": "a3647072657618296573706163656473702d3166637572736f72182a"
+      },
+      "canonical": true
+    },
+    {
+      "name": "response-result",
+      "hex": "a36269646c7270632d312d61626331323364747970650166726573756c74a2626f6bf566637572736f72182a",
+      "expect": {
+        "type": 1,
+        "id": "rpc-1-abc123",
+        "result": "a2626f6bf566637572736f72182a"
+      }
+    },
+    {
+      "name": "response-null-result",
+      "hex": "a36269646c7270632d332d67686937383964747970650166726573756c74f6",
+      "expect": {
+        "type": 1,
+        "id": "rpc-3-ghi789",
+        "result": "f6"
+      }
+    },
+    {
+      "name": "response-error",
+      "hex": "a36269646c7270632d342d6a6b6c303132647479706501656572726f72a264636f646568636f6e666c696374676d6573736167657173657175656e6365206d69736d61746368",
+      "expect": {
+        "type": 1,
+        "id": "rpc-4-jkl012",
+        "error": {
+          "code": "conflict",
+          "message": "sequence mismatch"
+        }
+      }
+    },
+    {
+      "name": "response-error-type-first",
+      "hex": "a36474797065016269646c7270632d342d6a6b6c303132656572726f72a264636f646568636f6e666c696374676d6573736167657173657175656e6365206d69736d61746368",
+      "expect": {
+        "type": 1,
+        "id": "rpc-4-jkl012",
+        "error": {
+          "code": "conflict",
+          "message": "sequence mismatch"
+        }
+      }
+    },
+    {
+      "name": "chunk-records",
+      "hex": "a46269646c7270632d352d6d6e6f333435646461746181a262696462723166637572736f72182a646e616d65677265636f726473647479706503",
+      "expect": {
+        "type": 3,
+        "id": "rpc-5-mno345",
+        "name": "records",
+        "data": "81a262696462723166637572736f72182a"
+      }
+    },
+    {
+      "name": "unknown-type",
+      "hex": "a164747970651863",
+      "expectError": "unknown frame type: 99"
+    },
+    {
+      "name": "not-a-map",
+      "hex": "83010203",
+      "expectError": "malformed frame: frame is not a CBOR map"
+    },
+    {
+      "name": "missing-type",
+      "hex": "a16269646178",
+      "expectError": "malformed frame: missing `type` field"
+    },
+    {
+      "name": "type-out-of-range",
+      "hex": "a164747970651b0000000100000000",
+      "expectError": "unknown frame type: 4294967296"
+    },
+    {
+      "name": "keepalive",
+      "hex": "f6",
+      "expect": null
+    },
+    {
+      "name": "empty",
+      "hex": "",
+      "expect": null
+    }
+  ]
+}

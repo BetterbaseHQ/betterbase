@@ -2,23 +2,21 @@
  * WebSocket RPC connection for the betterbase-rpc-v1 protocol.
  * Handles transport (CBOR binary framing, auto-reconnect, keepalive)
  * and RPC semantics (pending tracking, call/callChunked/notify).
+ *
+ * Frame encoding/decoding is canonical in Rust
+ * (`betterbase-sync-core::frames`, via `./rpc-frames.js`); this class owns
+ * connection lifecycle, RPC semantics, and payload (de)serialization only.
  */
 
 import { encode, decode } from "cborg";
 import {
-  CLOSE_AUTH_FAILED,
-  CLOSE_TOKEN_EXPIRED,
-  CLOSE_FORBIDDEN,
-  RPC_REQUEST,
-  RPC_RESPONSE,
-  RPC_NOTIFICATION,
-  RPC_CHUNK,
-  type RPCFrame,
-  type RPCResponse,
-  type RPCNotification,
-  type RPCChunk,
-  type RPCError,
-} from "./ws-frames.js";
+  decodeRpcFrame,
+  encodeRpcAuthFrame,
+  encodeRpcNotificationFrame,
+  encodeRpcRequestFrame,
+  v1Constants,
+  type DecodedFrame,
+} from "./rpc-frames.js";
 
 export interface RpcConnectionConfig {
   /** WebSocket URL (e.g., wss://example.com/api/v1/ws) */
@@ -44,7 +42,6 @@ interface PendingCall {
 }
 
 const REQUEST_TIMEOUT = 30_000;
-const MAX_FRAME_BYTES = 4 * 1024 * 1024; // 4 MiB (matches server wsReadLimit)
 
 /**
  * A connection must stay open this long before the reconnect backoff
@@ -140,7 +137,7 @@ export class RpcConnection {
         chunkCount: 0,
         startedAt: Date.now(),
       });
-      this.sendRaw({ type: RPC_REQUEST, method, id, params });
+      this.sendRequest(method, id, params);
     });
   }
 
@@ -165,13 +162,13 @@ export class RpcConnection {
         chunkCount: 0,
         startedAt: Date.now(),
       });
-      this.sendRaw({ type: RPC_REQUEST, method, id, params });
+      this.sendRequest(method, id, params);
     });
   }
 
   /** Send an RPC notification (fire-and-forget). */
   notify(method: string, params: unknown): void {
-    this.sendRaw({ type: RPC_NOTIFICATION, method, params });
+    this.sendFrame(encodeRpcNotificationFrame(method, encode(params)));
   }
 
   /** Register a handler for server-initiated notifications. */
@@ -190,18 +187,21 @@ export class RpcConnection {
     return `rpc-${++this.nextId}-${Date.now().toString(36)}`;
   }
 
-  private sendRaw(frame: Record<string, unknown>): void {
+  private sendRequest(method: string, id: string, params: unknown): void {
+    this.sendFrame(encodeRpcRequestFrame(method, id, encode(params)));
+  }
+
+  private sendFrame(bytes: Uint8Array): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("WebSocket not connected");
     }
-    const encoded = encode(frame);
-    this.ws.send(encoded);
+    this.ws.send(bytes);
   }
 
   private async doConnect(): Promise<void> {
     const token = await this.config.getToken();
 
-    const ws = new WebSocket(this.config.url, "betterbase-rpc-v1");
+    const ws = new WebSocket(this.config.url, v1Constants().subprotocol);
     ws.binaryType = "arraybuffer";
     // Assign immediately so close() can also cancel a CONNECTING socket:
     // WebSocket.close() during CONNECTING fails the connection without
@@ -216,11 +216,7 @@ export class RpcConnection {
         everOpened = true;
         this.openedAt = Date.now();
         // Send token as first frame (over encrypted TLS channel)
-        this.sendRaw({
-          type: RPC_NOTIFICATION,
-          method: "auth",
-          params: { token },
-        });
+        this.sendFrame(encodeRpcAuthFrame(token));
         this.config.onOpen?.();
         resolve();
       };
@@ -266,7 +262,7 @@ export class RpcConnection {
   private handleMessage(data: unknown): void {
     if (!(data instanceof ArrayBuffer)) return;
 
-    if (data.byteLength > MAX_FRAME_BYTES) {
+    if (data.byteLength > v1Constants().maxFrameBytes) {
       console.warn(
         `[betterbase-sync] Frame too large: ${data.byteLength} bytes, dropping`,
       );
@@ -277,51 +273,48 @@ export class RpcConnection {
 
     if (bytes.length === 0) return;
 
-    // CBOR null (0xF6) is keepalive — skip
-    if (bytes.length === 1 && bytes[0] === 0xf6) return;
-
-    let frame: RPCFrame;
+    let frame: DecodedFrame | null;
     try {
-      frame = decode(bytes) as RPCFrame;
+      frame = decodeRpcFrame(bytes);
     } catch (err) {
       const preview = Array.from(bytes.slice(0, 16), (b) =>
         b.toString(16).padStart(2, "0"),
       ).join(" ");
       console.warn(
-        `[betterbase-sync] Received malformed CBOR frame (${bytes.length} bytes, preview: ${preview}), dropping`,
+        `[betterbase-sync] Received malformed frame (${bytes.length} bytes, preview: ${preview}), dropping`,
         err,
       );
       return;
     }
+    if (frame === null) return; // keepalive
+
     this.handleFrame(frame);
   }
 
   // --- Frame dispatch ---
 
-  private handleFrame(frame: RPCFrame): void {
+  private handleFrame(frame: DecodedFrame): void {
+    const { request, response, notification, chunk } = v1Constants().frameTypes;
     switch (frame.type) {
-      case RPC_RESPONSE:
+      case response:
         this.handleResponse(frame);
         break;
-      case RPC_NOTIFICATION:
+      case notification:
         this.handleNotification(frame);
         break;
-      case RPC_CHUNK:
+      case chunk:
         this.handleChunk(frame);
         break;
-      case RPC_REQUEST:
+      case request:
         // Client does not handle inbound requests
         break;
-      default: {
-        const _exhaustive: never = frame;
-        console.warn(
-          `[betterbase-sync] Unknown frame type: ${(_exhaustive as any).type}`,
-        );
-      }
+      default:
+        console.warn(`[betterbase-sync] Unknown frame type: ${frame.type}`);
     }
   }
 
-  private handleResponse(frame: RPCResponse): void {
+  private handleResponse(frame: DecodedFrame): void {
+    if (frame.id === undefined) return;
     const call = this.pending.get(frame.id);
     if (!call) return;
 
@@ -333,9 +326,12 @@ export class RpcConnection {
       return;
     }
 
-    // Validate chunk count for chunked RPCs
-    if (call.onChunk && frame.result && typeof frame.result === "object") {
-      const meta = frame.result as Record<string, unknown>;
+    const result = frame.result !== undefined ? decode(frame.result) : null;
+
+    // Validate chunk count for chunked RPCs (payload-level protocol rule,
+    // deliberately not part of the frame codec)
+    if (call.onChunk && result && typeof result === "object") {
+      const meta = result as Record<string, unknown>;
       const expected = meta._chunks;
       if (typeof expected === "number" && expected !== call.chunkCount) {
         call.reject(
@@ -347,14 +343,17 @@ export class RpcConnection {
       }
     }
 
-    call.resolve(frame.result);
+    call.resolve(result);
   }
 
-  private handleNotification(frame: RPCNotification): void {
+  private handleNotification(frame: DecodedFrame): void {
+    if (frame.method === undefined) return;
     const handler = this.notificationHandlers.get(frame.method);
     if (handler) {
       try {
-        handler(frame.params);
+        const params =
+          frame.params !== undefined ? decode(frame.params) : undefined;
+        handler(params);
       } catch (err) {
         console.error(
           `[betterbase-sync] Notification handler "${frame.method}" threw:`,
@@ -364,15 +363,18 @@ export class RpcConnection {
     }
   }
 
-  private handleChunk(frame: RPCChunk): void {
-    const call = this.pending.get(frame.id);
+  private handleChunk(frame: DecodedFrame): void {
+    if (frame.id === undefined || frame.name === undefined) return;
+    const id = frame.id;
+    const name = frame.name;
+    const call = this.pending.get(id);
     if (!call?.onChunk) return;
 
     // Absolute deadline — the idle timer below resets on every chunk, so a
     // dripping server could otherwise keep the call alive indefinitely.
     if (Date.now() - call.startedAt > MAX_CHUNKED_CALL_MS) {
       clearTimeout(call.timeout);
-      this.pending.delete(frame.id);
+      this.pending.delete(id);
       call.reject(
         new Error(
           `chunked call exceeded ${MAX_CHUNKED_CALL_MS}ms total (possible server stall)`,
@@ -384,7 +386,7 @@ export class RpcConnection {
     // Reset timeout — data is still flowing (idle timeout, not total timeout)
     clearTimeout(call.timeout);
     call.timeout = setTimeout(() => {
-      this.pending.delete(frame.id);
+      this.pending.delete(id);
       call.reject(
         new Error(`chunk timeout (no data for ${REQUEST_TIMEOUT}ms)`),
       );
@@ -392,10 +394,11 @@ export class RpcConnection {
 
     try {
       call.chunkCount++;
-      call.onChunk(frame.name, frame.data);
+      const data = frame.data !== undefined ? decode(frame.data) : undefined;
+      call.onChunk(name, data);
     } catch (err) {
       clearTimeout(call.timeout);
-      this.pending.delete(frame.id);
+      this.pending.delete(id);
       call.reject(err instanceof Error ? err : new Error(String(err)));
     }
   }
@@ -403,8 +406,10 @@ export class RpcConnection {
   // --- Reconnect ---
 
   private scheduleReconnect(closeCode: number): void {
+    const { authFailed, tokenExpired, forbidden } = v1Constants().closeCodes;
+
     // Don't reconnect on explicit auth failures — caller must re-authenticate
-    if (closeCode === CLOSE_AUTH_FAILED || closeCode === CLOSE_FORBIDDEN) {
+    if (closeCode === authFailed || closeCode === forbidden) {
       return;
     }
 
@@ -419,7 +424,7 @@ export class RpcConnection {
     const baseDelay = Math.min(1000 * 2 ** this.reconnectAttempt, maxDelay);
     let delay: number;
     if (
-      closeCode === CLOSE_TOKEN_EXPIRED &&
+      closeCode === tokenExpired &&
       this.reconnectAttempt === 0 &&
       this.lastOpenDuration >= TOKEN_EXPIRY_TRUST_MS
     ) {
@@ -472,7 +477,7 @@ export class RpcConnection {
 export class RPCCallError extends Error {
   readonly code: string;
 
-  constructor(rpcError: RPCError) {
+  constructor(rpcError: { code: string; message: string }) {
     super(`${rpcError.code}: ${rpcError.message}`);
     this.name = "RPCCallError";
     this.code = rpcError.code;

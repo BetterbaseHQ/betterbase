@@ -9,4 +9,5 @@ pub mod crypto;
 pub mod discovery;
 mod error;
 pub mod file_policy;
+pub mod frames;
 pub mod sync;

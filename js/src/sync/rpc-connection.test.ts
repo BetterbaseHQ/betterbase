@@ -12,6 +12,11 @@ import {
   CLOSE_AUTH_FAILED,
 } from "./ws-frames.js";
 
+vi.mock("../wasm-init.js", async () => {
+  const { createWasmInitMock } = await import("./rpc-frames-mock.js");
+  return createWasmInitMock();
+});
+
 describe("RpcConnection", () => {
   let server: FakeSyncServer;
   let conn: RpcConnection;

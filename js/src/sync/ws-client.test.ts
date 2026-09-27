@@ -7,6 +7,11 @@ import {
 } from "./test-helpers.js";
 import type { WSPullBeginData } from "./ws-frames.js";
 
+vi.mock("../wasm-init.js", async () => {
+  const { createWasmInitMock } = await import("./rpc-frames-mock.js");
+  return createWasmInitMock();
+});
+
 describe("WSClient", () => {
   let server: FakeSyncServer;
   let client: WSClient;

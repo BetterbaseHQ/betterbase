@@ -241,6 +241,55 @@ export interface WasmModule {
     targetRecordId: string | null,
     nowMs: number,
   ): string;
+  // RPC frames (betterbase-rpc-v1 — canonical in betterbase-sync-core::frames,
+  // see betterbase-wasm::frames).
+  encodeRpcRequestFrame(
+    method: string,
+    id: string,
+    params: Uint8Array,
+  ): Uint8Array;
+  encodeRpcNotificationFrame(method: string, params: Uint8Array): Uint8Array;
+  encodeRpcAuthFrame(token: string): Uint8Array;
+  decodeRpcFrame(bytes: Uint8Array): DecodedRpcFrame | null;
+  rpcV1Constants(): RpcV1Constants;
+}
+
+/** Decoded betterbase-rpc-v1 frame as produced by `decodeRpcFrame`. */
+export interface DecodedRpcFrame {
+  /** 0 = request, 1 = response, 2 = notification, 3 = chunk. */
+  type: number;
+  id?: string;
+  method?: string;
+  name?: string;
+  /** Raw CBOR bytes of the `params` payload (absent = undefined). */
+  params?: Uint8Array;
+  /** Raw CBOR bytes of the `result` payload (absent = undefined). */
+  result?: Uint8Array;
+  /** Raw CBOR bytes of the `data` payload (absent = undefined). */
+  data?: Uint8Array;
+  error?: { code: string; message: string };
+}
+
+/** Frozen betterbase-rpc-v1 protocol constants from the Rust source of truth. */
+export interface RpcV1Constants {
+  subprotocol: string;
+  frameTypes: {
+    request: number;
+    response: number;
+    notification: number;
+    chunk: number;
+  };
+  closeCodes: {
+    authFailed: number;
+    tokenExpired: number;
+    forbidden: number;
+    tooManyConnections: number;
+    powRequired: number;
+    protocolError: number;
+    slowConsumer: number;
+    rateLimited: number;
+  };
+  maxFrameBytes: number;
 }
 
 // --- Shared types ---

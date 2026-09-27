@@ -1,6 +1,12 @@
 /**
- * WebSocket RPC frame types and data interfaces for the betterbase-rpc-v1 subprotocol.
- * Matches the sync server's protocol definitions (betterbase-rpc-v1 subprotocol).
+ * WebSocket RPC frame types and data interfaces for the betterbase-rpc-v1
+ * subprotocol.
+ *
+ * **The frame codec is canonical in Rust** (`betterbase-sync-core::frames`,
+ * wasm bindings `betterbase-wasm::frames`, wrapped by `./rpc-frames.js`).
+ * The constants below mirror it and are pinned against the Rust source of
+ * truth by `browser-tests/sync/rpc-frames.test.ts`. The typed frame/data
+ * interfaces describe frame payloads and remain TS-only.
  *
  * Frame envelope: {type: <int>, ...} using string keys.
  */

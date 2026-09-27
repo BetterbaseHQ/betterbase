@@ -12,6 +12,11 @@ import { INITIAL_EPOCH } from "./types.js";
 import { WSClient } from "./ws-client.js";
 import { WSTransport } from "./ws-transport.js";
 
+vi.mock("../wasm-init.js", async () => {
+  const { createWasmInitMock } = await import("./rpc-frames-mock.js");
+  return createWasmInitMock();
+});
+
 vi.mock("../crypto/webcrypto.js", () => ({
   webcryptoDeriveEpochKey: async (
     _deriveKey: CryptoKey,

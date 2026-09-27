@@ -73,30 +73,34 @@ vi.mock("../crypto/internals.js", () => ({
   },
 }));
 
-vi.mock("../wasm-init.js", () => ({
-  ensureWasm: () => ({
-    sha256: (bytes: Uint8Array) => {
-      const out = new Uint8Array(32);
-      out.set(bytes.slice(0, 8));
-      return out;
-    },
-    // Membership verification is Rust-authoritative (wasm); the mock keeps
-    // the existing verifyResult on/off contract for fold tests, plus the
-    // real verifier's poison tolerance: a malformed UCAN reads as false.
-    verifyMembershipEntry: (payload: string): boolean => {
-      try {
-        const p = JSON.parse(payload) as { u?: unknown };
-        const parts = typeof p.u === "string" ? p.u.split(".") : [];
-        if (parts.length !== 3 || !/^[A-Za-z0-9_-]+$/.test(parts[1] ?? "")) {
+vi.mock("../wasm-init.js", async () => {
+  const { createFrameCodec } = await import("./rpc-frames-mock.js");
+  return {
+    ensureWasm: () => ({
+      ...createFrameCodec(),
+      sha256: (bytes: Uint8Array) => {
+        const out = new Uint8Array(32);
+        out.set(bytes.slice(0, 8));
+        return out;
+      },
+      // Membership verification is Rust-authoritative (wasm); the mock keeps
+      // the existing verifyResult on/off contract for fold tests, plus the
+      // real verifier's poison tolerance: a malformed UCAN reads as false.
+      verifyMembershipEntry: (payload: string): boolean => {
+        try {
+          const p = JSON.parse(payload) as { u?: unknown };
+          const parts = typeof p.u === "string" ? p.u.split(".") : [];
+          if (parts.length !== 3 || !/^[A-Za-z0-9_-]+$/.test(parts[1] ?? "")) {
+            return false;
+          }
+        } catch {
           return false;
         }
-      } catch {
-        return false;
-      }
-      return state.verifyResult;
-    },
-  }),
-}));
+        return state.verifyResult;
+      },
+    }),
+  };
+});
 
 vi.mock("../auth/internals.js", () => ({
   encryptJwe: (plaintext: Uint8Array) =>
