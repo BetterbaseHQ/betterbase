@@ -42,7 +42,7 @@ Cargo workspace with 7 crates + vendored sqlite-wasm-vfs:
 | `betterbase-crypto` | native | AES-256-GCM, AES-KW, HKDF, ECDSA P-256, DEK management, UCANs, edit chains |
 | `betterbase-auth` | native | PKCE, JWE ECDH-ES+A256KW decrypt, JWK thumbprint, scoped key extraction, mailbox ID |
 | `betterbase-discovery` | native | Server metadata and WebFinger validation |
-| `betterbase-sync-core` | native | BlobEnvelope CBOR, padding, transport encrypt/decrypt, epoch key cache, membership crypto |
+| `betterbase-sync-core` | native | BlobEnvelope CBOR, padding, transport encrypt/decrypt, rpc-v1 frame codec, pull-assembly reducer, epoch key ladder, membership crypto |
 | `betterbase-db` | native | SQLite-backed document store, CRDTs (json-joy), schema migrations, reactive queries |
 | `betterbase-wasm` | wasm32 | `wasm-bindgen` exports for crypto, auth, discovery, sync-core |
 | `betterbase-db-wasm` | wasm32 | `wasm-bindgen` exports for the DB engine (SQLite WASM + OPFS VFS) |
@@ -86,7 +86,7 @@ Key functions by crate:
 - **betterbase-crypto**: `encrypt_v4()`, `decrypt_v4()`, `wrap_dek()`, `unwrap_dek()`, `derive_epoch_key_from_root()`, `sign()`, `verify()`, `issue_root_ucan()`, `sign_edit_entry()`, `value_diff()`
 - **betterbase-auth**: `generate_code_verifier()`, `compute_code_challenge()`, `decrypt_jwe_compact()`, `extract_encryption_key()`, `derive_mailbox_id()`
 - **betterbase-discovery**: `validate_server_metadata()`, `parse_webfinger_response()`
-- **betterbase-sync-core**: `encode_envelope()`, `decode_envelope()`, `encrypt_record()`, `decrypt_record()`, `pad_to_bucket()`, `unpad()`, `peek_epoch()`, `derive_forward()`, `rewrap_deks()`, `encrypt_membership_payload()`
+- **betterbase-sync-core**: `encode_envelope()`, `decode_envelope()`, `encrypt_record()`, `decrypt_record()`, `pad_to_bucket()`, `unpad()`, `peek_epoch()`, `derive_forward()`, `rewrap_deks()`, `encrypt_membership_payload()`, `encode_request_frame()` / `decode_frame()` (rpc-v1), `apply_chunk()` (pull assembly)
 - **betterbase-db**: Collection definitions, schema validation, CRDT merge (json-joy Rust port), query engine, sync manager
 
 ### WASM boundary
