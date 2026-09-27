@@ -18,6 +18,7 @@
 
 import type { CollectionDefHandle, CollectionBlueprint } from "../types.js";
 import { BLUEPRINT } from "../types.js";
+import { dbErrorCode } from "../db-errors.js";
 import type { MainToWorkerMessage, WorkerResponse } from "./types.js";
 import { OpfsWorkerHost } from "./OpfsWorkerHost.js";
 import { spaces } from "../../sync/spaces-collection.js";
@@ -74,6 +75,7 @@ export function initWorker(collections: CollectionDefHandle[]): void {
           type: "response",
           id: requestId,
           error,
+          code: dbErrorCode(e),
         };
         self.postMessage(response);
       }
@@ -157,6 +159,7 @@ export function initWorker(collections: CollectionDefHandle[]): void {
         type: "response",
         id: requestId,
         error,
+        code: dbErrorCode(e),
       };
       self.postMessage(response);
     }

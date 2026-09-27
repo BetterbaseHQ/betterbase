@@ -596,6 +596,7 @@ fn record_errors_to_values(errors: &[crate::types::RecordError]) -> Vec<Value> {
             serde_json::json!({
                 "id": e.id,
                 "collection": e.collection,
+                "code": e.code,
                 "error": e.error,
             })
         })

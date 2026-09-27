@@ -532,7 +532,14 @@ describe("SyncManager.pull", () => {
           .fn()
           .mockResolvedValueOnce(
             makeApplyResult({
-              errors: [{ id: "n1", collection: "notes", error: "bad crdt" }],
+              errors: [
+                {
+                  id: "n1",
+                  collection: "notes",
+                  code: "crdt",
+                  error: "bad crdt",
+                },
+              ],
               records: [],
             }),
           )
@@ -559,7 +566,14 @@ describe("SyncManager quarantine", () => {
       adapter: {
         applyRemoteChanges: vi.fn().mockResolvedValue(
           makeApplyResult({
-            errors: [{ id: "n1", collection: "notes", error: "bad crdt" }],
+            errors: [
+              {
+                id: "n1",
+                collection: "notes",
+                code: "crdt",
+                error: "bad crdt",
+              },
+            ],
             records: [],
           }),
         ),
@@ -587,7 +601,9 @@ describe("SyncManager quarantine", () => {
       adapter: {
         applyRemoteChanges: vi.fn().mockResolvedValue(
           makeApplyResult({
-            errors: [{ id: "n1", collection: "notes", error: "bad" }],
+            errors: [
+              { id: "n1", collection: "notes", code: "internal", error: "bad" },
+            ],
             records: [],
           }),
         ),

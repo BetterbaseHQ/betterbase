@@ -10,6 +10,7 @@ import type {
   WorkerResponse,
   WorkerNotification,
 } from "./types.js";
+import { dbErrorCode } from "../db-errors.js";
 import type { WasmDbInstance } from "../wasm-init.js";
 
 export class OpfsWorkerHost {
@@ -48,7 +49,12 @@ export class OpfsWorkerHost {
           },
           (e) => {
             const error = e instanceof Error ? e.message : String(e);
-            const response: WorkerResponse = { type: "response", id, error };
+            const response: WorkerResponse = {
+              type: "response",
+              id,
+              error,
+              code: dbErrorCode(e),
+            };
             self.postMessage(response);
           },
         );
@@ -58,7 +64,12 @@ export class OpfsWorkerHost {
       }
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
-      const response: WorkerResponse = { type: "response", id, error };
+      const response: WorkerResponse = {
+        type: "response",
+        id,
+        error,
+        code: dbErrorCode(e),
+      };
       self.postMessage(response);
     }
   }

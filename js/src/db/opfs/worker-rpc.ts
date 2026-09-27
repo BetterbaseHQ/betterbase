@@ -71,7 +71,12 @@ export class RpcClient {
           this.pending.delete(msg.id);
 
           if (msg.error) {
-            entry.reject(new Error(msg.error));
+            const err = new Error(msg.error);
+            // Reattach the stable engine error code dropped by
+            // serialization (postMessage only carries plain data), so
+            // classification on `code` works across the worker boundary.
+            if (msg.code) (err as { code?: string }).code = msg.code;
+            entry.reject(err);
           } else {
             entry.resolve(msg.result);
           }

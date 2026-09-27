@@ -76,6 +76,8 @@ pub struct RemoteRecord {
 pub struct RecordError {
     pub id: String,
     pub collection: String,
+    /// Stable machine-readable error code (see `LessDbError::code`).
+    pub code: String,
     pub error: String,
 }
 

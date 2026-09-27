@@ -262,6 +262,7 @@ pub fn apply_remote_decisions(
                         errors.push(RecordError {
                             id,
                             collection,
+                            code: e.code().to_string(),
                             error: e.to_string(),
                         });
                     }

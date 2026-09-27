@@ -115,6 +115,33 @@ pub enum StorageError {
     Sqlite(#[from] rusqlite::Error),
 }
 
+impl StorageError {
+    /// Stable machine-readable code for cross-boundary classification.
+    ///
+    /// Display strings are human-facing and may be reworded; codes are a
+    /// frozen API. Consumers (e.g. the adoption merge's tolerance rules)
+    /// must classify on the code, never on the message. The TS mirror
+    /// lives in `js/src/db/db-errors.ts` (`DbErrorCode`).
+    ///
+    /// One synthetic code is outside this vocabulary: `missing_id`,
+    /// emitted at the batch boundary when a patch record has no `id`
+    /// field (a shape error, not an engine failure).
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NotFound { .. } => "record_not_found",
+            Self::Deleted { .. } => "record_deleted",
+            Self::ImmutableField { .. } => "immutable_field",
+            Self::UniqueConstraint { .. } => "unique_constraint",
+            Self::Corruption { .. } => "corruption",
+            Self::NotInitialized => "not_initialized",
+            Self::CollectionNotRegistered(_) => "collection_not_registered",
+            Self::Transaction { .. } => "transaction",
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(_) => "sqlite",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MigrationError
 // ---------------------------------------------------------------------------
@@ -228,6 +255,25 @@ pub enum LessDbError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+}
+
+impl LessDbError {
+    /// Stable machine-readable code for cross-boundary classification
+    /// (see `StorageError::code`). Frozen API — classify on this, never
+    /// on the display message.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Schema(_) => "schema",
+            Self::Storage(e) => e.code(),
+            Self::Migration(_) => "migration",
+            Self::Query(_) => "query",
+            Self::Merge(_) => "merge_conflict",
+            Self::Sync(_) => "sync",
+            Self::DiffDepth(_) => "diff_depth",
+            Self::Crdt(_) => "crdt",
+            Self::Internal(_) => "internal",
+        }
+    }
 }
 
 impl From<StorageError> for LessDbError {
@@ -465,5 +511,102 @@ mod tests {
         let q_err = QueryError::UnknownOperator("$exists".to_string());
         let db_err: LessDbError = q_err.into();
         assert!(matches!(db_err, LessDbError::Query(_)));
+    }
+
+    // --- stable error codes (cross-boundary classification) ---
+
+    #[test]
+    fn storage_error_codes_are_stable() {
+        let cases: [(StorageError, &str); 8] = [
+            (
+                StorageError::NotFound {
+                    collection: "c".into(),
+                    id: "i".into(),
+                },
+                "record_not_found",
+            ),
+            (
+                StorageError::Deleted {
+                    collection: "c".into(),
+                    id: "i".into(),
+                },
+                "record_deleted",
+            ),
+            (
+                StorageError::ImmutableField {
+                    collection: "c".into(),
+                    id: "i".into(),
+                    field: "f".into(),
+                },
+                "immutable_field",
+            ),
+            (
+                StorageError::UniqueConstraint {
+                    collection: "c".into(),
+                    index: "idx".into(),
+                    existing_id: "i".into(),
+                    value: serde_json::Value::Null,
+                },
+                "unique_constraint",
+            ),
+            (StorageError::NotInitialized, "not_initialized"),
+            (
+                StorageError::CollectionNotRegistered("c".into()),
+                "collection_not_registered",
+            ),
+            (
+                StorageError::Transaction {
+                    message: "m".into(),
+                    source: None,
+                },
+                "transaction",
+            ),
+            // Corruption needs a source; construct one for its code.
+            (
+                StorageError::Corruption {
+                    collection: "c".into(),
+                    id: "i".into(),
+                    field: "f".into(),
+                    source: Box::new(std::io::Error::other("bad")),
+                },
+                "corruption",
+            ),
+        ];
+        for (e, code) in cases {
+            assert_eq!(e.code(), code, "unstable code for {e}");
+        }
+    }
+
+    #[test]
+    fn less_db_error_code_delegates_through_storage() {
+        let not_found: LessDbError = StorageError::NotFound {
+            collection: "c".into(),
+            id: "i".into(),
+        }
+        .into();
+        assert_eq!(not_found.code(), "record_not_found");
+
+        let unique: LessDbError = StorageError::UniqueConstraint {
+            collection: "c".into(),
+            index: "idx".into(),
+            existing_id: "i".into(),
+            value: serde_json::Value::Null,
+        }
+        .into();
+        assert_eq!(unique.code(), "unique_constraint");
+    }
+
+    #[test]
+    fn less_db_error_codes_for_non_storage_variants() {
+        assert_eq!(LessDbError::Crdt("boom".into()).code(), "crdt");
+        assert_eq!(LessDbError::Internal("boom".into()).code(), "internal");
+        assert_eq!(
+            LessDbError::Query(QueryError::UnknownOperator("$x".into())).code(),
+            "query"
+        );
+        assert_eq!(
+            LessDbError::Merge(MergeConflictError::new("docs", "doc-1", &["title"])).code(),
+            "merge_conflict"
+        );
     }
 }

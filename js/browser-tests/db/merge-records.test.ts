@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { mergeDatabaseRecords } from "../../src/db/merge-records.js";
+import { dbErrorCode } from "../../src/db/db-errors.js";
 import {
   openFreshOpfsDb,
   cleanupOpfsDb,
@@ -487,6 +488,36 @@ describe("mergeDatabaseRecords", () => {
 
     expect(result.merged).toBe(0);
     expect(result.skippedTombstoned).toBe(1);
+  });
+
+  it("propagates the stable engine error code across the worker boundary", async () => {
+    const users = buildUsersCollection();
+    const opened = await openFreshOpfsDb([users]);
+    const db = opened.db;
+    openDbs.push(db);
+
+    await db.put(users, { name: "a", email: "same@example.com", age: 1 });
+
+    // A write violating the unique index must surface the engine's stable
+    // code on the main thread (postMessage carries plain data; WorkerRpc
+    // reattaches it). The adoption merge's tolerance rules rely on this.
+    let caught: unknown;
+    try {
+      await db.put(users, { name: "b", email: "same@example.com", age: 2 });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeDefined();
+    expect(String((caught as Error).message)).toContain("Unique constraint");
+    expect(dbErrorCode(caught)).toBe("unique_constraint");
+
+    // Per-record bulkPut errors carry the code too (same boundary).
+    const result = await db.bulkPut(users, [
+      { name: "c", email: "same@example.com", age: 3 },
+      { name: "d", email: "fresh@example.com", age: 4 },
+    ]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]!.code).toBe("unique_constraint");
   });
 
   it("skipRecord may be async and differentiate by collection", async () => {

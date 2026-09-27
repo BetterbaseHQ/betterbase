@@ -1091,6 +1091,7 @@ async fn cursor_advances_even_with_partial_apply_errors() {
                 errors.push(RecordError {
                     id: r.id.clone(),
                     collection: "tasks".into(),
+                    code: "internal".into(),
                     error: "apply failed".into(),
                 });
             } else {
@@ -1574,6 +1575,7 @@ async fn quarantines_after_consecutive_permanent_failures() {
                 errors.push(RecordError {
                     id: r.id.clone(),
                     collection: "tasks".into(),
+                    code: "corruption".into(),
                     error: "corrupt".into(),
                 });
             } else {
@@ -1646,6 +1648,7 @@ async fn retry_quarantined_clears_quarantine() {
                 errors.push(RecordError {
                     id: r.id.clone(),
                     collection: "tasks".into(),
+                    code: "corruption".into(),
                     error: "corrupt".into(),
                 });
             } else {
@@ -1725,6 +1728,7 @@ async fn resets_failure_count_on_success() {
                 errors.push(RecordError {
                     id: r.id.clone(),
                     collection: "tasks".into(),
+                    code: "transaction".into(),
                     error: "temp error".into(),
                 });
             } else {
@@ -1962,6 +1966,7 @@ async fn apply_remote_records_advances_cursor_even_with_errors() {
             errors.push(RecordError {
                 id: r.id.clone(),
                 collection: "tasks".into(),
+                code: "internal".into(),
                 error: "failed".into(),
             });
         }
@@ -2138,6 +2143,7 @@ async fn push_reports_get_dirty_per_record_errors() {
         vec![RecordError {
             id: "r-bad".to_string(),
             collection: "tasks".to_string(),
+            code: "corruption".to_string(),
             error: "corrupt record".to_string(),
         }],
     );
@@ -2255,6 +2261,7 @@ async fn apply_remote_records_quarantines_too() {
                 errors.push(RecordError {
                     id: r.id.clone(),
                     collection: "tasks".into(),
+                    code: "internal".into(),
                     error: "bad".into(),
                 });
             } else {

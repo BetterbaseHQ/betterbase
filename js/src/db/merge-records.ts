@@ -14,6 +14,7 @@
  */
 
 import type { CollectionDefHandle, Database } from "./index.js";
+import { dbErrorCode, DbErrorCode } from "./db-errors.js";
 
 export interface MergeDatabaseRecordsOptions {
   /** Database to read records from (e.g. the anonymous/local namespace). */
@@ -166,10 +167,12 @@ export async function mergeDatabaseRecords(
         // different record id — e.g. two "default" records seeded
         // independently) means the target already holds this data under
         // another identity: skip those records rather than fail the whole
-        // adoption. Any other per-record failure is a real error — the
-        // merge is idempotent, so callers can safely retry.
+        // adoption. Classified on the engine's stable error code, never on
+        // the message — any other per-record failure (or one missing a
+        // code) is a real error. The merge is idempotent, so callers can
+        // safely retry.
         const fatal = result.errors.filter(
-          (e) => !/unique/i.test(String((e as { error?: unknown }).error ?? e)),
+          (e) => dbErrorCode(e) !== DbErrorCode.UniqueConstraint,
         );
         if (fatal.length > 0) {
           throw new Error(
@@ -205,23 +208,25 @@ export async function mergeDatabaseRecords(
         // merge was in flight (e.g. a remote tombstone landing via a
         // concurrent sync) or a unique-field collision means "skip this
         // record", not "fail the adoption" — the merge is idempotent and
-        // a thrown error here blocks the login path.
+        // a thrown error here blocks the login path. Classified on the
+        // engine's stable error code; deleted/not-found is the tombstone
+        // disposition, unique is a conflict, and anything without a
+        // recognized code fails loudly (a reworded/new engine error must
+        // not be silently skipped).
+        const code = dbErrorCode(e);
         const msg = String((e as Error)?.message ?? e);
-        // Tolerated failures, matched on the engine's exact wordings
-        // ("Record deleted: …", "Record not found: …", "Unique constraint
-        // violation on …") with word boundaries so near-miss substrings
-        // (a field named uniqueId, "not registered") still throw — a
-        // reworded engine error must fail loudly, not skip silently.
-        // Deleted/not-found mid-merge is semantically the tombstone
-        // disposition; unique collisions are conflicts.
-        if (/\b(deleted|not found|unique)\b/i.test(msg)) {
+        if (
+          code === DbErrorCode.Deleted ||
+          code === DbErrorCode.NotFound ||
+          code === DbErrorCode.UniqueConstraint
+        ) {
           console.warn(
             `[betterbase-db] mergeDatabaseRecords: skipped ${def.name}/${id}: ${msg}`,
           );
-          if (/\b(deleted|not found)\b/i.test(msg)) {
-            skippedTombstoned++;
-          } else {
+          if (code === DbErrorCode.UniqueConstraint) {
             skippedConflict++;
+          } else {
+            skippedTombstoned++;
           }
           continue;
         }

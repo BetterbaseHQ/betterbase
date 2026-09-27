@@ -35,6 +35,10 @@ export interface WorkerResponse {
   id: number;
   result?: unknown;
   error?: string;
+  /** Stable engine error code (see `LessDbError::code`); reattached to the
+   *  reconstructed Error by WorkerRpc so classification survives the
+   *  postMessage boundary. */
+  code?: string;
 }
 
 /** Push notification for an active subscription. */

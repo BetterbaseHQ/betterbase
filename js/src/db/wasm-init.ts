@@ -38,7 +38,7 @@ export interface WasmDbInstance {
     options: unknown,
   ): {
     records: unknown[];
-    errors: { id: string; collection: string; error: string }[];
+    errors: { id: string; collection: string; code: string; error: string }[];
   };
   bulkDelete(
     collection: string,
@@ -46,7 +46,7 @@ export interface WasmDbInstance {
     options: unknown,
   ): {
     deleted_ids: string[];
-    errors: { id: string; collection: string; error: string }[];
+    errors: { id: string; collection: string; code: string; error: string }[];
   };
   observe(
     collection: string,

@@ -246,6 +246,8 @@ export interface BatchResult<T> {
 export interface RecordError {
   id: string;
   collection: string;
+  /** Stable machine-readable code (see `LessDbError::code`); classify on this, not `error`. */
+  code: string;
   error: string;
 }
 

@@ -232,6 +232,41 @@ describe("RpcClient", () => {
       t.deliverMessage({ type: "response", id, result: "late" });
     });
 
+    it("reattaches the engine error code across the worker seam", async () => {
+      const t = createMockTransport();
+      const client = new RpcClient(t.transport);
+
+      const promise = client.call("patch", ["users", {}], 5_000);
+      const id = (t.sent[0] as { id: number }).id;
+      // The worker serializes a thrown engine error into plain
+      // { error, code } data; WorkerRpc must reattach the code so
+      // classification (e.g. the adoption merge's tolerance rules)
+      // works on the main thread.
+      t.deliverMessage({
+        type: "response",
+        id,
+        error: 'Unique constraint violation on index "idx"',
+        code: "unique_constraint",
+      });
+
+      const caught = (await promise.catch((e: unknown) => e)) as Error;
+      expect(caught.message).toBe('Unique constraint violation on index "idx"');
+      expect((caught as { code?: string }).code).toBe("unique_constraint");
+    });
+
+    it("leaves the code undefined when the worker sends none", async () => {
+      const t = createMockTransport();
+      const client = new RpcClient(t.transport);
+
+      const promise = client.call("patch", ["users", {}], 5_000);
+      const id = (t.sent[0] as { id: number }).id;
+      t.deliverMessage({ type: "response", id, error: "boom" });
+
+      const caught = (await promise.catch((e: unknown) => e)) as Error;
+      expect(caught.message).toBe("boom");
+      expect((caught as { code?: string }).code).toBeUndefined();
+    });
+
     it("ignores responses for unknown or already-resolved ids", async () => {
       const t = createMockTransport();
       const client = new RpcClient(t.transport);

@@ -690,6 +690,7 @@ impl<B: StorageBackend> StorageRead for Adapter<B> {
                 Err(e) => errors.push(RecordError {
                     id,
                     collection,
+                    code: e.code().to_string(),
                     error: e.to_string(),
                 }),
             }
@@ -809,6 +810,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
                     Err(e) => errors.push(RecordError {
                         id: String::new(),
                         collection: def.name.clone(),
+                        code: e.code().to_string(),
                         error: e.to_string(),
                     }),
                 }
@@ -842,6 +844,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
                     Err(e) => errors.push(RecordError {
                         id: id.to_string(),
                         collection: def.name.clone(),
+                        code: e.code().to_string(),
                         error: e.to_string(),
                     }),
                 }
@@ -880,6 +883,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
                         errors.push(RecordError {
                             id: String::new(),
                             collection: def.name.clone(),
+                            code: "missing_id".to_string(),
                             error: "patch missing 'id' field".to_string(),
                         });
                         continue;
@@ -900,6 +904,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
                     Err(e) => errors.push(RecordError {
                         id,
                         collection: def.name.clone(),
+                        code: e.code().to_string(),
                         error: e.to_string(),
                     }),
                 }
@@ -937,6 +942,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
                     Err(e) => errors.push(RecordError {
                         id,
                         collection: def.name.clone(),
+                        code: e.code().to_string(),
                         error: e.to_string(),
                     }),
                 }
@@ -988,6 +994,7 @@ impl<B: StorageBackend> StorageWrite for Adapter<B> {
                     Err(e) => errors.push(RecordError {
                         id,
                         collection: def.name.clone(),
+                        code: e.code().to_string(),
                         error: e.to_string(),
                     }),
                 }
