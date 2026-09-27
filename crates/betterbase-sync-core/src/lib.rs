@@ -5,6 +5,7 @@ pub mod error;
 pub mod frames;
 pub mod membership;
 pub mod padding;
+pub mod pull;
 pub mod reencrypt;
 pub mod transport;
 pub mod types;
@@ -24,6 +25,10 @@ pub use membership::{
     MembershipEntryPayload, MembershipEntryType,
 };
 pub use padding::{pad_to_bucket, unpad, DEFAULT_PADDING_BUCKETS};
+pub use pull::{
+    apply_chunk, PullAssembly, PullAssemblyError, PullBeginData, PullCommitData, PullEntryMeta,
+    SpaceAssembly,
+};
 pub use reencrypt::{derive_forward, peek_epoch, rewrap_deks};
 pub use transport::{decrypt_record, encrypt_record};
 pub use types::BlobEnvelope;

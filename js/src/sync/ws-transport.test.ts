@@ -14,7 +14,8 @@ import { WSTransport } from "./ws-transport.js";
 
 vi.mock("../wasm-init.js", async () => {
   const { createWasmInitMock } = await import("./rpc-frames-mock.js");
-  return createWasmInitMock();
+  const { createPullAssembly } = await import("./pull-assembly-mock.js");
+  return createWasmInitMock(createPullAssembly());
 });
 
 vi.mock("../crypto/webcrypto.js", () => ({

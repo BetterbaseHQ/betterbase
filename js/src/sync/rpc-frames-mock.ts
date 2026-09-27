@@ -202,16 +202,21 @@ export function createFrameCodec(): {
 }
 
 /**
- * A `vi.mock("../wasm-init.js")` replacement exposing only the frame codec —
- * for node tests where no other wasm functions are exercised.
+ * A `vi.mock("../wasm-init.js")` replacement: `ensureWasm()` returns the
+ * 1:1 mock frame codec, optionally merged with extra wasm-surface
+ * functions (e.g. `createPullAssembly()` for tests that exercise
+ * `WSClient.pull`).
  */
-export function createWasmInitMock(): {
+export function createWasmInitMock(extras: Record<string, unknown> = {}): {
   initWasm: () => Promise<void>;
-  ensureWasm: () => ReturnType<typeof createFrameCodec>;
+  ensureWasm: () => ReturnType<typeof createFrameCodec> &
+    Record<string, unknown>;
 } {
   const codec = createFrameCodec();
+  const surface: ReturnType<typeof createFrameCodec> & Record<string, unknown> =
+    { ...codec, ...extras };
   return {
     initWasm: async () => {},
-    ensureWasm: () => codec,
+    ensureWasm: () => surface,
   };
 }

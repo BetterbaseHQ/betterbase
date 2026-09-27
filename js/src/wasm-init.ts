@@ -282,6 +282,14 @@ export interface WasmModule {
   encodeRpcAuthFrame(token: string): Uint8Array;
   decodeRpcFrame(bytes: Uint8Array): DecodedRpcFrame | null;
   rpcV1Constants(): RpcV1Constants;
+  // Pull assembly (betterbase-sync-core::pull — canonical in Rust, see
+  // betterbase-wasm::pull; vectors in test-vectors/pull-assembly.json).
+  pullAssemblyApply(
+    state: PullAssemblyState | null,
+    name: string,
+    data: unknown,
+  ): PullAssemblyState;
+  pullAssemblyResult(state: PullAssemblyState | null): PullAssemblyResult;
 }
 
 /** Decoded betterbase-rpc-v1 frame as produced by `decodeRpcFrame`. */
@@ -320,6 +328,36 @@ export interface RpcV1Constants {
     rateLimited: number;
   };
   maxFrameBytes: number;
+}
+
+/** Per-space pull-assembly state (wire field names; opaque to callers —
+ * round-tripped through wasm verbatim). */
+export interface PullAssemblySpaceState {
+  prev: number;
+  cursor: number;
+  epoch: number;
+  rewrap_epoch?: number;
+  received: number;
+}
+
+/** Pull-assembly state as round-tripped through wasm (opaque token). */
+export interface PullAssemblyState {
+  spaces: Record<string, PullAssemblySpaceState>;
+}
+
+/** Per-space result of a pull assembly (client-facing names). */
+export interface PullAssemblySpace {
+  space: string;
+  prev: number;
+  cursor: number;
+  epoch: number;
+  rewrapEpoch?: number;
+  received: number;
+}
+
+/** Final pull-assembly result (spaces sorted by id). */
+export interface PullAssemblyResult {
+  spaces: PullAssemblySpace[];
 }
 
 // --- Shared types ---

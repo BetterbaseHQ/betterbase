@@ -9,7 +9,8 @@ import type { WSPullBeginData } from "./ws-frames.js";
 
 vi.mock("../wasm-init.js", async () => {
   const { createWasmInitMock } = await import("./rpc-frames-mock.js");
-  return createWasmInitMock();
+  const { createPullAssembly } = await import("./pull-assembly-mock.js");
+  return createWasmInitMock(createPullAssembly());
 });
 
 describe("WSClient", () => {

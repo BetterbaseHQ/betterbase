@@ -1,0 +1,276 @@
+{
+  "$comment": "Pull-assembly conformance vectors for the chunked pull state machine (betterbase-sync-core::pull). Run by the Rust unit tests (via apply_chunk, the same path the wasm binding uses), the node tests (via the 1:1 JS mock in js/src/sync/pull-assembly-mock.ts), and the browser tests (real wasm). Chunk `data` is a CBOR map as sent by the server (`pull.begin`, `pull.record`, `pull.file`, `pull.membership`, `pull.commit`); `data: null` means the chunk carried no `data` field. `dataCborHex` is an alternative to `data`: the exact CBOR bytes of the chunk's `data` field as hex (for payloads JSON cannot express — the wire's `blob`/`wrapped_dek` byte strings); the Rust harness feeds the bytes verbatim and the JS harnesses decode them with cborg. `expected.ok` is the exact `pullAssemblyResult` output (spaces sorted by id; `rewrapEpoch` omitted when absent). `expected.error` is the exact error message.",
+  "cases": [
+    {
+      "name": "empty pull (no chunks)",
+      "chunks": [],
+      "expected": { "ok": { "spaces": [] } }
+    },
+    {
+      "name": "happy path single space",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 3, "cursor": 9, "epoch": 2 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r1", "cursor": 7 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r2", "cursor": 8, "deleted": true } },
+        { "name": "pull.file", "data": { "space": "s1", "id": "f1", "record_id": "r1", "cursor": 8 } },
+        { "name": "pull.membership", "data": { "space": "s1", "cursor": 8, "entries": [] } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 3, "cursor": 9, "count": 4 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 3, "cursor": 9, "epoch": 2, "received": 4 }]
+        }
+      }
+    },
+    {
+      "name": "uncommitted stream keeps the last delivered cursor (AUD-025 INV-02)",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 3, "cursor": 9, "epoch": 2 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r1", "cursor": 7 } },
+        { "name": "pull.file", "data": { "space": "s1", "id": "f1", "cursor": 8 } },
+        { "name": "pull.membership", "data": { "space": "s1", "cursor": 8, "entries": [] } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 3, "cursor": 8, "epoch": 2, "received": 3 }]
+        }
+      }
+    },
+    {
+      "name": "commit cursor below a delivered entry must not regress",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 5, "epoch": 1 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r1", "cursor": 8 } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 0, "cursor": 5, "count": 1 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 0, "cursor": 8, "epoch": 1, "received": 1 }]
+        }
+      }
+    },
+    {
+      "name": "verified commit advances the cursor to the advertised head",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 3, "cursor": 9, "epoch": 1 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r1", "cursor": 4 } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 3, "cursor": 9, "count": 1 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 3, "cursor": 9, "epoch": 1, "received": 1 }]
+        }
+      }
+    },
+    {
+      "name": "begin with zero entries and matching commit",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 3, "cursor": 5, "epoch": 1 } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 3, "cursor": 5, "count": 0 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 3, "cursor": 5, "epoch": 1, "received": 0 }]
+        }
+      }
+    },
+    {
+      "name": "duplicate pull.begin for the same space is a protocol violation",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 5, "epoch": 1 } },
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 5, "epoch": 1 } }
+      ],
+      "expected": { "error": "duplicate pull.begin for space s1" }
+    },
+    {
+      "name": "duplicate pull.begin with differing parameters is a protocol violation",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 5, "epoch": 1 } },
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 2, "cursor": 6, "epoch": 2 } }
+      ],
+      "expected": { "error": "duplicate pull.begin for space s1" }
+    },
+    {
+      "name": "commit count higher than received entries",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 2, "epoch": 1 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r1", "cursor": 1 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r2", "cursor": 2 } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 0, "cursor": 2, "count": 3 } }
+      ],
+      "expected": {
+        "error": "pull record count mismatch for space s1: server=3, received=2"
+      }
+    },
+    {
+      "name": "commit count lower than received entries",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 3, "epoch": 1 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r1", "cursor": 1 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r2", "cursor": 2 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r3", "cursor": 3 } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 0, "cursor": 3, "count": 2 } }
+      ],
+      "expected": {
+        "error": "pull record count mismatch for space s1: server=2, received=3"
+      }
+    },
+    {
+      "name": "entries for a space before its begin are ignored",
+      "chunks": [
+        { "name": "pull.record", "data": { "space": "s1", "id": "r0", "cursor": 7 } },
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 6, "epoch": 1 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r1", "cursor": 5 } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 0, "cursor": 6, "count": 1 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 0, "cursor": 6, "epoch": 1, "received": 1 }]
+        }
+      }
+    },
+    {
+      "name": "commit for a space that was never begun is ignored",
+      "chunks": [
+        { "name": "pull.commit", "data": { "space": "s2", "prev": 0, "cursor": 9, "count": 0 } },
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 1, "epoch": 1 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 0, "cursor": 0, "epoch": 1, "received": 0 }]
+        }
+      }
+    },
+    {
+      "name": "unknown chunk names are ignored",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 1, "epoch": 1 } },
+        { "name": "pull.stats", "data": { "space": "s1", "extra": true } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r1", "cursor": 1 } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 0, "cursor": 1, "count": 1 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 0, "cursor": 1, "epoch": 1, "received": 1 }]
+        }
+      }
+    },
+    {
+      "name": "multiple spaces interleaved",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "a", "prev": 0, "cursor": 11, "epoch": 1 } },
+        { "name": "pull.begin", "data": { "space": "b", "prev": 2, "cursor": 3, "epoch": 4 } },
+        { "name": "pull.record", "data": { "space": "a", "id": "r1", "cursor": 10 } },
+        { "name": "pull.record", "data": { "space": "b", "id": "r2", "cursor": 2 } },
+        { "name": "pull.commit", "data": { "space": "a", "prev": 0, "cursor": 11, "count": 1 } },
+        { "name": "pull.commit", "data": { "space": "b", "prev": 2, "cursor": 3, "count": 1 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [
+            { "space": "a", "prev": 0, "cursor": 11, "epoch": 1, "received": 1 },
+            { "space": "b", "prev": 2, "cursor": 3, "epoch": 4, "received": 1 }
+          ]
+        }
+      }
+    },
+    {
+      "name": "rewrap epoch is preserved from begin",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 1, "epoch": 5, "rewrap_epoch": 3 } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 0, "cursor": 1, "count": 0 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [
+            { "space": "s1", "prev": 0, "cursor": 1, "epoch": 5, "rewrapEpoch": 3, "received": 0 }
+          ]
+        }
+      }
+    },
+    {
+      "name": "rewrap epoch absent is omitted from the result",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 1, "epoch": 1 } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 0, "cursor": 1, "count": 0 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 0, "cursor": 1, "epoch": 1, "received": 0 }]
+        }
+      }
+    },
+    {
+      "name": "entry without a cursor is counted but does not advance the space cursor",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 2, "cursor": 9, "epoch": 1 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r1" } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 2, "cursor": 2, "count": 1 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 2, "cursor": 2, "epoch": 1, "received": 1 }]
+        }
+      }
+    },
+    {
+      "name": "pull.begin with no data is a protocol violation",
+      "chunks": [{ "name": "pull.begin", "data": null }],
+      "expected": { "error": "invalid pull.begin chunk: missing data" }
+    },
+    {
+      "name": "pull.record with no data is a protocol violation",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 1, "epoch": 1 } },
+        { "name": "pull.record", "data": null }
+      ],
+      "expected": { "error": "invalid pull.record chunk: missing data" }
+    },
+    {
+      "name": "a second commit re-validates the count and may advance the cursor again",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 4, "epoch": 1 } },
+        { "name": "pull.record", "data": { "space": "s1", "id": "r1", "cursor": 4 } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 0, "cursor": 5, "count": 1 } },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 0, "cursor": 6, "count": 1 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 0, "cursor": 6, "epoch": 1, "received": 1 }]
+        }
+      }
+    },
+    {
+      "name": "record entry with real CBOR byte-string payload (wire shape)",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 1, "epoch": 1 } },
+        {
+          "name": "pull.record",
+          "dataCborHex": "a562696462723164626c6f6244010203ff65737061636562733166637572736f72016b777261707065645f64656b42aabb"
+        },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 0, "cursor": 1, "count": 1 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 0, "cursor": 1, "epoch": 1, "received": 1 }]
+        }
+      }
+    },
+    {
+      "name": "file entry with byte-string blob (wire shape)",
+      "chunks": [
+        { "name": "pull.begin", "data": { "space": "s1", "prev": 0, "cursor": 2, "epoch": 1 } },
+        {
+          "name": "pull.file",
+          "dataCborHex": "a462696462663164626c6f6244deadbeef65737061636562733166637572736f7202"
+        },
+        { "name": "pull.commit", "data": { "space": "s1", "prev": 0, "cursor": 2, "count": 1 } }
+      ],
+      "expected": {
+        "ok": {
+          "spaces": [{ "space": "s1", "prev": 0, "cursor": 2, "epoch": 1, "received": 1 }]
+        }
+      }
+    }
+  ]
+}

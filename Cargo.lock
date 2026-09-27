@@ -251,6 +251,7 @@ dependencies = [
  "betterbase-discovery",
  "betterbase-file-store",
  "betterbase-sync-core",
+ "ciborium",
  "js-sys",
  "serde",
  "serde-wasm-bindgen",

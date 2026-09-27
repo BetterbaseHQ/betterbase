@@ -5,6 +5,8 @@
  */
 
 import { RpcConnection, type RpcConnectionConfig } from "./rpc-connection.js";
+import { pullAssemblyApply, pullAssemblyResult } from "./pull-assembly.js";
+import type { PullAssemblyState } from "../wasm-init.js";
 import {
   type WSSubscribeSpace,
   type WSSubscribeResult,
@@ -13,7 +15,6 @@ import {
   type WSPullSpace,
   type WSPullBeginData,
   type WSPullRecordData,
-  type WSPullCommitData,
   type WSPullFileData,
   type WSTokenRefreshResult,
   type WSSyncData,
@@ -103,6 +104,45 @@ export interface PullResult {
 /**
  * High-level WebSocket client with typed RPC operations.
  */
+/**
+ * The protocol-fields-only view of a pull chunk that the assembly reducer
+ * (`pullAssemblyApply`) actually reads. Payload bytes (`blob`,
+ * `wrapped_dek`, `data`, ...) are intentionally dropped so they never cross
+ * the wasm boundary — the reducer only tracks count, cursor, and epoch
+ * state. Unknown chunk names yield `null` (the reducer ignores them), and
+ * a chunk without data yields `null` (the reducer throws the pinned
+ * "missing data" error).
+ */
+function pullChunkMeta(name: string, data: unknown): unknown {
+  if (data === undefined || data === null) return null;
+  const d = data as Record<string, unknown>;
+  const space = d.space;
+  const base: Record<string, unknown> = {};
+  if (typeof space === "string") base.space = space;
+  // Typed fields are passed through verbatim (including wrong types) so the
+  // reducer's canonical error messages surface; only `space` is guarded
+  // (exotic non-string values can't be serialized across the boundary).
+  switch (name) {
+    case "pull.begin":
+      if (d.prev !== undefined) base.prev = d.prev;
+      if (d.epoch !== undefined) base.epoch = d.epoch;
+      if (d.rewrap_epoch !== undefined) base.rewrap_epoch = d.rewrap_epoch;
+      break;
+    case "pull.record":
+    case "pull.file":
+    case "pull.membership":
+      if (d.cursor !== undefined) base.cursor = d.cursor;
+      break;
+    case "pull.commit":
+      if (d.count !== undefined) base.count = d.count;
+      if (d.cursor !== undefined) base.cursor = d.cursor;
+      break;
+    default:
+      return null;
+  }
+  return base;
+}
+
 export class WSClient {
   private rpc: RpcConnection;
 
@@ -179,91 +219,63 @@ export class WSClient {
 
   /** Pull from spaces. Returns all records, files, and membership data. */
   async pull(spaces: WSPullSpace[]): Promise<PullResult> {
-    const result: PullResult = { spaces: new Map() };
+    // The protocol state machine (duplicate begin, monotonic cursor, commit
+    // count) is canonical in Rust (`betterbase-sync-core::pull`, via
+    // `pullAssemblyApply`). Entry payloads stay here, bucketed per space —
+    // the reducer only tracks count, cursor, and epoch state, so only the
+    // protocol fields cross the wasm boundary (payload bytes never do).
+    const buckets = new Map<
+      string,
+      {
+        records: WSPullRecordData[];
+        files: WSPullFileData[];
+        membership: WSMembershipData[];
+      }
+    >();
+    let state: PullAssemblyState | null = null;
 
     await this.rpc.callChunked(
       "pull",
       { spaces },
       (name: string, data: unknown) => {
+        state = pullAssemblyApply(state, name, pullChunkMeta(name, data));
+        if (data === undefined) return;
+        const d = data as { space?: string };
+        if (typeof d.space !== "string") return;
         switch (name) {
           case "pull.begin": {
-            const d = data as WSPullBeginData;
-            // A second begin for the same space would silently discard the
-            // first segment's records (INV-02 posture — AUD-025 review).
-            if (result.spaces.has(d.space)) {
-              throw new Error(`duplicate pull.begin for space ${d.space}`);
-            }
-            const spaceResult: PullSpaceResult = {
-              space: d.space,
-              prev: d.prev,
-              // AUD-025 (INV-02): keep the safe continuation point (prev)
-              // until entries arrive and pull.commit confirms the advertised
-              // head — a mid-stream error skips the commit, and the cursor
-              // must never advance past work that was not delivered.
-              cursor: d.prev,
-              epoch: d.epoch,
-              rewrapEpoch: d.rewrap_epoch,
-              records: [],
-              files: [],
-              membership: [],
-            };
-            result.spaces.set(d.space, spaceResult);
+            const b = data as WSPullBeginData;
+            buckets.set(b.space, { records: [], files: [], membership: [] });
             break;
           }
-          case "pull.record": {
-            const d = data as WSPullRecordData;
-            const target = result.spaces.get(d.space);
-            if (target) {
-              target.records.push(d);
-              if (d.cursor > target.cursor) target.cursor = d.cursor;
-            }
+          case "pull.record":
+            buckets.get(d.space)?.records.push(data as WSPullRecordData);
             break;
-          }
-          case "pull.membership": {
-            const d = data as WSMembershipData;
-            const target = result.spaces.get(d.space);
-            if (target) {
-              target.membership.push(d);
-              if (d.cursor > target.cursor) target.cursor = d.cursor;
-            }
+          case "pull.membership":
+            buckets.get(d.space)?.membership.push(data as WSMembershipData);
             break;
-          }
-          case "pull.file": {
-            const d = data as WSPullFileData;
-            const target = result.spaces.get(d.space);
-            if (target) {
-              target.files.push(d);
-              if (d.cursor > target.cursor) target.cursor = d.cursor;
-            }
+          case "pull.file":
+            buckets.get(d.space)?.files.push(data as WSPullFileData);
             break;
-          }
-          case "pull.commit": {
-            const d = data as WSPullCommitData;
-            const target = result.spaces.get(d.space);
-            if (target) {
-              const received =
-                target.records.length +
-                target.membership.length +
-                target.files.length;
-              if (d.count !== received) {
-                throw new Error(
-                  `pull record count mismatch for space ${d.space}: ` +
-                    `server=${d.count}, received=${received}`,
-                );
-              }
-              // The advertised head is authoritative only once the server
-              // confirms the full range was delivered (AUD-025). Monotonic
-              // like entry advancement: a commit cursor below a delivered
-              // entry's sequence must not regress the space cursor.
-              if (d.cursor !== undefined && d.cursor > target.cursor) {
-                target.cursor = d.cursor;
-              }
-            }
-            break;
-          }
         }
       },
     );
+
+    const assembled = pullAssemblyResult(state);
+    const result: PullResult = { spaces: new Map() };
+    for (const space of assembled.spaces) {
+      const bucket = buckets.get(space.space);
+      result.spaces.set(space.space, {
+        space: space.space,
+        prev: space.prev,
+        cursor: space.cursor,
+        epoch: space.epoch,
+        rewrapEpoch: space.rewrapEpoch,
+        records: bucket?.records ?? [],
+        files: bucket?.files ?? [],
+        membership: bucket?.membership ?? [],
+      });
+    }
 
     return result;
   }
