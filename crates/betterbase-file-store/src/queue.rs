@@ -22,14 +22,57 @@ pub fn is_stale_claim(meta: &FileMeta, now_ms: u64) -> bool {
         && now_ms.saturating_sub(meta.last_attempt_at.unwrap_or(0)) > STALE_UPLOAD_MS
 }
 
-/// Whether a queue pass may claim this entry: pending or errored, or a
-/// stale claim recovered as claimable. Never true for a live upload.
-pub fn is_claimable(meta: &FileMeta) -> bool {
+/// Whether a queue pass may claim this entry at an explicit clock:
+/// pending or errored, or a stale claim recovered as claimable. Never
+/// true for a live upload.
+pub fn is_claimable_at(meta: &FileMeta, now_ms: u64) -> bool {
     match meta.upload_status {
         Some(UploadStatus::Pending) | Some(UploadStatus::Error) => true,
-        Some(UploadStatus::Uploading) => is_stale_claim(meta, now_ms()),
+        Some(UploadStatus::Uploading) => is_stale_claim(meta, now_ms),
         None => false,
     }
+}
+
+/// [`is_claimable_at`] with the system clock.
+pub fn is_claimable(meta: &FileMeta) -> bool {
+    is_claimable_at(meta, now_ms())
+}
+
+/// Mark an entry claimed for upload (the persisted crash marker).
+/// Pure — the caller persists the result.
+pub fn mark_uploading(meta: &mut FileMeta, now_ms: u64) {
+    meta.upload_status = Some(UploadStatus::Uploading);
+    meta.last_attempt_at = Some(now_ms);
+}
+
+/// Record a failed attempt (status = Error, message stored, attempt
+/// count incremented). Pure — the caller persists the result.
+pub fn to_upload_error(meta: &mut FileMeta, error: &str) {
+    meta.upload_status = Some(UploadStatus::Error);
+    meta.upload_error = Some(error.to_string());
+    meta.attempts = Some(meta.attempts.unwrap_or(0) + 1);
+}
+
+/// Drop all queue state — the entry becomes a plain cache entry
+/// (evictable again). Pure — the caller persists the result.
+pub fn clear_queue_state(meta: &mut FileMeta) {
+    meta.record_id = None;
+    meta.upload_status = None;
+    meta.upload_error = None;
+    meta.queued_at = None;
+    meta.attempts = None;
+    meta.last_attempt_at = None;
+}
+
+/// Indices of `metas` that are stale uploading claims. Pure — the
+/// caller resets + persists (see `reset_stale_claims`).
+pub fn stale_indices(metas: &[FileMeta], now_ms: u64) -> Vec<usize> {
+    metas
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| is_stale_claim(m, now_ms))
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// Reset stale claims back to `Pending`, preserving attempt counts (the
@@ -40,13 +83,12 @@ pub fn reset_stale_claims(
     storage: &mut dyn StorageBackend,
     now_ms: u64,
 ) -> Result<Vec<FileMeta>, StoreError> {
+    let mut metas = storage.all_meta()?;
     let mut reset = Vec::new();
-    for mut meta in storage.all_meta()? {
-        if is_stale_claim(&meta, now_ms) {
-            meta.upload_status = Some(UploadStatus::Pending);
-            storage.put_meta(meta.clone())?;
-            reset.push(meta);
-        }
+    for i in stale_indices(&metas, now_ms) {
+        metas[i].upload_status = Some(UploadStatus::Pending);
+        storage.put_meta(metas[i].clone())?;
+        reset.push(metas[i].clone());
     }
     Ok(reset)
 }
@@ -74,8 +116,7 @@ pub fn next_claim_batch(
         if !space_has_runtime(&meta.space_id) {
             continue;
         }
-        meta.upload_status = Some(UploadStatus::Uploading);
-        meta.last_attempt_at = Some(now);
+        mark_uploading(&mut meta, now);
         storage.put_meta(meta.clone())?;
         claimed.push(meta);
     }
@@ -91,9 +132,7 @@ pub fn mark_upload_error(
     let mut meta = storage
         .get_meta(key)?
         .ok_or_else(|| StoreError::NotFound(key.to_string()))?;
-    meta.upload_status = Some(UploadStatus::Error);
-    meta.upload_error = Some(error.to_string());
-    meta.attempts = Some(meta.attempts.unwrap_or(0) + 1);
+    to_upload_error(&mut meta, error);
     storage.put_meta(meta.clone())?;
     Ok(meta)
 }
@@ -107,12 +146,7 @@ pub fn clear_upload_state(
     let mut meta = storage
         .get_meta(key)?
         .ok_or_else(|| StoreError::NotFound(key.to_string()))?;
-    meta.record_id = None;
-    meta.upload_status = None;
-    meta.upload_error = None;
-    meta.queued_at = None;
-    meta.attempts = None;
-    meta.last_attempt_at = None;
+    clear_queue_state(&mut meta);
     storage.put_meta(meta.clone())?;
     Ok(meta)
 }
@@ -251,6 +285,41 @@ mod tests {
         assert_eq!(after.upload_status, Some(UploadStatus::Error));
         assert_eq!(after.upload_error.as_deref(), Some("boom"));
         assert_eq!(after.attempts, Some(3)); // 2 + 1
+    }
+
+    #[test]
+    fn is_claimable_at_uses_explicit_clock() {
+        let now = 2_000_000;
+        // Fresh uploading at `now` is live -> not claimable.
+        let live = queued("s", "a", UploadStatus::Uploading, Some(now));
+        assert!(!is_claimable_at(&live, now));
+        // Same entry viewed from a clock past the stale window -> claimable.
+        assert!(is_claimable_at(&live, now + STALE_UPLOAD_MS + 1));
+        // Pending/error are claimable regardless of clock.
+        assert!(is_claimable_at(
+            &queued("s", "a", UploadStatus::Pending, None),
+            now
+        ));
+        assert!(is_claimable_at(
+            &queued("s", "a", UploadStatus::Error, None),
+            now
+        ));
+    }
+
+    #[test]
+    fn stale_indices_marks_each_stale_entry() {
+        let now = 2_000_000;
+        let metas = vec![
+            queued(
+                "s",
+                "a",
+                UploadStatus::Uploading,
+                Some(now - STALE_UPLOAD_MS - 1),
+            ),
+            queued("s", "b", UploadStatus::Uploading, Some(now)),
+            queued("s", "c", UploadStatus::Pending, None),
+        ];
+        assert_eq!(stale_indices(&metas, now), vec![0]);
     }
 
     #[test]

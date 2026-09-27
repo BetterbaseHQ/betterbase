@@ -248,6 +248,7 @@ dependencies = [
  "betterbase-auth",
  "betterbase-crypto",
  "betterbase-discovery",
+ "betterbase-file-store",
  "betterbase-sync-core",
  "js-sys",
  "serde",

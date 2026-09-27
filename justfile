@@ -15,6 +15,7 @@ lint:
     cargo clippy -p betterbase-discovery --all-targets -- -D warnings
     cargo clippy -p betterbase-auth --all-targets -- -D warnings
     cargo clippy -p betterbase-sync-core --all-targets -- -D warnings
+    cargo clippy -p betterbase-file-store --all-targets -- -D warnings
     cargo clippy -p betterbase-db --all-targets -- -D warnings
     cargo clippy -p betterbase-wasm --target wasm32-unknown-unknown -- -D warnings
     cargo clippy -p betterbase-db-wasm --target wasm32-unknown-unknown -- -D warnings

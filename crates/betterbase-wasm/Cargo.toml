@@ -15,6 +15,7 @@ betterbase-crypto = { path = "../betterbase-crypto" }
 betterbase-auth = { path = "../betterbase-auth" }
 betterbase-discovery = { path = "../betterbase-discovery" }
 betterbase-sync-core = { path = "../betterbase-sync-core" }
+betterbase-file-store = { path = "../betterbase-file-store" }
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

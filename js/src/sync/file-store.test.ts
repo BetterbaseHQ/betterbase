@@ -82,6 +82,83 @@ vi.mock("../crypto/webcrypto.js", () => {
   };
 });
 
+// The file policy is pure Rust exposed via wasm (file_policy.rs). Node
+// runs no wasm, so the canonical semantics are mirrored here 1:1 (same
+// rules, same tie-breaks) to keep FileStore's real logic exercised.
+vi.mock("./file-policy.js", () => {
+  const STALE_MS = 15 * 60 * 1000;
+  interface M {
+    key: string;
+    size: number;
+    cachedAt: number;
+    lastAccessedAt: number;
+    uploadStatus?: string;
+    lastAttemptAt?: number;
+    attempts?: number;
+    [k: string]: unknown;
+  }
+  const isStale = (m: M, now: number) =>
+    m.uploadStatus === "uploading" && now - (m.lastAttemptAt ?? 0) > STALE_MS;
+  return {
+    fileCacheKey: (s: string, f: string) => `${s}\0${f}`,
+    fileIsClaimable: (m: M, now: number) =>
+      m.uploadStatus === "pending" ||
+      m.uploadStatus === "error" ||
+      (m.uploadStatus === "uploading" && isStale(m, now)),
+    fileResetStale: (all: M[], now: number) =>
+      all
+        .filter((m) => isStale(m, now))
+        .map((m) => ({ ...m, uploadStatus: "pending" })),
+    fileSelectEvictionVictims: (all: M[], maxBytes: number) => {
+      let total = all.reduce((s, m) => s + m.size, 0);
+      const cands = all
+        .filter((m) => m.uploadStatus === undefined)
+        .sort(
+          (a, b) =>
+            a.lastAccessedAt - b.lastAccessedAt ||
+            a.cachedAt - b.cachedAt ||
+            (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
+        );
+      const out: string[] = [];
+      for (const m of cands) {
+        if (total <= maxBytes) break;
+        out.push(m.key);
+        total -= m.size;
+      }
+      return out;
+    },
+    fileMarkUploading: (m: M, now: number) => ({
+      ...m,
+      uploadStatus: "uploading",
+      lastAttemptAt: now,
+    }),
+    fileToUploadError: (m: M, error: string) => ({
+      ...m,
+      uploadStatus: "error",
+      uploadError: error,
+      attempts: (m.attempts ?? 0) + 1,
+    }),
+    fileClearQueueState: (m: M) => {
+      const {
+        recordId,
+        uploadStatus,
+        uploadError,
+        queuedAt,
+        attempts,
+        lastAttemptAt,
+        ...rest
+      } = m;
+      void recordId;
+      void uploadStatus;
+      void uploadError;
+      void queuedAt;
+      void attempts;
+      void lastAttemptAt;
+      return rest;
+    },
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

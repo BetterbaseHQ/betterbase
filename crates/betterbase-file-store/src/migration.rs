@@ -8,18 +8,22 @@
 
 use crate::meta::{cache_key, FileMeta, UploadStatus};
 use crate::storage::{StorageBackend, StoreError};
+use serde::{Deserialize, Serialize};
 
 /// How one file migrates.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MigrationAction {
     /// Re-key to the target space with this target record id, marked
     /// pending for upload under the target space's key.
+    #[serde(rename_all = "camelCase")]
     ReKey { target_record_id: String },
     /// Leave untouched. `reason` is surfaced to the caller (and user).
     Skip { reason: SkipReason },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SkipReason {
     /// An upload pass holds the entry object mid-flight; writing around
     /// it would let completion handlers resurrect the deleted old key.

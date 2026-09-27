@@ -75,16 +75,6 @@ export interface FileStorage {
   close?(): void | Promise<void>;
 }
 
-/** An `uploading` entry untouched for longer than this is abandoned. */
-export const STALE_UPLOAD_MS = 15 * 60 * 1000;
-
-export function isStaleUploading(meta: MetaEntry): boolean {
-  return (
-    meta.uploadStatus === "uploading" &&
-    Date.now() - (meta.lastAttemptAt ?? 0) > STALE_UPLOAD_MS
-  );
-}
-
 // ---------------------------------------------------------------------------
 // In-memory implementation — ephemeral stores (tests, harnesses, and
 // deliberately non-durable local use). For durable storage use the
@@ -130,9 +120,7 @@ export class InMemoryFileStorage implements FileStorage {
       all.filter(
         (m) =>
           m.spaceId === spaceId &&
-          (m.uploadStatus === "pending" ||
-            m.uploadStatus === "error" ||
-            isStaleUploading(m)),
+          (m.uploadStatus === "pending" || m.uploadStatus === "error"),
       ),
     );
   }

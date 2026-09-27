@@ -205,6 +205,14 @@ export interface WasmModule {
     spaceId: string,
     seq: number,
   ): string;
+  // File-store policy (pure betterbase-file-store core — see file_policy.rs).
+  fileCacheKey(spaceId: string, fileId: string): string;
+  fileIsClaimable(metaJson: string, nowMs: number): boolean;
+  fileResetStale(allMetaJson: string, nowMs: number): string;
+  fileSelectEvictionVictims(allMetaJson: string, maxBytes: number): string;
+  fileMarkUploading(metaJson: string, nowMs: number): string;
+  fileToUploadError(metaJson: string, error: string): string;
+  fileClearQueueState(metaJson: string): string;
 }
 
 // --- Shared types ---

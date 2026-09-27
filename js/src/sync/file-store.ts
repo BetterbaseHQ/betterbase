@@ -5,7 +5,10 @@
  * cache and progressively upgrades to encrypted sync when connected.
  *
  * **Local-first**: a store works immediately over its storage backend —
- * `put()`, `get()`, `getUrl()` need no auth.
+ * `put()`, `get()`, `getUrl()` need no auth. File policy (queue
+ * transitions, stale-claim window, eviction selection) runs in wasm, so
+ * `initWasm()` must have resolved before first use — it does at SDK
+ * bootstrap; standalone use must call it first.
  *
  * **Progressive sync**: Call `connect()` with sync config when auth resolves.
  * Files put with a `recordId` queue for background upload. `get()` falls
@@ -50,12 +53,19 @@ import {
   webcryptoDeriveEpochKey,
 } from "../crypto/webcrypto.js";
 import {
-  cacheKey,
   DEFAULT_SPACE_ID,
-  isStaleUploading,
   type FileStorage,
   type MetaEntry,
 } from "./file-storage.js";
+import {
+  fileCacheKey,
+  fileClearQueueState,
+  fileIsClaimable,
+  fileMarkUploading,
+  fileResetStale,
+  fileSelectEvictionVictims,
+  fileToUploadError,
+} from "./file-policy.js";
 
 export type { FileStorage, MetaEntry };
 
@@ -243,7 +253,10 @@ export class FileStore {
     // wiring mistake (anonymous bytes move via transferUnuploadedFrom);
     // surface it instead of stranding silently.
     if (this.spaceId !== config.spaceId) {
-      const stranded = await this.storage.queuedForSpace(this.spaceId);
+      const now = Date.now();
+      const stranded = (await this.storage.metaForSpace(this.spaceId)).filter(
+        (m) => fileIsClaimable(m, now),
+      );
       if (stranded.length > 0) {
         console.warn(
           `FileStore: ${stranded.length} queued entr${stranded.length === 1 ? "y is" : "ies are"} under space "${this.spaceId}" but connect() binds "${config.spaceId}" — they will not upload. Move them explicitly (transferUnuploadedFrom) or queue after connect.`,
@@ -412,7 +425,7 @@ export class FileStore {
     const fileData = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
     const effectiveSpaceId = spaceId ?? this.spaceId;
 
-    const key = cacheKey(effectiveSpaceId, id);
+    const key = fileCacheKey(effectiveSpaceId, id);
     const now = Date.now();
 
     const meta: MetaEntry = {
@@ -457,7 +470,7 @@ export class FileStore {
   async get(id: string, spaceId?: string): Promise<Uint8Array | null> {
     validateFileId(id);
     const effectiveSpaceId = spaceId ?? this.spaceId;
-    const key = cacheKey(effectiveSpaceId, id);
+    const key = fileCacheKey(effectiveSpaceId, id);
 
     try {
       const data = await this.storage.getBlob(key);
@@ -516,7 +529,13 @@ export class FileStore {
    */
   async transferUnuploadedFrom(from: FileStore): Promise<number> {
     if (from === this) return 0;
-    const queued = await from.storage.queuedForSpace(from.spaceId);
+    const now = Date.now();
+    // Claimable = pending/errored/stale-uploading (Rust policy): a LIVE
+    // upload is never transferred — moving it would race the in-flight
+    // pass and resurrect the source key on completion.
+    const queued = (await from.storage.metaForSpace(from.spaceId)).filter((m) =>
+      fileIsClaimable(m, now),
+    );
 
     let transferred = 0;
     let failed = 0;
@@ -526,7 +545,7 @@ export class FileStore {
       }
       const blob = await from.storage.getBlob(meta.key);
       if (!blob) continue; // bytes already gone — nothing to preserve
-      const key = cacheKey(this.spaceId, meta.fileId);
+      const key = fileCacheKey(this.spaceId, meta.fileId);
       if (await this.storage.metaHas(key)) continue;
       const now = Date.now();
       const target: MetaEntry = {
@@ -580,7 +599,7 @@ export class FileStore {
     spaceId?: string,
   ): Promise<string | null> {
     validateFileId(id);
-    const key = cacheKey(spaceId ?? this.spaceId, id);
+    const key = fileCacheKey(spaceId ?? this.spaceId, id);
 
     const cached = this.urlCache.get(key);
     if (cached !== undefined) {
@@ -611,7 +630,7 @@ export class FileStore {
    */
   async evict(id: string, spaceId?: string): Promise<void> {
     validateFileId(id);
-    const key = cacheKey(spaceId ?? this.spaceId, id);
+    const key = fileCacheKey(spaceId ?? this.spaceId, id);
 
     const url = this.urlCache.get(key);
     if (url) {
@@ -641,7 +660,9 @@ export class FileStore {
   async has(id: string, spaceId?: string): Promise<boolean> {
     validateFileId(id);
     try {
-      return await this.storage.metaHas(cacheKey(spaceId ?? this.spaceId, id));
+      return await this.storage.metaHas(
+        fileCacheKey(spaceId ?? this.spaceId, id),
+      );
     } catch (err) {
       console.error("[betterbase-sync] Cache has() check failed:", err);
       return false;
@@ -694,10 +715,9 @@ export class FileStore {
       // Scan every space — entries queue under whichever space the file
       // belongs to (personal or shared), and a shared space's runtime may
       // register long after its entries were queued.
+      const now = Date.now();
       const allMeta = await this.storage.allMeta();
-      const entries = allMeta.filter(
-        (m) => m.uploadStatus === "pending" || m.uploadStatus === "error",
-      );
+      const entries = allMeta.filter((m) => fileIsClaimable(m, now));
       if (entries.length === 0) break;
 
       const countBefore = entries.length;
@@ -706,8 +726,8 @@ export class FileStore {
         await this.processOneUpload(entry);
       }
 
-      const remaining = (await this.storage.allMeta()).filter(
-        (m) => m.uploadStatus === "pending" || m.uploadStatus === "error",
+      const remaining = (await this.storage.allMeta()).filter((m) =>
+        fileIsClaimable(m, now),
       );
       // No progress (errored entries, or spaces without a runtime yet) →
       // exit rather than spin. Entries that ARRIVED mid-pass break this
@@ -781,8 +801,8 @@ export class FileStore {
     for (const fileId of fileIds) {
       try {
         validateFileId(fileId);
-        const fromKey = cacheKey(fromSpaceId, fileId);
-        const toKey = cacheKey(toSpaceId, fileId);
+        const fromKey = fileCacheKey(fromSpaceId, fileId);
+        const toKey = fileCacheKey(toSpaceId, fileId);
 
         let oldMeta = await this.storage.getMeta(fromKey);
         if (oldMeta?.uploadStatus === "uploading") {
@@ -975,19 +995,14 @@ export class FileStore {
    * fires (each a full metadata scan) made recovery O(n²).
    */
   private async resetStaleUploading(): Promise<void> {
-    const allMeta = await this.storage.allMeta();
-    const stale = allMeta.filter(isStaleUploading);
-    if (stale.length === 0) return;
-    for (const entry of stale) {
-      entry.uploadStatus = "pending";
-      await this.storage.putMeta(entry);
-    }
+    const updated = fileResetStale(await this.storage.allMeta(), Date.now());
+    if (updated.length === 0) return;
+    for (const entry of updated) await this.storage.putMeta(entry);
     await this.fireQueueChange();
   }
 
   private async markUploading(entry: MetaEntry): Promise<void> {
-    entry.uploadStatus = "uploading";
-    entry.lastAttemptAt = Date.now();
+    Object.assign(entry, fileMarkUploading(entry, Date.now()));
     await this.persistQueueEntry(entry);
   }
 
@@ -996,19 +1011,22 @@ export class FileStore {
     err: unknown,
     fallbackMessage: string,
   ): Promise<void> {
-    entry.uploadStatus = "error";
-    entry.uploadError = err instanceof Error ? err.message : fallbackMessage;
-    entry.attempts = (entry.attempts ?? 0) + 1;
+    const message = err instanceof Error ? err.message : fallbackMessage;
+    Object.assign(entry, fileToUploadError(entry, message));
     await this.persistQueueEntry(entry);
   }
 
   private async clearUploadState(entry: MetaEntry): Promise<void> {
+    // The Rust transition expresses "clear" as the ABSENCE of the queue
+    // fields, and Object.assign alone can't delete — drop them from the
+    // shared entry before adopting the canonical result.
+    delete entry.recordId;
     delete entry.uploadStatus;
     delete entry.uploadError;
-    delete entry.recordId;
     delete entry.queuedAt;
     delete entry.attempts;
     delete entry.lastAttemptAt;
+    Object.assign(entry, fileClearQueueState(entry));
     await this.persistQueueEntry(entry);
   }
 
@@ -1232,7 +1250,7 @@ export class FileStore {
 
     // Cache locally (best-effort)
     try {
-      const key = cacheKey(effectiveSpaceId, id);
+      const key = fileCacheKey(effectiveSpaceId, id);
       const now = Date.now();
       await this.storage.putFile(
         {
@@ -1295,24 +1313,20 @@ export class FileStore {
     await this.resetStaleUploading();
 
     const allMeta = await this.storage.allMeta();
-    let totalBytes = 0;
-    for (const meta of allMeta) {
-      totalBytes += meta.size;
-    }
-
+    const totalBytes = allMeta.reduce((sum, m) => sum + m.size, 0);
     if (totalBytes <= this.maxCacheBytes) return;
 
-    allMeta.sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
+    // Victim selection lives in Rust (eviction.rs): coldest plain-cache
+    // entries first, deterministic tie-break; queue entries are never
+    // selected — their local blob may be the only copy of bytes not yet
+    // acknowledged by the server.
+    const victims = new Set(
+      fileSelectEvictionVictims(allMeta, this.maxCacheBytes),
+    );
 
     let evicted = false;
     for (const meta of allMeta) {
-      if (totalBytes <= this.maxCacheBytes) break;
-      // Queue entries are protected: their local blob may be the only copy
-      // of bytes not yet acknowledged by the server. Stale `uploading`
-      // entries stay protected too — the queue scan resets them within
-      // STALE_UPLOAD_MS, after which they either upload (protection ends
-      // with the queue state) or drop themselves when the blob is gone.
-      if (meta.uploadStatus !== undefined) continue;
+      if (!victims.has(meta.key)) continue;
 
       await this.storage.deleteFile(meta.key);
 
@@ -1322,7 +1336,6 @@ export class FileStore {
         this.urlCache.delete(meta.key);
       }
 
-      totalBytes -= meta.size;
       evicted = true;
     }
     if (evicted) this.notify();
