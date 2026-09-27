@@ -238,6 +238,20 @@ export interface WasmModule {
   parseMembershipEntry(payload: string): MembershipEntryPayload;
   serializeMembershipEntry(entryJson: string): string;
   verifyMembershipEntry(payload: string, spaceId: string): boolean;
+  /**
+   * Canonical verified membership-log fold (audit G4): parse + verify +
+   * status/ordering semantics in one pass. `now` is Unix seconds (UCAN
+   * expiry). `removedDid`, when set, also returns the removal output for
+   * that member and excludes them from `active`. Poison entries (malformed
+   * or unverifiable) are skipped and listed in `skipped` — they never abort
+   * the fold. Throws on a verified entry with an unknown UCAN permission.
+   */
+  foldMembershipLog(
+    payloads: string[],
+    spaceId: string,
+    now: number,
+    removedDid?: string,
+  ): MembershipLogFold;
   encryptMembershipPayload(
     payload: string,
     key: Uint8Array,
@@ -396,6 +410,61 @@ export interface MembershipEntryPayload {
   publicKeyJwk?: JsonWebKey;
   signerHandle?: string;
   recipientHandle?: string;
+}
+
+// --- Membership-log fold (audit G4) ---
+
+export type FoldedRole = "admin" | "write" | "read";
+export type FoldedStatus = "joined" | "pending" | "declined" | "revoked";
+
+/** One member (from their latest delegation; insertion order = first-seen). */
+export interface FoldedMember {
+  did: string;
+  role: FoldedRole;
+  status: FoldedStatus;
+  handle?: string;
+}
+
+/**
+ * One active member (latest non-revoked delegation) for key distribution and
+ * log re-encryption. Order follows Map upsert semantics: first activation
+ * sets a member's position; re-activation after a revocation moves it to the
+ * end.
+ */
+export interface FoldedActive {
+  did: string;
+  /** The delegated member's P-256 public key (JWK), if present. */
+  publicKeyJwk?: JsonWebKey;
+  /** The serialized `d` entry payload (for re-encryption). */
+  payload: string;
+}
+
+/** Last known contact for a removed member (for the revocation notice). */
+export interface FoldedRemovedContact {
+  mailboxId: string;
+  publicKeyJwk: JsonWebKey;
+}
+
+/** Removal output for `removedDid`. */
+export interface FoldedRemoved {
+  /** All UCANs granted to the member (for CID computation). */
+  ucans: string[];
+  /** UCANs needing revocation log entries (non-perpetual only). */
+  revocable: string[];
+  /** Last entry with both mailbox_id and public_key_jwk, if any. */
+  contact?: FoldedRemovedContact;
+}
+
+/** The full fold over a membership log. */
+export interface MembershipLogFold {
+  /** Every member from their latest delegation, in first-seen order. */
+  members: FoldedMember[];
+  /** Active members for key distribution/re-encryption. */
+  active: FoldedActive[];
+  /** Removal output, only when `removedDid` was given. */
+  removed?: FoldedRemoved;
+  /** Indices (into `payloads`) of skipped poison entries. */
+  skipped: number[];
 }
 
 // --- Singleton ---

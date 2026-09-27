@@ -3,9 +3,10 @@
 use crate::error::{to_js_error, to_js_value};
 use betterbase_sync_core::{
     build_membership_signing_message, decode_envelope, decrypt_membership_payload, decrypt_record,
-    derive_forward, encode_envelope, encrypt_membership_payload, encrypt_record, pad_to_bucket,
-    parse_membership_entry, peek_epoch, rewrap_deks, serialize_membership_entry, unpad,
-    verify_membership_entry, BlobEnvelope, MembershipEntryType, DEFAULT_PADDING_BUCKETS,
+    derive_forward, encode_envelope, encrypt_membership_payload, encrypt_record,
+    fold_membership_log, pad_to_bucket, parse_membership_entry, peek_epoch, rewrap_deks,
+    serialize_membership_entry, unpad, verify_membership_entry, BlobEnvelope, MembershipEntryType,
+    DEFAULT_PADDING_BUCKETS,
 };
 use wasm_bindgen::prelude::*;
 
@@ -260,6 +261,33 @@ pub fn wasm_parse_membership_entry(payload: &str) -> Result<JsValue, JsValue> {
 pub fn wasm_serialize_membership_entry(entry_json: &str) -> Result<String, JsValue> {
     let entry = parse_membership_entry(entry_json).map_err(to_js_error)?;
     Ok(serialize_membership_entry(&entry))
+}
+
+/// Fold a decrypted membership log into member state (the canonical, verified
+/// fold — the TS `parseMembershipLog` / `collectMemberState` / `doRemoveMember`
+/// folds all collapse onto this).
+///
+/// `payloads`: serialized entry payloads in chain_seq order (after
+/// decryption). `now`: current Unix seconds (UCAN expiry; injected for
+/// determinism). `removed_did`: when set, also fold the removal output for
+/// that member (their UCANs + last contact) and exclude them from `active`.
+///
+/// Poison tolerance: malformed/unverifiable entries are skipped and counted
+/// in `skipped`; the fold never aborts on them. A verified entry with an
+/// unknown UCAN permission is a protocol mismatch and fails the fold.
+#[wasm_bindgen(js_name = "foldMembershipLog")]
+pub fn wasm_fold_membership_log(
+    payloads: Vec<String>,
+    space_id: &str,
+    // `f64` (not `i64`): i64 crosses the wasm boundary as a JS BigInt,
+    // but callers pass a number. Same convention as `file_policy.rs`;
+    // Unix seconds are well within f64's exact-integer range.
+    now: f64,
+    removed_did: Option<String>,
+) -> Result<JsValue, JsValue> {
+    let fold = fold_membership_log(&payloads, space_id, now as i64, removed_did.as_deref())
+        .map_err(to_js_error)?;
+    to_js_value(&fold)
 }
 
 #[wasm_bindgen(js_name = "verifyMembershipEntry")]

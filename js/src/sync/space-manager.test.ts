@@ -11,8 +11,10 @@ import {
   serializeMembershipEntry,
   parseMembershipEntry,
   parseUCANPayload,
+  buildMembershipSigningMessage,
   type MembershipEntryPayload,
 } from "./membership.js";
+import { encodeDidKeyFromJwk } from "./membership-fold-mock.js";
 import { advanceEpoch, rewrapAllDEKs } from "./reencrypt.js";
 import { createSharedSpace } from "./spaces.js";
 import { decryptJwe } from "../auth/internals.js";
@@ -24,7 +26,6 @@ import type { TypedAdapter } from "../db";
 // ---------------------------------------------------------------------------
 
 const state = vi.hoisted(() => ({
-  verifyResult: true as boolean,
   destroyedCryptos: [] as number[],
 }));
 
@@ -53,7 +54,7 @@ vi.mock("../crypto/index.js", () => {
 
 vi.mock("../crypto/internals.js", () => ({
   sign: () => new Uint8Array([1, 2, 3, 4]),
-  verify: () => state.verifyResult,
+  verify: () => true,
   delegateUCAN: (
     _priv: unknown,
     opts: {
@@ -82,21 +83,6 @@ vi.mock("../wasm-init.js", async () => {
         const out = new Uint8Array(32);
         out.set(bytes.slice(0, 8));
         return out;
-      },
-      // Membership verification is Rust-authoritative (wasm); the mock keeps
-      // the existing verifyResult on/off contract for fold tests, plus the
-      // real verifier's poison tolerance: a malformed UCAN reads as false.
-      verifyMembershipEntry: (payload: string): boolean => {
-        try {
-          const p = JSON.parse(payload) as { u?: unknown };
-          const parts = typeof p.u === "string" ? p.u.split(".") : [];
-          if (parts.length !== 3 || !/^[A-Za-z0-9_-]+$/.test(parts[1] ?? "")) {
-            return false;
-          }
-        } catch {
-          return false;
-        }
-        return state.verifyResult;
       },
     }),
   };
@@ -184,23 +170,130 @@ function ucan(
   return `h.${bytesToBase64Url(new TextEncoder().encode(JSON.stringify(body)))}.AQIDBA`;
 }
 
+/**
+ * Real ECDSA fixtures for membership log entries.
+ *
+ * The canonical fold verifies signatures in Rust (audit G4), so log entries
+ * in these tests are signed with real P-256 keys (node WebCrypto) — fake
+ * DIDs/signatures are skipped by the verifier and would not exercise the
+ * state machine.
+ */
+interface TestIdentity {
+  did: string;
+  private: CryptoKey;
+  jwk: JsonWebKey;
+}
+
+const identities = new Map<string, TestIdentity>();
+
+/** Real P-256 identity (signing key + did:key), memoized by name. */
+async function ident(name: string): Promise<TestIdentity> {
+  const hit = identities.get(name);
+  if (hit) return hit;
+  const { publicKey, privateKey } = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign"],
+  );
+  const jwk = (await crypto.subtle.exportKey("jwk", publicKey)) as JsonWebKey;
+  const id: TestIdentity = {
+    did: encodeDidKeyFromJwk(jwk),
+    private: privateKey,
+    jwk,
+  };
+  identities.set(name, id);
+  return id;
+}
+
+/** Real signed UCAN (ES256 over `header.payload`, raw r||s, no prf). */
+async function signedUcan(
+  issuer: TestIdentity,
+  audience: TestIdentity,
+  cmd: string,
+  opts: { exp?: number } = {},
+): Promise<string> {
+  const enc = new TextEncoder();
+  const body: Record<string, unknown> = {
+    iss: issuer.did,
+    aud: audience.did,
+    cmd,
+    with: "space:s1",
+    nonce: `n${issuer.did.slice(-4)}${audience.did.slice(-4)}`,
+    prf: [],
+  };
+  if (opts.exp !== undefined) body.exp = opts.exp;
+  const header = bytesToBase64Url(
+    enc.encode(JSON.stringify({ alg: "ES256", typ: "JWT" })),
+  );
+  const payload = bytesToBase64Url(enc.encode(JSON.stringify(body)));
+  const sig = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      issuer.private,
+      enc.encode(`${header}.${payload}`),
+    ),
+  );
+  return `${header}.${payload}.${bytesToBase64Url(sig)}`;
+}
+
 interface RawEntrySpec {
   seq: number;
   type: "d" | "a" | "x" | "r";
-  ucan: string;
-  signerDID: string;
+  issuer: TestIdentity;
+  audience: TestIdentity;
+  cmd: string;
+  /** Entry signer; defaults to issuer (d/x/r) or audience (a). */
+  signer?: TestIdentity;
   signerHandle?: string;
   recipientHandle?: string;
   mailboxId?: string;
+  publicKeyJwk?: JsonWebKey;
+  /** UCAN exp in Unix seconds (for expiry tests). */
+  exp?: number;
+  /** Sign the entry with a different key (invalid-signature tests). */
+  badSignature?: boolean;
+  /** Poison entry: UCAN body is not valid base64url. */
+  malformedUcan?: boolean;
 }
 
-/** Build a membership log entry (encrypted with the identity mock crypto). */
-function logEntry(spec: RawEntrySpec) {
+/**
+ * Build a real signed membership log entry (encrypted with the identity
+ * mock crypto).
+ */
+async function logEntry(spec: RawEntrySpec): Promise<{
+  chain_seq: number;
+  prev_hash: Uint8Array;
+  entry_hash: Uint8Array;
+  payload: Uint8Array;
+}> {
+  const signer =
+    spec.signer ?? (spec.type === "a" ? spec.audience : spec.issuer);
+  const ucanStr = spec.malformedUcan
+    ? "h.!!!not-base64url!!!.AQIDBA"
+    : await signedUcan(spec.issuer, spec.audience, spec.cmd, { exp: spec.exp });
+  const message = buildMembershipSigningMessage(
+    spec.type,
+    "s1",
+    signer.did,
+    ucanStr,
+    spec.signerHandle ?? "",
+    spec.recipientHandle ?? "",
+  );
+  const sigKey = spec.badSignature
+    ? (await ident("wrong")).private
+    : signer.private;
+  const signature = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      sigKey,
+      message,
+    ),
+  );
   const payload: MembershipEntryPayload = {
-    ucan: spec.ucan,
+    ucan: ucanStr,
     type: spec.type,
-    signature: new Uint8Array([1, 2, 3, 4]),
-    signerPublicKey: jwkFor(spec.signerDID),
+    signature,
+    signerPublicKey: signer.jwk,
     epoch: 1,
     ...(spec.signerHandle !== undefined
       ? { signerHandle: spec.signerHandle }
@@ -209,6 +302,9 @@ function logEntry(spec: RawEntrySpec) {
       ? { recipientHandle: spec.recipientHandle }
       : {}),
     ...(spec.mailboxId !== undefined ? { mailboxId: spec.mailboxId } : {}),
+    ...(spec.publicKeyJwk !== undefined
+      ? { publicKeyJwk: spec.publicKeyJwk }
+      : {}),
   };
   return {
     chain_seq: spec.seq,
@@ -270,7 +366,7 @@ describe("SpaceManager", () => {
 
   /** Scriptable membership log served over the fake WS. */
   let membershipLog: {
-    entries: ReturnType<typeof logEntry>[];
+    entries: Awaited<ReturnType<typeof logEntry>>[];
     metadataVersion: number;
   };
 
@@ -282,7 +378,6 @@ describe("SpaceManager", () => {
     // mockReset restores advanceEpoch to the real implementation (the wire
     // path against the fake server); individual tests may stub it further.
     vi.mocked(advanceEpoch).mockReset();
-    state.verifyResult = true;
     state.destroyedCryptos.length = 0;
     resetFakeWebSocket();
     server = new FakeSyncServer();
@@ -402,13 +497,16 @@ describe("SpaceManager", () => {
 
   describe("getMembers — membership log state machine", () => {
     it("lists delegated members as pending until they accept", async () => {
+      const self = await ident("self");
+      const alice = await ident("alice");
       await activate({ members: undefined, membershipLogSeq: undefined });
       membershipLog.entries = [
-        logEntry({
+        await logEntry({
           seq: 1,
           type: "d",
-          ucan: ucan(SELF_DID, "did:key:mock-alice", "/space/write"),
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: alice,
+          cmd: "/space/write",
         }),
       ];
 
@@ -416,7 +514,7 @@ describe("SpaceManager", () => {
 
       expect(members).toEqual([
         {
-          did: "did:key:mock-alice",
+          did: alice.did,
           role: "write",
           status: "pending",
           handle: undefined,
@@ -425,24 +523,24 @@ describe("SpaceManager", () => {
     });
 
     it("marks accepted members joined with their acceptance handle", async () => {
+      const self = await ident("self");
+      const alice = await ident("alice");
       await activate();
       membershipLog.entries = [
-        logEntry({
+        await logEntry({
           seq: 1,
           type: "d",
-          ucan: ucan(SELF_DID, "did:key:mock-alice", "/space/write"),
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: alice,
+          cmd: "/space/write",
           recipientHandle: "alice@invited.test",
         }),
-        logEntry({
+        await logEntry({
           seq: 2,
           type: "a",
-          ucan: ucan(
-            "did:key:mock-alice",
-            "did:key:mock-alice",
-            "/space/write",
-          ),
-          signerDID: "did:key:mock-alice",
+          issuer: alice,
+          audience: alice,
+          cmd: "/space/write",
           signerHandle: "alice@test",
         }),
       ];
@@ -454,13 +552,15 @@ describe("SpaceManager", () => {
     });
 
     it("treats self-issued delegation as joined (the creator)", async () => {
+      const self = await ident("self");
       await activate();
       membershipLog.entries = [
-        logEntry({
+        await logEntry({
           seq: 1,
           type: "d",
-          ucan: ucan(SELF_DID, SELF_DID, "/space/admin"),
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: self,
+          cmd: "/space/admin",
           signerHandle: "self@test",
         }),
       ];
@@ -468,38 +568,45 @@ describe("SpaceManager", () => {
       const members = await manager.getMembers("s1");
 
       expect(members[0]).toMatchObject({
-        did: SELF_DID,
+        did: self.did,
         status: "joined",
         role: "admin",
       });
     });
 
     it("applies declines and revocations over delegations", async () => {
+      const self = await ident("self");
+      const bob = await ident("bob");
+      const carol = await ident("carol");
       await activate();
       membershipLog.entries = [
-        logEntry({
+        await logEntry({
           seq: 1,
           type: "d",
-          ucan: ucan(SELF_DID, "did:key:mock-bob", "/space/write"),
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: bob,
+          cmd: "/space/write",
         }),
-        logEntry({
+        await logEntry({
           seq: 2,
           type: "d",
-          ucan: ucan(SELF_DID, "did:key:mock-carol", "/space/read"),
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: carol,
+          cmd: "/space/read",
         }),
-        logEntry({
+        await logEntry({
           seq: 3,
           type: "x",
-          ucan: ucan("did:key:mock-bob", "did:key:mock-bob", "/space/write"),
-          signerDID: "did:key:mock-bob",
+          issuer: bob,
+          audience: bob,
+          cmd: "/space/write",
         }),
-        logEntry({
+        await logEntry({
           seq: 4,
           type: "r",
-          ucan: ucan(SELF_DID, "did:key:mock-carol", "/space/read"),
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: carol,
+          cmd: "/space/read",
         }),
       ];
 
@@ -507,81 +614,94 @@ describe("SpaceManager", () => {
       const byDid = Object.fromEntries(members.map((m) => [m.did, m.status]));
 
       expect(byDid).toEqual({
-        "did:key:mock-bob": "declined",
-        "did:key:mock-carol": "revoked",
+        [bob.did]: "declined",
+        [carol.did]: "revoked",
       });
     });
 
     it("skips entries with expired UCANs and invalid signatures", async () => {
+      const self = await ident("self");
+      const expired = await ident("expired");
+      const badsig = await ident("badsig");
       await activate();
       membershipLog.entries = [
-        logEntry({
+        // Entry 1 is skipped by the clock (UCAN expired long ago).
+        await logEntry({
           seq: 1,
           type: "d",
-          ucan: ucan(SELF_DID, "did:key:mock-expired", "/space/write", {
-            exp: 1000, // long past
-          }),
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: expired,
+          cmd: "/space/write",
+          exp: 1000,
         }),
-        logEntry({
+        // Entry 2 is skipped by the signature check (wrong key signed it).
+        await logEntry({
           seq: 2,
           type: "d",
-          ucan: ucan(SELF_DID, "did:key:mock-badsig", "/space/write"),
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: badsig,
+          cmd: "/space/write",
+          badSignature: true,
         }),
       ];
-
-      // Invalidate the second entry's signature (first entry expired by clock)
-      state.verifyResult = false;
 
       const members = await manager.getMembers("s1");
       expect(members).toEqual([]);
     });
 
     it("a malformed UCAN fails closed per entry, not the whole log", async () => {
+      const self = await ident("self");
+      const alice = await ident("alice");
       await activate();
       membershipLog.entries = [
-        logEntry({
+        await logEntry({
           seq: 1,
           type: "d",
-          ucan: ucan(SELF_DID, "did:key:mock-alice", "/space/write"),
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: alice,
+          cmd: "/space/write",
         }),
         // Poison entry: invalid base64url in the UCAN body. A member can
         // pre-position this before their revocation to try to freeze the
         // victim's member list — it must be skipped, not abort parsing.
-        logEntry({
+        await logEntry({
           seq: 2,
           type: "r",
-          ucan: "h.!!!not-base64url!!!.AQIDBA",
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: alice,
+          cmd: "/space/write",
+          malformedUcan: true,
         }),
-        logEntry({
+        await logEntry({
           seq: 3,
           type: "r",
-          ucan: ucan(SELF_DID, "did:key:mock-alice", "/space/write"),
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: alice,
+          cmd: "/space/write",
         }),
       ];
 
       const members = await manager.getMembers("s1");
 
       // The valid revocation at seq 3 still applies — alice is revoked,
-      // and the parse completed despite the poison at seq 2
+      // and the fold completed despite the poison at seq 2
       expect(members[0]).toMatchObject({
-        did: "did:key:mock-alice",
+        did: alice.did,
         status: "revoked",
       });
     });
 
     it("caches the parsed list and uses incremental fetch when unchanged", async () => {
+      const self = await ident("self");
+      const alice = await ident("alice");
       await activate();
       membershipLog.entries = [
-        logEntry({
+        await logEntry({
           seq: 1,
           type: "d",
-          ucan: ucan(SELF_DID, "did:key:mock-alice", "/space/write"),
-          signerDID: SELF_DID,
+          issuer: self,
+          audience: alice,
+          cmd: "/space/write",
         }),
       ];
       await manager.getMembers("s1"); // populates cache
@@ -600,7 +720,7 @@ describe("SpaceManager", () => {
       const members = await manager.getMembers("s1");
 
       expect(listCalls).toEqual([{ since: 1 }]);
-      expect(members[0]!.did).toBe("did:key:mock-alice");
+      expect(members[0]!.did).toBe(alice.did);
       // Persisted cache on the space record
       expect(db.records.get("rec-1")!.members).toEqual(members);
       expect(db.records.get("rec-1")!.membershipLogSeq).toBe(1);
@@ -842,42 +962,68 @@ describe("SpaceManager", () => {
 
   describe("removeMember (fresh-key rotation, AUD-024)", () => {
     it("shares reach re-invited members but not stale revoked delegations", async () => {
+      const self = await ident("self");
+      const victim = await ident("victim");
+      const friend = await ident("friend");
+      const ghost = await ident("ghost");
+      const reinvite = await ident("reinvite");
       await activate();
 
-      const memberEntry = (aud: string) => ({
-        ucan: ucan(SELF_DID, aud, "/space/write", { with: "space:s1" }),
-        type: "d" as const,
-        signature: new Uint8Array([1, 2, 3, 4]),
-        signerPublicKey: jwkFor(SELF_DID),
-        epoch: 1,
-        mailboxId: `mbx-${aud}`,
-        publicKeyJwk: jwkFor(aud),
-      });
-      const revokeEntry = (aud: string) => ({
-        ucan: ucan(SELF_DID, aud, "/space/write", { with: "space:s1" }),
-        type: "r" as const,
-        signature: new Uint8Array([1, 2, 3, 4]),
-        signerPublicKey: jwkFor(SELF_DID),
-        epoch: 1,
-      });
       // Log: friend delegated; ghost delegated then revoked (never
       // re-invited); reinvite target revoked then re-invited; the victim.
-      const seq = (
-        entry: ReturnType<typeof memberEntry> | ReturnType<typeof revokeEntry>,
-        n: number,
-      ) => ({
-        chain_seq: n,
-        prev_hash: new Uint8Array(0),
-        entry_hash: new Uint8Array(0),
-        payload: new TextEncoder().encode(serializeMembershipEntry(entry)),
-      });
       membershipLog.entries = [
-        seq(memberEntry("did:key:victim"), 1),
-        seq(memberEntry("did:key:friend"), 2),
-        seq(memberEntry("did:key:ghost"), 3),
-        seq(revokeEntry("did:key:ghost"), 4),
-        seq(revokeEntry("did:key:reinvite"), 5),
-        seq(memberEntry("did:key:reinvite"), 6),
+        await logEntry({
+          seq: 1,
+          type: "d",
+          issuer: self,
+          audience: victim,
+          cmd: "/space/write",
+          // Valid 64-char hex so the victim's revocation notice actually
+          // reaches invitation.create (sendRawMessage validates the ID).
+          mailboxId: "cd".repeat(32),
+          publicKeyJwk: victim.jwk,
+        }),
+        await logEntry({
+          seq: 2,
+          type: "d",
+          issuer: self,
+          audience: friend,
+          cmd: "/space/write",
+          mailboxId: `mbx-${friend.did}`,
+          publicKeyJwk: friend.jwk,
+        }),
+        await logEntry({
+          seq: 3,
+          type: "d",
+          issuer: self,
+          audience: ghost,
+          cmd: "/space/write",
+          mailboxId: `mbx-${ghost.did}`,
+          publicKeyJwk: ghost.jwk,
+        }),
+        await logEntry({
+          seq: 4,
+          type: "r",
+          issuer: self,
+          audience: ghost,
+          cmd: "/space/write",
+        }),
+        await logEntry({
+          seq: 5,
+          type: "r",
+          issuer: self,
+          audience: reinvite,
+          cmd: "/space/write",
+        }),
+        await logEntry({
+          seq: 6,
+          type: "d",
+          issuer: self,
+          audience: reinvite,
+          cmd: "/space/write",
+          mailboxId: `mbx-${reinvite.did}`,
+          publicKeyJwk: reinvite.jwk,
+        }),
       ];
 
       let shareRecipients: string[] = [];
@@ -901,68 +1047,61 @@ describe("SpaceManager", () => {
       });
       server.handle("invitation.create", () => ({ id: "inv-notice" }));
 
-      await manager.removeMember("s1", "did:key:victim");
+      await manager.removeMember("s1", victim.did);
 
       // Active members receive shares: friend (never revoked) and reinvite
-      // (revoked then re-invited). Ghost's stale delegation does NOT.
-      expect(shareRecipients.sort()).toEqual([
-        "did:key:friend",
-        "did:key:mock-self",
-        "did:key:reinvite",
-      ]);
+      // (revoked then re-invited). Ghost's stale delegation does NOT. The
+      // manager's own identity (config selfDID) always receives a share.
+      expect([...shareRecipients].sort()).toEqual(
+        [SELF_DID, friend.did, reinvite.did].sort(),
+      );
 
       // The rebuilt log carries only active members' delegations: the
-      // ghost's stale pre-revocation entry and the victim's delegations
-      // must not be resurrected.
+      // ghost's stale pre-revocation entry and the victim's delegation must
+      // not be resurrected. Fixture UCANs are perpetual (non-revocable), so
+      // no revocation entries are appended either — the exact composition is
+      // friend + reinvite and nothing else.
       const appendedAudiences = appendedPayloads
-        .map(
-          (payload) =>
-            parseUCANPayload(
-              parseMembershipEntry(new TextDecoder().decode(payload)).ucan,
-            ).audienceDID,
-        )
+        .map((payload) => {
+          const e = parseMembershipEntry(new TextDecoder().decode(payload));
+          return parseUCANPayload(e.ucan).audienceDID;
+        })
         .sort();
-      expect(appendedAudiences).toEqual(["did:key:friend", "did:key:reinvite"]);
-      expect(appendedAudiences).not.toContain("did:key:ghost");
-      expect(appendedAudiences).not.toContain("did:key:victim");
+      expect(appendedAudiences).toEqual([friend.did, reinvite.did].sort());
     });
 
     it("names the member DID on revoke, distributes shares to remaining members only, and rewraps with a fresh key", async () => {
+      const self = await ident("self");
+      const victim = await ident("victim");
+      const friend = await ident("friend");
       await activate();
 
-      const memberEntry = (aud: string) => ({
-        ucan: ucan(SELF_DID, aud, "/space/write", { with: "space:s1" }),
-        type: "d" as const,
-        signature: new Uint8Array([1, 2, 3, 4]),
-        signerPublicKey: jwkFor(SELF_DID),
-        epoch: 1,
-        mailboxId: `mbx-${aud}`,
-        publicKeyJwk: jwkFor(aud),
-      });
       membershipLog.entries = [
-        {
-          chain_seq: 1,
-          prev_hash: new Uint8Array(0),
-          entry_hash: new Uint8Array(0),
-          payload: new TextEncoder().encode(
-            serializeMembershipEntry(memberEntry("did:key:victim")),
-          ),
-        },
-        {
-          chain_seq: 2,
-          prev_hash: new Uint8Array(0),
-          entry_hash: new Uint8Array(0),
-          payload: new TextEncoder().encode(
-            serializeMembershipEntry(memberEntry("did:key:friend")),
-          ),
-        },
+        await logEntry({
+          seq: 1,
+          type: "d",
+          issuer: self,
+          audience: victim,
+          cmd: "/space/write",
+          // Valid 64-char hex so the victim's revocation notice actually
+          // reaches invitation.create (sendRawMessage validates the ID).
+          mailboxId: "cd".repeat(32),
+          publicKeyJwk: victim.jwk,
+        }),
+        await logEntry({
+          seq: 2,
+          type: "d",
+          issuer: self,
+          audience: friend,
+          cmd: "/space/write",
+          mailboxId: "cd".repeat(32),
+          publicKeyJwk: friend.jwk,
+        }),
       ];
       const order: string[] = [];
       server.handle("membership.revoke", (params) => {
         order.push("revoke");
-        expect((params as { member_did?: string }).member_did).toBe(
-          "did:key:victim",
-        );
+        expect((params as { member_did?: string }).member_did).toBe(victim.did);
         return {};
       });
       let shareRecipients: string[] = [];
@@ -978,10 +1117,12 @@ describe("SpaceManager", () => {
         return { id: "inv-notice" };
       });
 
-      await manager.removeMember("s1", "did:key:victim");
+      await manager.removeMember("s1", victim.did);
 
       // Shares cover self + the remaining member — never the removed member.
-      expect(shareRecipients.sort()).toEqual(["did:key:friend", SELF_DID]);
+      expect([...shareRecipients].sort()).toEqual(
+        [SELF_DID, friend.did].sort(),
+      );
       // Distribution happens before the rewrap (crash safety, D-005) and
       // before completion.
       expect(order.indexOf("epochKeys.put")).toBeGreaterThan(0);
@@ -997,36 +1138,32 @@ describe("SpaceManager", () => {
     });
 
     it("sends epoch.begin(set_min_epoch) on the wire, ordered revoke → begin → shares → complete", async () => {
+      const self = await ident("self");
+      const victim = await ident("victim");
+      const friend = await ident("friend");
       await activate();
 
-      const memberEntry = (aud: string) => ({
-        ucan: ucan(SELF_DID, aud, "/space/write", { with: "space:s1" }),
-        type: "d" as const,
-        signature: new Uint8Array([1, 2, 3, 4]),
-        signerPublicKey: jwkFor(SELF_DID),
-        epoch: 1,
-        // Valid 64-char hex so the victim's revocation notice actually
-        // reaches invitation.create (sendRawMessage validates the ID).
-        mailboxId: "cd".repeat(32),
-        publicKeyJwk: jwkFor(aud),
-      });
       membershipLog.entries = [
-        {
-          chain_seq: 1,
-          prev_hash: new Uint8Array(0),
-          entry_hash: new Uint8Array(0),
-          payload: new TextEncoder().encode(
-            serializeMembershipEntry(memberEntry("did:key:victim")),
-          ),
-        },
-        {
-          chain_seq: 2,
-          prev_hash: new Uint8Array(0),
-          entry_hash: new Uint8Array(0),
-          payload: new TextEncoder().encode(
-            serializeMembershipEntry(memberEntry("did:key:friend")),
-          ),
-        },
+        await logEntry({
+          seq: 1,
+          type: "d",
+          issuer: self,
+          audience: victim,
+          cmd: "/space/write",
+          // Valid 64-char hex so the victim's revocation notice actually
+          // reaches invitation.create (sendRawMessage validates the ID).
+          mailboxId: "cd".repeat(32),
+          publicKeyJwk: victim.jwk,
+        }),
+        await logEntry({
+          seq: 2,
+          type: "d",
+          issuer: self,
+          audience: friend,
+          cmd: "/space/write",
+          mailboxId: "cd".repeat(32),
+          publicKeyJwk: friend.jwk,
+        }),
       ];
 
       const order: string[] = [];
@@ -1053,7 +1190,7 @@ describe("SpaceManager", () => {
         return { id: "inv-notice" };
       });
 
-      await manager.removeMember("s1", "did:key:victim");
+      await manager.removeMember("s1", victim.did);
 
       // Revocation must skip the grace period — the min-epoch bump is what
       // makes the server reject the removed member's stale-epoch writes.

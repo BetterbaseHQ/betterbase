@@ -21,8 +21,9 @@ pub use frames::{
 };
 pub use membership::{
     build_membership_signing_message, decrypt_membership_payload, encrypt_membership_payload,
-    parse_membership_entry, serialize_membership_entry, sha256_hash, verify_membership_entry,
-    MembershipEntryPayload, MembershipEntryType,
+    fold_membership_log, parse_membership_entry, serialize_membership_entry, sha256_hash,
+    verify_membership_entry, FoldedActive, FoldedMember, FoldedRemoved, FoldedRemovedContact,
+    MemberRole, MemberStatus, MembershipEntryPayload, MembershipEntryType, MembershipLogFold,
 };
 pub use padding::{pad_to_bucket, unpad, DEFAULT_PADDING_BUCKETS};
 pub use pull::{

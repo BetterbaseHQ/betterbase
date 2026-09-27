@@ -271,7 +271,7 @@ export function buildMembershipSigningMessage(
   ucan: string,
   signerHandle: string = "",
   recipientHandle: string = "",
-): Uint8Array {
+): Uint8Array<ArrayBuffer> {
   const message = `${MEMBERSHIP_PREFIX}${type}\0${spaceId}\0${signerDID}\0${ucan}\0${signerHandle}\0${recipientHandle}`;
   return new TextEncoder().encode(message);
 }

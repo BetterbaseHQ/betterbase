@@ -137,7 +137,9 @@ pub fn parse_membership_entry(payload: &str) -> Result<MembershipEntryPayload, S
         signer_public_key,
         epoch: obj.get("e").and_then(|v| v.as_u64()).map(|v| v as u32),
         mailbox_id: obj.get("m").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        public_key_jwk: obj.get("k").cloned(),
+        // A JWK must be a JSON object; `null` or other shapes read as
+        // absent (keeps parity with the TS mirror's validation).
+        public_key_jwk: obj.get("k").filter(|v| v.is_object()).cloned(),
         signer_handle: validate_handle(obj.get("n")),
         recipient_handle: validate_handle(obj.get("rn")),
     })
@@ -146,6 +148,12 @@ pub fn parse_membership_entry(payload: &str) -> Result<MembershipEntryPayload, S
 /// Maximum handle length per RFC 5321.
 const MAX_HANDLE_LENGTH: usize = 320;
 
+/// Validate a handle (RFC 5321 length cap).
+///
+/// Lenient by design: invalid values (non-string, empty, >320 chars) yield
+/// `None` rather than a parse error. A signed entry with an invalid handle
+/// still verifies — the canonical signing message is rebuilt from the
+/// *parsed* value — and the handle is simply dropped from the fold output.
 fn validate_handle(value: Option<&serde_json::Value>) -> Option<String> {
     value
         .and_then(|v| v.as_str())
@@ -285,9 +293,14 @@ fn verify_ucan_signature(
 struct ParsedUCAN {
     issuer_did: String,
     audience_did: String,
+    /// The `cmd` claim (UCAN permission path), empty if absent.
+    cmd: String,
+    /// The `exp` claim in seconds; `None` = never expires (matching the TS
+    /// sentinel: a missing/non-numeric `exp` reads as 0 = never).
+    exp: Option<f64>,
 }
 
-/// Parse a UCAN JWT to extract issuer and audience DIDs.
+/// Parse a UCAN JWT to extract issuer/audience DIDs, cmd, and exp.
 fn parse_ucan_payload(ucan: &str) -> Result<ParsedUCAN, SyncError> {
     let parts: Vec<&str> = ucan.split('.').collect();
     if parts.len() != 3 {
@@ -302,10 +315,18 @@ fn parse_ucan_payload(ucan: &str) -> Result<ParsedUCAN, SyncError> {
 
     let iss = normalize_did_field(payload.get("iss"));
     let aud = normalize_did_field(payload.get("aud"));
+    let cmd = payload
+        .get("cmd")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let exp = payload.get("exp").and_then(|v| v.as_f64());
 
     Ok(ParsedUCAN {
         issuer_did: iss,
         audience_did: aud,
+        cmd,
+        exp,
     })
 }
 
@@ -357,6 +378,318 @@ pub fn decrypt_membership_payload(
 /// Compute SHA-256 hash of payload bytes (for entry_hash field).
 pub fn sha256_hash(data: &[u8]) -> Vec<u8> {
     Sha256::digest(data).to_vec()
+}
+
+// ---------------------------------------------------------------------------
+// Membership log fold
+// ---------------------------------------------------------------------------
+
+/// Member role derived from the UCAN's `cmd` permission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemberRole {
+    Admin,
+    Write,
+    Read,
+}
+
+/// Membership status derived from the fold (revocation wins, then decline,
+/// then join, else pending).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemberStatus {
+    Joined,
+    Pending,
+    Declined,
+    Revoked,
+}
+
+/// One member of the fold result (from the latest delegation; order of
+/// first-seen delegations).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldedMember {
+    pub did: String,
+    pub role: MemberRole,
+    pub status: MemberStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+}
+
+/// One active member (latest non-revoked delegation), for key distribution
+/// and log re-encryption. `active` follows Map upsert order: first
+/// activation sets a member's position; re-activation after a revocation
+/// moves it to the end.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldedActive {
+    pub did: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_key_jwk: Option<serde_json::Value>,
+    /// The serialized entry payload (to re-encrypt under a new epoch key).
+    pub payload: String,
+}
+
+/// Fold output for `removed_did`: the UCANs to revoke (all, for CID
+/// computation; `revocable` = non-perpetual, for the revocation log) and the
+/// last contact info (for the revocation notice).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldedRemoved {
+    pub ucans: Vec<String>,
+    pub revocable: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact: Option<FoldedRemovedContact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldedRemovedContact {
+    pub mailbox_id: String,
+    pub public_key_jwk: serde_json::Value,
+}
+
+/// The full fold over a membership log. `active` excludes the removed
+/// member when `removed_did` was given.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MembershipLogFold {
+    /// All members (every delegation, latest wins), ordered by first-seen.
+    pub members: Vec<FoldedMember>,
+    /// Members whose final state is active (delegated, not revoked, UCAN not
+    /// expired) — who receives fresh epoch keys and whose entries are
+    /// re-encrypted. Excludes the removed member when one was requested.
+    pub active: Vec<FoldedActive>,
+    /// Set only when `removed_did` was given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed: Option<FoldedRemoved>,
+    /// Indices (into `payloads`) of entries dropped as malformed or failing
+    /// signature verification (a poison entry must never abort the fold).
+    pub skipped: Vec<u32>,
+}
+
+/// Map a UCAN `cmd` permission to a member role.
+fn role_from_cmd(cmd: &str) -> Result<MemberRole, SyncError> {
+    match cmd {
+        "/space/admin" => Ok(MemberRole::Admin),
+        "/space/write" => Ok(MemberRole::Write),
+        "/space/read" => Ok(MemberRole::Read),
+        other => Err(SyncError::InvalidMembershipEntry(format!(
+            "unknown UCAN permission: {other}"
+        ))),
+    }
+}
+
+/// Fold a decrypted membership log into member state.
+///
+/// Canonical, deterministic implementation of the log fold (the TS
+/// `parseMembershipLog` / `collectMemberState` / `doRemoveMember` folds
+/// collapse onto this). Semantics:
+///
+/// - Entries are processed in log order. A delegation ("d") upserts the
+///   member (latest wins, first-seen order kept); accepted ("a") records an
+///   acceptance (with the signer's handle); declined ("x") marks the DID as
+///   declined.
+/// - A UCAN that is expired (`exp > 0 && exp < now`) is ignored for
+///   delegations, acceptances, and declines.
+/// - A verified revocation ("r") is authoritative: it applies regardless of
+///   the signing UCAN's expiry. Expiry must never un-revoke a member or
+///   resurrect a key-distribution slot — that is the failure mode this
+///   fold exists to prevent (a removed member receiving epoch keys).
+/// - Malformed entries (unparseable payload, failing signature
+///   verification, unparseable UCAN) are skipped and counted in
+///   `skipped`; they never abort the fold (poison tolerance — D1).
+/// - Status per member: revoked > declined > (self-issued or accepted =>
+///   joined) > pending. NOTE: a re-delegation after a revocation keeps the
+///   "revoked" status in `members` (matching current production behavior)
+///   while still re-entering `active` for key distribution — the two views
+///   intentionally differ.
+/// - `active` = members whose latest effective "d" is not revoked by a
+///   later "r" (UCAN not expired), carrying the latest delegation's JWK
+///   and payload. Order follows Map upsert semantics: a member keeps the
+///   position of its first activation, and re-activation after a revocation
+///   moves it to the end — this reproduces the entry order of the
+///   re-encrypted log written by the clients.
+/// - `removed_did`: additionally collects that member's non-expired
+///   delegation UCANs (`ucans`: all; `revocable`: only those with `exp > 0`
+///   — perpetual UCANs cannot be revoked) and the last contact info; the
+///   member is excluded from `active`.
+///
+/// `payloads` are the raw serialized entry payloads (JSON strings) of the
+/// decrypted log, in log order. `now` is the current time in Unix seconds
+/// (injected for determinism; the caller supplies the wall clock).
+pub fn fold_membership_log(
+    payloads: &[String],
+    space_id: &str,
+    now: i64,
+    removed_did: Option<&str>,
+) -> Result<MembershipLogFold, SyncError> {
+    struct Delegation {
+        did: String,
+        role: MemberRole,
+        self_issued: bool,
+        handle: Option<String>,
+    }
+
+    let mut delegations: Vec<Delegation> = Vec::new();
+    let mut did_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    // Active-set state with Map upsert semantics: first activation sets the
+    // position, a later "r" removes the member, re-activation appends at the
+    // end. Presence is a set, not a Vec index map: removing an element shifts
+    // every later index, and a stale index would drop the *wrong* member on a
+    // second revocation.
+    let mut active_order: Vec<String> = Vec::new();
+    let mut active_present: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut active_state: std::collections::HashMap<String, (Option<serde_json::Value>, String)> =
+        std::collections::HashMap::new();
+    let mut acceptances: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+    let mut declines: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut revocations: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut skipped: Vec<u32> = Vec::new();
+    let mut removed_ucans: Vec<String> = Vec::new();
+    let mut removed_revocable: Vec<String> = Vec::new();
+    let mut removed_contact: Option<(String, serde_json::Value)> = None;
+
+    for (idx, payload) in payloads.iter().enumerate() {
+        let entry = match parse_membership_entry(payload) {
+            Ok(e) => e,
+            Err(_) => {
+                skipped.push(idx as u32);
+                continue;
+            }
+        };
+        if !verify_membership_entry(&entry, space_id) {
+            skipped.push(idx as u32);
+            continue;
+        }
+        // Defensive: `verify_membership_entry` already rejects unparseable
+        // UCANs; this keeps the fold total if the verification step is ever
+        // bypassed.
+        let ucan_payload = match parse_ucan_payload(&entry.ucan) {
+            Ok(p) => p,
+            Err(_) => {
+                skipped.push(idx as u32);
+                continue;
+            }
+        };
+        let expired = ucan_payload.exp.is_some_and(|e| e > 0.0 && e < now as f64);
+
+        match entry.entry_type {
+            MembershipEntryType::Revoked => {
+                // Authoritative regardless of the signing UCAN's expiry:
+                // the revocation event is recorded and verified; expiry must
+                // not un-revoke a member or re-arm its key-distribution slot.
+                revocations.insert(ucan_payload.audience_did.clone());
+                if active_present.remove(&ucan_payload.audience_did) {
+                    active_order.retain(|d| d != &ucan_payload.audience_did);
+                    active_state.remove(&ucan_payload.audience_did);
+                }
+            }
+            MembershipEntryType::Delegation if !expired => {
+                let role = role_from_cmd(&ucan_payload.cmd)?;
+                let audience = ucan_payload.audience_did.clone();
+                let self_issued = ucan_payload.issuer_did == ucan_payload.audience_did;
+                let delegation = Delegation {
+                    did: audience.clone(),
+                    role,
+                    self_issued,
+                    handle: entry
+                        .recipient_handle
+                        .clone()
+                        .or(entry.signer_handle.clone()),
+                };
+                match did_index.get(&audience) {
+                    Some(&slot) => delegations[slot] = delegation,
+                    None => {
+                        did_index.insert(audience.clone(), delegations.len());
+                        delegations.push(delegation);
+                    }
+                }
+                // Map upsert semantics: existing member keeps its position,
+                // a (re-)activated member is appended at the end.
+                if active_present.insert(audience.clone()) {
+                    active_order.push(audience.clone());
+                }
+                active_state.insert(audience, (entry.public_key_jwk.clone(), payload.clone()));
+                if removed_did.is_some_and(|t| t == ucan_payload.audience_did) {
+                    removed_ucans.push(entry.ucan.clone());
+                    if ucan_payload.exp.is_some_and(|e| e > 0.0) {
+                        removed_revocable.push(entry.ucan.clone());
+                    }
+                    if let (Some(m), Some(k)) = (&entry.mailbox_id, &entry.public_key_jwk) {
+                        removed_contact = Some((m.clone(), k.clone()));
+                    }
+                }
+            }
+            MembershipEntryType::Accepted if !expired => {
+                acceptances.insert(ucan_payload.audience_did, entry.signer_handle.clone());
+            }
+            MembershipEntryType::Declined if !expired => {
+                declines.insert(ucan_payload.audience_did);
+            }
+            // Expired delegations/acceptances/declines: ignored.
+            _ => {}
+        }
+    }
+
+    let members = delegations
+        .iter()
+        .map(|d| {
+            let status = if revocations.contains(&d.did) {
+                MemberStatus::Revoked
+            } else if declines.contains(&d.did) {
+                MemberStatus::Declined
+            } else if d.self_issued || acceptances.contains_key(&d.did) {
+                MemberStatus::Joined
+            } else {
+                MemberStatus::Pending
+            };
+            let handle = acceptances
+                .get(&d.did)
+                .cloned()
+                .flatten()
+                .or_else(|| d.handle.clone());
+            FoldedMember {
+                did: d.did.clone(),
+                role: d.role,
+                status,
+                handle,
+            }
+        })
+        .collect();
+
+    let active: Vec<FoldedActive> = active_order
+        .into_iter()
+        .filter(|did| Some(did.as_str()) != removed_did)
+        .filter_map(|did| {
+            // Divergence between `active_order` and `active_state` would be
+            // an internal invariant violation; degrade (skip) rather than
+            // panic — the fold must never abort on log content.
+            let (jwk, payload) = active_state.get(&did)?;
+            Some(FoldedActive {
+                did,
+                public_key_jwk: jwk.clone(),
+                payload: payload.clone(),
+            })
+        })
+        .collect();
+
+    let removed = removed_did.map(|_| FoldedRemoved {
+        ucans: removed_ucans,
+        revocable: removed_revocable,
+        contact: removed_contact.map(|(m, k)| FoldedRemovedContact {
+            mailbox_id: m,
+            public_key_jwk: k,
+        }),
+    });
+
+    Ok(MembershipLogFold {
+        members,
+        active,
+        removed,
+        skipped,
+    })
 }
 
 #[cfg(test)]
@@ -813,5 +1146,847 @@ mod tests {
             reparsed.recipient_handle.as_deref(),
             Some("bob@example.com")
         );
+    }
+    // ------------------------------------------------------------------
+    // fold_membership_log
+    // ------------------------------------------------------------------
+
+    const FOLD_SPACE: &str = "sp1";
+    /// Fixed `now` for fold tests: 2023-11-14T22:13:20Z
+    const FOLD_NOW: i64 = 1_700_000_000;
+
+    fn fold_keys() -> (
+        p256::ecdsa::SigningKey,
+        p256::ecdsa::SigningKey,
+        p256::ecdsa::SigningKey,
+    ) {
+        (
+            betterbase_crypto::generate_p256_keypair(),
+            betterbase_crypto::generate_p256_keypair(),
+            betterbase_crypto::generate_p256_keypair(),
+        )
+    }
+
+    fn did_of(key: &p256::ecdsa::SigningKey) -> String {
+        betterbase_crypto::encode_did_key(key).unwrap()
+    }
+
+    fn jwk_of(key: &p256::ecdsa::SigningKey) -> serde_json::Value {
+        betterbase_crypto::export_public_key_jwk(key.verifying_key())
+    }
+
+    /// Build a UCAN JWT (ES256) with a fixed nonce and optional `exp`.
+    fn test_ucan(
+        issuer: &p256::ecdsa::SigningKey,
+        audience_did: &str,
+        cmd: &str,
+        nonce: &str,
+        exp: Option<u64>,
+    ) -> String {
+        let mut payload = serde_json::json!({
+            "iss": did_of(issuer),
+            "aud": [audience_did],
+            "cmd": cmd,
+            "with": format!("space:{FOLD_SPACE}"),
+            "nonce": nonce,
+            "prf": [],
+        });
+        if let Some(e) = exp {
+            payload["exp"] = serde_json::json!(e);
+        }
+        let header_b64 = base64url_encode(
+            betterbase_crypto::canonical_json(&serde_json::json!({"alg": "ES256", "typ": "JWT"}))
+                .unwrap()
+                .as_bytes(),
+        );
+        let payload_b64 = base64url_encode(
+            betterbase_crypto::canonical_json(&payload)
+                .unwrap()
+                .as_bytes(),
+        );
+        let input = format!("{header_b64}.{payload_b64}");
+        let sig = betterbase_crypto::sign(issuer, input.as_bytes()).unwrap();
+        format!("{input}.{}", base64url_encode(&sig))
+    }
+
+    fn test_entry(
+        signer: &p256::ecdsa::SigningKey,
+        entry_type: MembershipEntryType,
+        ucan: &str,
+        signer_handle: Option<&str>,
+        recipient_handle: Option<&str>,
+        jwk: Option<serde_json::Value>,
+        mailbox: Option<&str>,
+    ) -> String {
+        let did = did_of(signer);
+        let message = build_membership_signing_message(
+            entry_type,
+            FOLD_SPACE,
+            &did,
+            ucan,
+            signer_handle.unwrap_or(""),
+            recipient_handle.unwrap_or(""),
+        );
+        let signature = betterbase_crypto::sign(signer, &message).unwrap();
+        serialize_membership_entry(&MembershipEntryPayload {
+            ucan: ucan.to_string(),
+            entry_type,
+            signature,
+            signer_public_key: jwk_of(signer),
+            epoch: Some(1),
+            mailbox_id: mailbox.map(String::from),
+            public_key_jwk: jwk,
+            signer_handle: signer_handle.map(String::from),
+            recipient_handle: recipient_handle.map(String::from),
+        })
+    }
+
+    /// Standard cast: admin (key 0), alice (key 1), bob (key 2).
+    struct Cast {
+        admin: p256::ecdsa::SigningKey,
+        alice: p256::ecdsa::SigningKey,
+        bob: p256::ecdsa::SigningKey,
+        admin_did: String,
+        alice_did: String,
+        bob_did: String,
+    }
+
+    fn cast() -> Cast {
+        let (admin, alice, bob) = fold_keys();
+        Cast {
+            admin_did: did_of(&admin),
+            alice_did: did_of(&alice),
+            bob_did: did_of(&bob),
+            admin,
+            alice,
+            bob,
+        }
+    }
+
+    fn fold_ok(payloads: &[String], removed: Option<&str>) -> MembershipLogFold {
+        fold_membership_log(payloads, FOLD_SPACE, FOLD_NOW, removed).unwrap()
+    }
+
+    fn member_status(f: &MembershipLogFold, did: &str) -> MemberStatus {
+        f.members
+            .iter()
+            .find(|m| m.did == did)
+            .expect("member present")
+            .status
+    }
+
+    fn active_dids(f: &MembershipLogFold) -> Vec<&str> {
+        f.active.iter().map(|a| a.did.as_str()).collect()
+    }
+
+    fn self_admin_entry(c: &Cast) -> String {
+        let ucan = test_ucan(&c.admin, &c.admin_did, "/space/admin", "n-admin", None);
+        test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan,
+            Some("admin@example.com"),
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn invite_entry(c: &Cast, nonce: &str, exp: Option<u64>) -> String {
+        let ucan = test_ucan(&c.admin, &c.alice_did, "/space/write", nonce, exp);
+        test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        )
+    }
+
+    #[test]
+    fn fold_self_issued_admin() {
+        let c = cast();
+        let e = self_admin_entry(&c);
+        let f = fold_ok(&[e], None);
+        assert_eq!(f.members.len(), 1);
+        assert_eq!(f.members[0].did, c.admin_did);
+        assert_eq!(f.members[0].role, MemberRole::Admin);
+        assert_eq!(f.members[0].status, MemberStatus::Joined);
+        assert_eq!(f.members[0].handle.as_deref(), Some("admin@example.com"));
+        assert_eq!(active_dids(&f), [c.admin_did.as_str()]);
+        assert!(f.active[0].public_key_jwk.is_none());
+        assert!(f.removed.is_none());
+        assert!(f.skipped.is_empty());
+    }
+
+    #[test]
+    fn fold_invite_accept_joined_with_acceptance_handle() {
+        let c = cast();
+        let ucan = test_ucan(&c.admin, &c.alice_did, "/space/write", "n1", None);
+        let d = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let a = test_entry(
+            &c.alice,
+            MembershipEntryType::Accepted,
+            &ucan,
+            Some("alice@other.com"),
+            None,
+            None,
+            None,
+        );
+        let f = fold_ok(&[d.clone(), a.clone()], None);
+        assert_eq!(member_status(&f, &c.alice_did), MemberStatus::Joined);
+        // Acceptance handle wins over the delegation's recipient handle.
+        assert_eq!(
+            f.members
+                .iter()
+                .find(|m| m.did == c.alice_did)
+                .unwrap()
+                .handle
+                .as_deref(),
+            Some("alice@other.com")
+        );
+        // Active member carries the latest delegation's JWK and payload.
+        let act = f.active.iter().find(|a| a.did == c.alice_did).unwrap();
+        assert_eq!(act.public_key_jwk, Some(jwk_of(&c.alice)));
+        assert_eq!(act.payload, d);
+        assert!(f.skipped.is_empty());
+    }
+
+    #[test]
+    fn fold_invite_without_acceptance_is_pending() {
+        let c = cast();
+        let f = fold_ok(&[self_admin_entry(&c), invite_entry(&c, "n1", None)], None);
+        assert_eq!(member_status(&f, &c.alice_did), MemberStatus::Pending);
+        // Pending members still receive epoch keys (pre-join keying).
+        assert!(active_dids(&f).contains(&c.alice_did.as_str()));
+        assert_eq!(
+            f.members
+                .iter()
+                .find(|m| m.did == c.alice_did)
+                .unwrap()
+                .handle
+                .as_deref(),
+            Some("alice@example.com") // fallback: recipient handle
+        );
+    }
+
+    #[test]
+    fn fold_decline_status_but_still_active() {
+        let c = cast();
+        let ucan = test_ucan(&c.admin, &c.bob_did, "/space/write", "n1", None);
+        let d = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan,
+            None,
+            Some("bob@example.com"),
+            Some(jwk_of(&c.bob)),
+            Some("mb-bob"),
+        );
+        let x = test_entry(
+            &c.bob,
+            MembershipEntryType::Declined,
+            &ucan,
+            Some("bob@example.com"),
+            None,
+            None,
+            None,
+        );
+        let f = fold_ok(&[d.clone(), x.clone()], None);
+        assert_eq!(member_status(&f, &c.bob_did), MemberStatus::Declined);
+        // Declines do not remove from the active set (matches production).
+        assert!(active_dids(&f).contains(&c.bob_did.as_str()));
+    }
+
+    #[test]
+    fn fold_revoke_removes_from_active() {
+        let c = cast();
+        let ucan = test_ucan(&c.admin, &c.alice_did, "/space/write", "n1", None);
+        let d = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let a = test_entry(
+            &c.alice,
+            MembershipEntryType::Accepted,
+            &ucan,
+            Some("alice@example.com"),
+            None,
+            None,
+            None,
+        );
+        let rucan = test_ucan(&c.admin, &c.alice_did, "/space/admin", "n-rev", None);
+        let r = test_entry(
+            &c.admin,
+            MembershipEntryType::Revoked,
+            &rucan,
+            Some("admin@example.com"),
+            None,
+            None,
+            None,
+        );
+        let f = fold_ok(&[d.clone(), a.clone(), r.clone()], None);
+        assert_eq!(member_status(&f, &c.alice_did), MemberStatus::Revoked);
+        assert!(!active_dids(&f).contains(&c.alice_did.as_str()));
+    }
+
+    #[test]
+    fn fold_reinvite_after_revoke_pins_status_quirk() {
+        let c = cast();
+        let ucan1 = test_ucan(&c.admin, &c.alice_did, "/space/write", "n1", None);
+        let d1 = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan1,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let a1 = test_entry(
+            &c.alice,
+            MembershipEntryType::Accepted,
+            &ucan1,
+            Some("alice@example.com"),
+            None,
+            None,
+            None,
+        );
+        let rucan = test_ucan(&c.admin, &c.alice_did, "/space/admin", "n-rev", None);
+        let r = test_entry(
+            &c.admin,
+            MembershipEntryType::Revoked,
+            &rucan,
+            Some("admin@example.com"),
+            None,
+            None,
+            None,
+        );
+        let ucan2 = test_ucan(&c.admin, &c.alice_did, "/space/write", "n2", None);
+        let d2 = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan2,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let a2 = test_entry(
+            &c.alice,
+            MembershipEntryType::Accepted,
+            &ucan2,
+            Some("alice@example.com"),
+            None,
+            None,
+            None,
+        );
+        let f = fold_ok(
+            &[d1.clone(), a1.clone(), r.clone(), d2.clone(), a2.clone()],
+            None,
+        );
+        // Pinned production quirk: the status set is order-independent, so a
+        // re-delegated member still shows "revoked" ...
+        assert_eq!(member_status(&f, &c.alice_did), MemberStatus::Revoked);
+        // ... while the active fold (order-sensitive) re-admits them for
+        // key distribution, carrying the latest delegation's payload.
+        assert!(active_dids(&f).contains(&c.alice_did.as_str()));
+        let act = f.active.iter().find(|a| a.did == c.alice_did).unwrap();
+        assert_eq!(act.payload, d2);
+        // Latest delegation wins for role/handle.
+        assert_eq!(
+            f.members
+                .iter()
+                .find(|m| m.did == c.alice_did)
+                .unwrap()
+                .role,
+            MemberRole::Write
+        );
+    }
+
+    #[test]
+    fn fold_expired_delegation_is_ignored() {
+        let c = cast();
+        let f = fold_ok(
+            &[
+                self_admin_entry(&c),
+                invite_entry(&c, "n1", Some((FOLD_NOW - 100) as u64)),
+            ],
+            None,
+        );
+        // Expired delegation: alice is neither a member nor active.
+        assert!(f.members.iter().all(|m| m.did != c.alice_did));
+        assert!(!active_dids(&f).contains(&c.alice_did.as_str()));
+        assert!(f.skipped.is_empty()); // ignored, not poison
+    }
+
+    #[test]
+    fn fold_expired_revocation_still_revokes() {
+        let c = cast();
+        let ucan = test_ucan(&c.admin, &c.alice_did, "/space/write", "n1", None);
+        let d = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let a = test_entry(
+            &c.alice,
+            MembershipEntryType::Accepted,
+            &ucan,
+            Some("alice@example.com"),
+            None,
+            None,
+            None,
+        );
+        // Revocation entry carries an expired admin UCAN: the event still
+        // applies — expiry must never un-revoke a member.
+        let rucan = test_ucan(
+            &c.admin,
+            &c.alice_did,
+            "/space/admin",
+            "n-rev",
+            Some((FOLD_NOW - 100) as u64),
+        );
+        let r = test_entry(
+            &c.admin,
+            MembershipEntryType::Revoked,
+            &rucan,
+            Some("admin@example.com"),
+            None,
+            None,
+            None,
+        );
+        let f = fold_ok(&[d.clone(), a.clone(), r.clone()], None);
+        assert_eq!(member_status(&f, &c.alice_did), MemberStatus::Revoked);
+        assert!(!active_dids(&f).contains(&c.alice_did.as_str()));
+    }
+
+    #[test]
+    fn fold_expired_acceptance_is_ignored() {
+        let c = cast();
+        let ucan = test_ucan(&c.admin, &c.alice_did, "/space/write", "n1", None);
+        let d = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let a = test_entry(
+            &c.alice,
+            MembershipEntryType::Accepted,
+            &ucan,
+            Some("alice@example.com"),
+            None,
+            None,
+            None,
+        );
+        let f = fold_ok(&[d.clone(), a.clone()], None);
+        // Sanity: with a valid acceptance, alice is joined.
+        assert_eq!(member_status(&f, &c.alice_did), MemberStatus::Joined);
+        let f2 = fold_ok(
+            &[
+                self_admin_entry(&c),
+                invite_entry(&c, "n1", None),
+                test_entry(
+                    &c.alice,
+                    MembershipEntryType::Accepted,
+                    &test_ucan(
+                        &c.admin,
+                        &c.alice_did,
+                        "/space/write",
+                        "n1x",
+                        Some((FOLD_NOW - 100) as u64),
+                    ),
+                    Some("alice@example.com"),
+                    None,
+                    None,
+                    None,
+                ),
+            ],
+            None,
+        );
+        assert_eq!(member_status(&f2, &c.alice_did), MemberStatus::Pending);
+        assert_eq!(
+            f2.members
+                .iter()
+                .find(|m| m.did == c.alice_did)
+                .unwrap()
+                .handle
+                .as_deref(),
+            Some("alice@example.com") // acceptance ignored -> recipient handle fallback
+        );
+    }
+
+    #[test]
+    fn fold_poison_entries_are_skipped_not_fatal() {
+        let c = cast();
+        let d = invite_entry(&c, "n1", None);
+        let forged = {
+            // "Accepted" entry signed by bob, but the UCAN audience is alice
+            // -> expected signer (audience) != actual signer -> fails.
+            test_entry(
+                &c.bob,
+                MembershipEntryType::Accepted,
+                &test_ucan(&c.admin, &c.alice_did, "/space/write", "n1", None),
+                Some("bob@example.com"),
+                None,
+                None,
+                None,
+            )
+        };
+        let payloads = vec![
+            self_admin_entry(&c),
+            d.clone(),
+            "not-json".to_string(),
+            forged,
+            r#"{"u":"x","t":"z","s":"AA","p":{}}"#.to_string(),
+        ];
+        let f = fold_ok(&payloads, None);
+        assert_eq!(f.skipped, vec![2, 3, 4]);
+        assert_eq!(f.members.len(), 2);
+        assert_eq!(member_status(&f, &c.alice_did), MemberStatus::Pending);
+        assert_eq!(active_dids(&f).len(), 2);
+    }
+
+    #[test]
+    fn fold_active_order_follows_map_upsert() {
+        let c = cast();
+        // d(bob) d(alice) r(alice) d(alice) -> active order [bob, alice].
+        let b_ucan = test_ucan(&c.admin, &c.bob_did, "/space/write", "nb", None);
+        let b_d = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &b_ucan,
+            None,
+            Some("bob@example.com"),
+            Some(jwk_of(&c.bob)),
+            Some("mb-bob"),
+        );
+        let a_ucan = test_ucan(&c.admin, &c.alice_did, "/space/write", "na", None);
+        let a_d1 = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &a_ucan,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let r_ucan = test_ucan(&c.admin, &c.alice_did, "/space/admin", "nr", None);
+        let r = test_entry(
+            &c.admin,
+            MembershipEntryType::Revoked,
+            &r_ucan,
+            Some("admin@example.com"),
+            None,
+            None,
+            None,
+        );
+        let a_ucan2 = test_ucan(&c.admin, &c.alice_did, "/space/write", "na2", None);
+        let a_d2 = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &a_ucan2,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let f = fold_ok(&[b_d.clone(), a_d1.clone(), r.clone(), a_d2.clone()], None);
+        assert_eq!(active_dids(&f), [c.bob_did.as_str(), c.alice_did.as_str()]);
+    }
+
+    #[test]
+    fn fold_two_revocations_no_stale_index() {
+        // Regression: revoking two members used to corrupt active-set index
+        // bookkeeping — removing element i shifts every later index, so the
+        // second revocation hit a stale index (panic or wrong member dropped).
+        let c = cast();
+        let a_ucan = test_ucan(&c.admin, &c.alice_did, "/space/write", "na", None);
+        let a_d = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &a_ucan,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let b_ucan = test_ucan(&c.admin, &c.bob_did, "/space/write", "nb", None);
+        let b_d = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &b_ucan,
+            None,
+            Some("bob@example.com"),
+            Some(jwk_of(&c.bob)),
+            Some("mb-bob"),
+        );
+        let ra_ucan = test_ucan(&c.admin, &c.alice_did, "/space/admin", "nra", None);
+        let ra = test_entry(
+            &c.admin,
+            MembershipEntryType::Revoked,
+            &ra_ucan,
+            Some("admin@example.com"),
+            None,
+            None,
+            None,
+        );
+        let rb_ucan = test_ucan(&c.admin, &c.bob_did, "/space/admin", "nrb", None);
+        let rb = test_entry(
+            &c.admin,
+            MembershipEntryType::Revoked,
+            &rb_ucan,
+            Some("admin@example.com"),
+            None,
+            None,
+            None,
+        );
+        let f = fold_ok(&[a_d, b_d, ra, rb], None);
+        // Both revoked members leave the active set; no entries skipped.
+        assert_eq!(active_dids(&f), Vec::<&str>::new());
+        assert_eq!(member_status(&f, &c.alice_did), MemberStatus::Revoked);
+        assert_eq!(member_status(&f, &c.bob_did), MemberStatus::Revoked);
+        assert!(f.skipped.is_empty());
+    }
+
+    #[test]
+    fn fold_invalid_handle_is_dropped_not_poison() {
+        // A non-string handle ("n": 42) is not poison: the entry still parses
+        // and verifies (the signing message is rebuilt from the parsed value),
+        // and the member simply has no handle.
+        let c = cast();
+        let ucan = test_ucan(&c.admin, &c.alice_did, "/space/write", "n1", None);
+        // Sign with an empty signer handle — what validate_handle yields for
+        // 42 — then inject the invalid handle into the serialized payload.
+        let mut entry = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan,
+            None,
+            None,
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let mut v: serde_json::Value = serde_json::from_str(&entry).unwrap();
+        v["n"] = serde_json::json!(42);
+        entry = v.to_string();
+        let f = fold_ok(&[self_admin_entry(&c), entry], None);
+        assert!(f.skipped.is_empty());
+        assert_eq!(member_status(&f, &c.alice_did), MemberStatus::Pending);
+        let m = f
+            .members
+            .iter()
+            .find(|m| m.did == c.alice_did)
+            .expect("alice member present");
+        assert_eq!(m.handle, None);
+    }
+
+    #[test]
+    fn fold_removed_member_collects_ucans_and_contact() {
+        let c = cast();
+        let ucan1 = test_ucan(&c.admin, &c.alice_did, "/space/write", "n1", None);
+        let d1 = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan1,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let ucan2 = test_ucan(
+            &c.admin,
+            &c.alice_did,
+            "/space/write",
+            "n2",
+            Some((FOLD_NOW + 100_000) as u64),
+        );
+        let d2 = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan2,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let b_ucan = test_ucan(&c.admin, &c.bob_did, "/space/write", "nb", None);
+        let b_d = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &b_ucan,
+            None,
+            Some("bob@example.com"),
+            Some(jwk_of(&c.bob)),
+            Some("mb-bob"),
+        );
+        let f = fold_ok(&[d1.clone(), d2.clone(), b_d.clone()], Some(&c.alice_did));
+        let removed = f.removed.as_ref().expect("removed present");
+        assert_eq!(removed.ucans, vec![ucan1.clone(), ucan2.clone()]);
+        // Only expiring UCANs are revocable; perpetual ones are not.
+        assert_eq!(removed.revocable, vec![ucan2]);
+        let contact = removed.contact.as_ref().expect("contact");
+        assert_eq!(contact.mailbox_id, "mb-alice");
+        assert_eq!(contact.public_key_jwk, jwk_of(&c.alice));
+        // The removed member is excluded from active; bob remains.
+        assert_eq!(active_dids(&f), [c.bob_did.as_str()]);
+        // Members still lists alice (with her revoked-free status).
+        assert!(f.members.iter().any(|m| m.did == c.alice_did));
+    }
+
+    #[test]
+    fn fold_removed_member_contact_prefers_last_complete_entry() {
+        let c = cast();
+        let ucan1 = test_ucan(&c.admin, &c.alice_did, "/space/write", "n1", None);
+        let d1 = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan1,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        // Later delegation without a JWK: must not clobber the earlier contact.
+        let ucan2 = test_ucan(&c.admin, &c.alice_did, "/space/write", "n2", None);
+        let d2 = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan2,
+            None,
+            Some("alice@example.com"),
+            None,
+            Some("mb-alice2"),
+        );
+        let f = fold_ok(&[d1.clone(), d2.clone()], Some(&c.alice_did));
+        let removed = f.removed.as_ref().unwrap();
+        let contact = removed.contact.as_ref().expect("contact from d1");
+        assert_eq!(contact.mailbox_id, "mb-alice");
+        assert_eq!(removed.ucans.len(), 2);
+        assert!(removed.revocable.is_empty()); // both perpetual
+    }
+
+    #[test]
+    fn fold_removed_unknown_member_is_empty() {
+        let c = cast();
+        let f = fold_ok(
+            &[self_admin_entry(&c), invite_entry(&c, "n1", None)],
+            Some(&c.bob_did),
+        );
+        let removed = f.removed.as_ref().expect("removed present");
+        assert!(removed.ucans.is_empty());
+        assert!(removed.revocable.is_empty());
+        assert!(removed.contact.is_none());
+        // Both members remain active (bob is not one of them, but the fold
+        // does not error for a removal target with no delegations).
+        assert_eq!(f.active.len(), 2);
+    }
+
+    #[test]
+    fn fold_unknown_permission_fails_the_fold() {
+        let c = cast();
+        let ucan = test_ucan(&c.admin, &c.alice_did, "/space/bogus", "n1", None);
+        let d = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &ucan,
+            None,
+            Some("alice@example.com"),
+            Some(jwk_of(&c.alice)),
+            Some("mb-alice"),
+        );
+        let err = fold_membership_log(&[d], FOLD_SPACE, FOLD_NOW, None).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("unknown UCAN permission: /space/bogus"));
+    }
+
+    #[test]
+    fn fold_latest_delegation_wins_role_and_payload() {
+        let c = cast();
+        let read_ucan = test_ucan(&c.admin, &c.bob_did, "/space/read", "n1", None);
+        let d_read = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &read_ucan,
+            None,
+            Some("bob@example.com"),
+            Some(jwk_of(&c.bob)),
+            Some("mb-bob"),
+        );
+        let write_ucan = test_ucan(&c.admin, &c.bob_did, "/space/write", "n2", None);
+        let d_write = test_entry(
+            &c.admin,
+            MembershipEntryType::Delegation,
+            &write_ucan,
+            None,
+            Some("bob@example.com"),
+            Some(jwk_of(&c.bob)),
+            Some("mb-bob"),
+        );
+        let f = fold_ok(&[d_read.clone(), d_write.clone()], None);
+        let m = f.members.iter().find(|m| m.did == c.bob_did).unwrap();
+        assert_eq!(m.role, MemberRole::Write);
+        let act = f.active.iter().find(|a| a.did == c.bob_did).unwrap();
+        assert_eq!(act.payload, d_write);
+    }
+    #[test]
+    fn fold_vectors_run_through_fold() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/test-vectors/membership-fold.json"
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let space_id = json["spaceId"].as_str().unwrap();
+        let now = json["now"].as_i64().unwrap();
+        let entries = &json["entries"];
+        for case in json["cases"].as_array().unwrap() {
+            let payloads: Vec<String> = case["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| entries[n.as_str().unwrap()].as_str().unwrap().to_string())
+                .collect();
+            let removed_did = case.get("removedDid").and_then(|d| d.as_str());
+            let result = fold_membership_log(&payloads, space_id, now, removed_did);
+            match result {
+                Ok(fold) => assert_eq!(
+                    serde_json::to_value(&fold).unwrap(),
+                    case["expected"],
+                    "case: {}",
+                    case["name"]
+                ),
+                Err(e) => assert_eq!(
+                    serde_json::json!({ "error": e.to_string() }),
+                    case["expected"],
+                    "case: {}",
+                    case["name"]
+                ),
+            }
+        }
     }
 }

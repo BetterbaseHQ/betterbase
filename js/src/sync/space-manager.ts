@@ -40,14 +40,16 @@ import {
   decryptMembershipPayload,
   sha256,
   computeUCANCID,
-  parseUCANPayload,
-  parseMembershipEntry,
   serializeMembershipEntry,
   buildMembershipSigningMessage,
   type MembershipEntryType,
   type MembershipEntryPayload,
 } from "./membership.js";
-import { ensureWasm } from "../wasm-init.js";
+import {
+  foldMembershipLog,
+  type FoldedActive,
+  type MembershipLogFold,
+} from "./membership-fold.js";
 import {
   advanceEpoch,
   rewrapAllDEKs,
@@ -590,7 +592,7 @@ export class SpaceManager {
       undefined,
       spaceUCAN,
     );
-    const members = this.parseMembershipLog(
+    const members = await this.parseMembershipLog(
       fullResponse.entries,
       syncCrypto,
       spaceId,
@@ -619,19 +621,16 @@ export class SpaceManager {
   }
 
   /**
-   * Decrypt and parse raw membership log entries, skipping entries that
-   * fail to decrypt (e.g. encrypted under a previous epoch key) or parse.
+   * Decrypt raw membership log entries, skipping entries that fail to
+   * decrypt (e.g. encrypted under a previous epoch key). Parsing/verifying
+   * is the fold's job (poison-tolerant, in Rust — audit G4/D1).
    */
   private decryptLogEntries(
     entries: Array<{ chain_seq: number; payload: Uint8Array }>,
     syncCrypto: SyncCryptoInterface,
     spaceId: string,
-  ): Array<{ seq: number; payloadStr: string; entry: MembershipEntryPayload }> {
-    const results: Array<{
-      seq: number;
-      payloadStr: string;
-      entry: MembershipEntryPayload;
-    }> = [];
+  ): Array<{ seq: number; payloadStr: string }> {
+    const results: Array<{ seq: number; payloadStr: string }> = [];
     for (const raw of entries) {
       let payloadStr: string;
       try {
@@ -651,100 +650,56 @@ export class SpaceManager {
         );
         continue;
       }
-      let entry: MembershipEntryPayload;
-      try {
-        entry = parseMembershipEntry(payloadStr);
-      } catch (err) {
-        console.error(
-          `[betterbase-sync] Malformed membership entry (seq ${raw.chain_seq}):`,
-          err,
-        );
-        continue;
-      }
-      results.push({ seq: raw.chain_seq, payloadStr, entry });
+      results.push({ seq: raw.chain_seq, payloadStr });
     }
     return results;
   }
 
   /**
-   * Parse decrypted membership log entries into a Member[] list.
-   * Verifies signatures and builds the current member state from
-   * delegation, acceptance, decline, and revocation entries.
+   * Decrypt a membership log and run the canonical Rust fold (audit G4).
+   * Warns about skipped poison entries so operators see integrity issues
+   * without the fold aborting (D1).
    */
-  private parseMembershipLog(
+  private async decryptAndFold(
     entries: Array<{ chain_seq: number; payload: Uint8Array }>,
     syncCrypto: SyncCryptoInterface,
     spaceId: string,
-  ): Member[] {
-    const delegations = new Map<
-      string,
-      { role: SpaceRole; ucan: string; selfIssued: boolean; handle?: string }
-    >();
-    const acceptances = new Map<string, string | undefined>();
-    const declines = new Set<string>();
-    const revocations = new Set<string>();
-
-    const nowSeconds = Math.floor(Date.now() / 1000);
+    removedDid?: string,
+  ): Promise<MembershipLogFold> {
     const decrypted = this.decryptLogEntries(entries, syncCrypto, spaceId);
-
-    for (const { seq, payloadStr, entry: memberEntry } of decrypted) {
-      // Verify over the ORIGINAL payload string in Rust (single source of
-      // truth for the verification policy, docs/sdk-seam-audit.md D1).
-      // Malformed entries read as false, never throw — one poison entry
-      // must not abort the fold.
-      const valid = ensureWasm().verifyMembershipEntry(payloadStr, spaceId);
-      if (!valid) {
-        console.warn(
-          `Invalid signature on membership entry seq=${seq} in space ${spaceId}`,
-        );
-        continue;
-      }
-
-      const parsed = parseUCANPayload(memberEntry.ucan);
-
-      if (parsed.expiresAt > 0 && parsed.expiresAt < nowSeconds) {
-        continue;
-      }
-
-      switch (memberEntry.type) {
-        case "d":
-          delegations.set(parsed.audienceDID, {
-            role: cmdToRole(parsed.permission),
-            ucan: memberEntry.ucan,
-            selfIssued: parsed.issuerDID === parsed.audienceDID,
-            handle: memberEntry.recipientHandle ?? memberEntry.signerHandle,
-          });
-          break;
-        case "a":
-          acceptances.set(parsed.audienceDID, memberEntry.signerHandle);
-          break;
-        case "x":
-          declines.add(parsed.audienceDID);
-          break;
-        case "r":
-          revocations.add(parsed.audienceDID);
-          break;
-      }
+    const fold = await foldMembershipLog(
+      decrypted.map((d) => d.payloadStr),
+      spaceId,
+      Math.floor(Date.now() / 1000),
+      removedDid,
+    );
+    for (const idx of fold.skipped) {
+      const seq = decrypted[idx]?.seq ?? idx;
+      console.warn(
+        `Invalid or unverifiable membership entry seq=${seq} in space ${spaceId}, skipped`,
+      );
     }
+    return fold;
+  }
 
-    const members: Member[] = [];
-    for (const [did, info] of delegations) {
-      let status: MemberStatus;
-      if (revocations.has(did)) {
-        status = "revoked";
-      } else if (declines.has(did)) {
-        status = "declined";
-      } else if (info.selfIssued || acceptances.has(did)) {
-        status = "joined";
-      } else {
-        status = "pending";
-      }
-
-      const handle = acceptances.get(did) ?? info.handle;
-      members.push({ did, role: info.role, status, handle });
-    }
-
-    return members;
+  /**
+   * Parse decrypted membership log entries into a Member[] list.
+   * The fold (parse + verify + status/ordering) runs in Rust — one canonical
+   * pass pinned by conformance vectors (audit G4). Poison entries are
+   * skipped and warned about; they never abort the fold (D1).
+   */
+  private async parseMembershipLog(
+    entries: Array<{ chain_seq: number; payload: Uint8Array }>,
+    syncCrypto: SyncCryptoInterface,
+    spaceId: string,
+  ): Promise<Member[]> {
+    const fold = await this.decryptAndFold(entries, syncCrypto, spaceId);
+    return fold.members.map((m) => ({
+      did: m.did,
+      role: m.role,
+      status: m.status,
+      handle: m.handle,
+    }));
   }
 
   /**
@@ -806,62 +761,23 @@ export class SpaceManager {
       undefined,
       spaceUCAN,
     );
-    const decrypted = this.decryptLogEntries(log.entries, syncCrypto, spaceId);
-    const ucanCIDs: string[] = [];
-    const ucansToRevoke: string[] = []; // UCANs needing revocation log entries
-    // Order-sensitive active-member tracking (AUD-024): a `d` entry
-    // (re-)activates its audience; an `r` entry deactivates it. Fresh-key
-    // shares and the re-encrypted log cover only members whose FINAL state
-    // is active — a revoked-then-re-invited member must receive the key,
-    // while a stale pre-revocation delegation must not be resurrected.
-    const contactsByDid = new Map<string, MemberContact>();
-    const payloadsByDid = new Map<string, string>();
-    let memberContact:
-      | { mailboxId: string; publicKeyJwk: JsonWebKey }
-      | undefined;
-    const nowSeconds = Math.floor(Date.now() / 1000);
-
-    for (const { payloadStr, entry: memberEntry } of decrypted) {
-      const parsed = parseUCANPayload(memberEntry.ucan);
-
-      // Revocation entries deactivate their audience.
-      if (memberEntry.type === "r") {
-        contactsByDid.delete(parsed.audienceDID);
-        payloadsByDid.delete(parsed.audienceDID);
-        continue;
-      }
-      // Only process delegation entries for member discovery
-      if (memberEntry.type !== "d") continue;
-
-      // Skip expired UCANs entirely
-      if (parsed.expiresAt > 0 && parsed.expiresAt < nowSeconds) continue;
-
-      if (parsed.audienceDID === memberDID) {
-        ucanCIDs.push(computeUCANCID(memberEntry.ucan));
-        // Collect UCAN for revocation log entry (only non-perpetual UCANs)
-        if (parsed.expiresAt > 0) {
-          ucansToRevoke.push(memberEntry.ucan);
-        }
-        // Collect contact info for revocation notice (last entry wins)
-        if (memberEntry.mailboxId && memberEntry.publicKeyJwk) {
-          memberContact = {
-            mailboxId: memberEntry.mailboxId,
-            publicKeyJwk: memberEntry.publicKeyJwk,
-          };
-        }
-      } else {
-        // Latest delegation wins for the member's final state.
-        contactsByDid.set(parsed.audienceDID, {
-          did: parsed.audienceDID,
-          publicKeyJwk: memberEntry.publicKeyJwk,
-        });
-        payloadsByDid.set(parsed.audienceDID, payloadStr);
-      }
-    }
-
-    const remainingEntries = [...payloadsByDid.values()];
-    const remainingContacts = [...contactsByDid.values()].filter(
-      (contact) => !!contact.publicKeyJwk,
+    // Canonical verified fold (audit G4): the removal UCAN set, the remaining
+    // ACTIVE members (fresh-key shares + re-encrypted log), and the removed
+    // member's last contact all come from one pass. `active` already excludes
+    // `memberDID`. Order-sensitive activation/deactivation (AUD-024) is part
+    // of the fold.
+    const fold = await this.decryptAndFold(
+      log.entries,
+      syncCrypto,
+      spaceId,
+      memberDID,
+    );
+    const ucanCIDs = (fold.removed?.ucans ?? []).map(computeUCANCID);
+    const ucansToRevoke = fold.removed?.revocable ?? []; // UCANs needing revocation log entries
+    const memberContact = fold.removed?.contact;
+    const remainingEntries = fold.active.map((a) => a.payload);
+    const remainingContacts = fold.active.filter(
+      (a): a is FoldedActive & { publicKeyJwk: JsonWebKey } => !!a.publicKeyJwk,
     );
 
     if (ucanCIDs.length === 0) {
@@ -1823,35 +1739,20 @@ export class SpaceManager {
     const syncCrypto = this.syncCryptos.get(spaceId);
     const spaceUCAN = this.spaceUCANs.get(spaceId);
     if (!syncCrypto) return { contacts: [], entryPayloads: [] };
-    const nowSeconds = Math.floor(Date.now() / 1000);
     const log = await this.membershipClient.getEntries(
       spaceId,
       undefined,
       spaceUCAN,
     );
-    const decrypted = this.decryptLogEntries(log.entries, syncCrypto, spaceId);
-    const active = new Map<string, MemberContact>();
-    const payloads = new Map<string, string>();
-    for (const { payloadStr, entry } of decrypted) {
-      const parsed = parseUCANPayload(entry.ucan);
-      if (entry.type === "d") {
-        if (parsed.expiresAt > 0 && parsed.expiresAt < nowSeconds) continue;
-        active.set(parsed.audienceDID, {
-          did: parsed.audienceDID,
-          publicKeyJwk: entry.publicKeyJwk,
-        });
-        payloads.set(parsed.audienceDID, payloadStr);
-      } else if (entry.type === "r") {
-        active.delete(parsed.audienceDID);
-        payloads.delete(parsed.audienceDID);
-      }
-    }
+    // Canonical verified fold (audit G4): active members + re-encryption
+    // payloads in one Rust pass (the old TS fold also skipped verification).
+    const fold = await this.decryptAndFold(log.entries, syncCrypto, spaceId);
     return {
-      contacts: [...active.values()].filter(
-        (contact): contact is MemberContact & { publicKeyJwk: JsonWebKey } =>
-          !!contact.publicKeyJwk,
+      contacts: fold.active.filter(
+        (a): a is FoldedActive & { publicKeyJwk: JsonWebKey } =>
+          !!a.publicKeyJwk,
       ),
-      entryPayloads: [...payloads.values()],
+      entryPayloads: fold.active.map((a) => a.payload),
     };
   }
 
