@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Each record's CRDT binary is wrapped with collection name and schema version
 /// before encryption, enabling multi-collection support over a single sync space.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlobEnvelope {
     /// Collection name.
     pub c: String,

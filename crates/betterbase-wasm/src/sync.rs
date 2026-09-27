@@ -2,26 +2,77 @@
 
 use crate::error::{to_js_error, to_js_value};
 use betterbase_sync_core::{
-    build_membership_signing_message, decrypt_inbound, decrypt_membership_payload, derive_forward,
-    encrypt_membership_payload, encrypt_outbound, pad_to_bucket, parse_membership_entry,
-    peek_epoch, rewrap_deks, serialize_membership_entry, unpad, verify_membership_entry,
-    BlobEnvelope, EpochKeyCache, MembershipEntryType, DEFAULT_PADDING_BUCKETS,
+    build_membership_signing_message, decode_envelope, decrypt_membership_payload, decrypt_record,
+    derive_forward, encode_envelope, encrypt_membership_payload, encrypt_record, pad_to_bucket,
+    parse_membership_entry, peek_epoch, rewrap_deks, serialize_membership_entry, unpad,
+    verify_membership_entry, BlobEnvelope, MembershipEntryType, DEFAULT_PADDING_BUCKETS,
 };
 use wasm_bindgen::prelude::*;
 
 // --- Envelope + Padding ---
 
 #[wasm_bindgen(js_name = "padToBucket")]
-pub fn wasm_pad_to_bucket(data: &[u8]) -> Result<Vec<u8>, JsValue> {
-    pad_to_bucket(data, DEFAULT_PADDING_BUCKETS).map_err(to_js_error)
+pub fn wasm_pad_to_bucket(data: &[u8], buckets: Option<Vec<u32>>) -> Result<Vec<u8>, JsValue> {
+    let buckets = buckets
+        .map(|b| b.into_iter().map(|x| x as usize).collect::<Vec<_>>())
+        .unwrap_or_else(|| DEFAULT_PADDING_BUCKETS.to_vec());
+    pad_to_bucket(data, &buckets).map_err(to_js_error)
 }
 
 #[wasm_bindgen(js_name = "unpad")]
-pub fn wasm_unpad(data: &[u8]) -> Result<Vec<u8>, JsValue> {
-    unpad(data, DEFAULT_PADDING_BUCKETS).map_err(to_js_error)
+pub fn wasm_unpad(data: &[u8], buckets: Option<Vec<u32>>) -> Result<Vec<u8>, JsValue> {
+    let buckets = buckets
+        .map(|b| b.into_iter().map(|x| x as usize).collect::<Vec<_>>())
+        .unwrap_or_else(|| DEFAULT_PADDING_BUCKETS.to_vec());
+    unpad(data, &buckets).map_err(to_js_error)
 }
 
 // --- Transport encrypt/decrypt ---
+
+#[wasm_bindgen(js_name = "encodeBlobEnvelope")]
+pub fn wasm_encode_blob_envelope(
+    collection: &str,
+    version: u32,
+    crdt: &[u8],
+    edit_chain: Option<String>,
+) -> Result<Vec<u8>, JsValue> {
+    encode_envelope(&BlobEnvelope {
+        c: collection.to_string(),
+        v: version as u64,
+        crdt: crdt.to_vec(),
+        h: edit_chain,
+    })
+    .map_err(to_js_error)
+}
+
+#[wasm_bindgen(js_name = "decodeBlobEnvelope")]
+pub fn wasm_decode_blob_envelope(data: &[u8]) -> Result<JsValue, JsValue> {
+    let envelope = decode_envelope(data).map_err(to_js_error)?;
+    let result = js_sys::Object::new();
+    // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
+    js_sys::Reflect::set(
+        &result,
+        &"collection".into(),
+        &JsValue::from_str(&envelope.c),
+    )
+    .unwrap();
+    js_sys::Reflect::set(
+        &result,
+        &"version".into(),
+        &JsValue::from(envelope.v as u32),
+    )
+    .unwrap();
+    js_sys::Reflect::set(
+        &result,
+        &"crdt".into(),
+        &js_sys::Uint8Array::from(envelope.crdt.as_slice()),
+    )
+    .unwrap();
+    if let Some(ref h) = envelope.h {
+        js_sys::Reflect::set(&result, &"editChain".into(), &JsValue::from_str(h)).unwrap();
+    }
+    Ok(result.into())
+}
 
 #[wasm_bindgen(js_name = "encryptOutbound")]
 pub fn wasm_encrypt_outbound(
@@ -30,10 +81,10 @@ pub fn wasm_encrypt_outbound(
     crdt: &[u8],
     edit_chain: Option<String>,
     record_id: &str,
-    epoch_key: &[u8],
-    base_epoch: u32,
-    current_epoch: u32,
     space_id: &str,
+    kek: &[u8],
+    epoch: u32,
+    buckets: Option<Vec<u32>>,
 ) -> Result<JsValue, JsValue> {
     let envelope = BlobEnvelope {
         c: collection.to_string(),
@@ -41,13 +92,11 @@ pub fn wasm_encrypt_outbound(
         crdt: crdt.to_vec(),
         h: edit_chain,
     };
-    let mut cache = EpochKeyCache::new(epoch_key, base_epoch, space_id);
-    cache.update_encryption_epoch(current_epoch);
-
-    let (blob, wrapped_dek) =
-        encrypt_outbound(&envelope, record_id, &mut cache, DEFAULT_PADDING_BUCKETS)
-            .map_err(to_js_error)?;
-
+    let buckets = buckets
+        .map(|b| b.into_iter().map(|x| x as usize).collect::<Vec<_>>())
+        .unwrap_or_else(|| DEFAULT_PADDING_BUCKETS.to_vec());
+    let (blob, wrapped_dek) = encrypt_record(&envelope, record_id, space_id, kek, epoch, &buckets)
+        .map_err(to_js_error)?;
     // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
     let result = js_sys::Object::new();
     js_sys::Reflect::set(
@@ -70,21 +119,15 @@ pub fn wasm_decrypt_inbound(
     blob: &[u8],
     wrapped_dek: &[u8],
     record_id: &str,
-    epoch_key: &[u8],
-    base_epoch: u32,
     space_id: &str,
+    kek: &[u8],
+    buckets: Option<Vec<u32>>,
 ) -> Result<JsValue, JsValue> {
-    let mut cache = EpochKeyCache::new(epoch_key, base_epoch, space_id);
-
-    let envelope = decrypt_inbound(
-        blob,
-        wrapped_dek,
-        record_id,
-        &mut cache,
-        DEFAULT_PADDING_BUCKETS,
-    )
-    .map_err(to_js_error)?;
-
+    let buckets = buckets
+        .map(|b| b.into_iter().map(|x| x as usize).collect::<Vec<_>>())
+        .unwrap_or_else(|| DEFAULT_PADDING_BUCKETS.to_vec());
+    let envelope = decrypt_record(blob, wrapped_dek, record_id, space_id, kek, &buckets)
+        .map_err(to_js_error)?;
     // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
     let result = js_sys::Object::new();
     js_sys::Reflect::set(
@@ -110,8 +153,6 @@ pub fn wasm_decrypt_inbound(
     }
     Ok(result.into())
 }
-
-// --- Epoch / re-encryption ---
 
 #[wasm_bindgen(js_name = "peekEpoch")]
 pub fn wasm_peek_epoch(wrapped_dek: &[u8]) -> Result<u32, JsValue> {

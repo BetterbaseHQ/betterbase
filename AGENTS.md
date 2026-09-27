@@ -86,7 +86,7 @@ Key functions by crate:
 - **betterbase-crypto**: `encrypt_v4()`, `decrypt_v4()`, `wrap_dek()`, `unwrap_dek()`, `derive_epoch_key_from_root()`, `sign()`, `verify()`, `issue_root_ucan()`, `sign_edit_entry()`, `value_diff()`
 - **betterbase-auth**: `generate_code_verifier()`, `compute_code_challenge()`, `decrypt_jwe_compact()`, `extract_encryption_key()`, `derive_mailbox_id()`
 - **betterbase-discovery**: `validate_server_metadata()`, `parse_webfinger_response()`
-- **betterbase-sync-core**: `encrypt_outbound()`, `decrypt_inbound()`, `pad_to_bucket()`, `unpad()`, `rewrap_deks()`, `encrypt_membership_payload()`
+- **betterbase-sync-core**: `encode_envelope()`, `decode_envelope()`, `encrypt_record()`, `decrypt_record()`, `pad_to_bucket()`, `unpad()`, `peek_epoch()`, `derive_forward()`, `rewrap_deks()`, `encrypt_membership_payload()`
 - **betterbase-db**: Collection definitions, schema validation, CRDT merge (json-joy Rust port), query engine, sync manager
 
 ### WASM boundary

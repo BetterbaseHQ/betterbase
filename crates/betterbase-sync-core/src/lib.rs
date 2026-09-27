@@ -1,7 +1,6 @@
 //! Sync core: envelope encoding, padding, transport encryption, epoch management, membership.
 
 pub mod envelope;
-pub mod epoch_cache;
 pub mod error;
 pub mod frames;
 pub mod membership;
@@ -11,7 +10,6 @@ pub mod transport;
 pub mod types;
 
 pub use envelope::{decode_envelope, encode_envelope};
-pub use epoch_cache::EpochKeyCache;
 pub use error::SyncError;
 pub use frames::{
     decode_frame, encode_auth_frame, encode_notification_frame, encode_request_frame, DecodedFrame,
@@ -27,5 +25,5 @@ pub use membership::{
 };
 pub use padding::{pad_to_bucket, unpad, DEFAULT_PADDING_BUCKETS};
 pub use reencrypt::{derive_forward, peek_epoch, rewrap_deks};
-pub use transport::{decrypt_inbound, encrypt_outbound};
+pub use transport::{decrypt_record, encrypt_record};
 pub use types::BlobEnvelope;

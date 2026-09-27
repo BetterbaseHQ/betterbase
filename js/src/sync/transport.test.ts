@@ -1,8 +1,10 @@
 /**
- * Unit tests for SyncTransport's push failure semantics.
+ * Unit tests for SyncTransport's push/pull failure semantics.
  *
  * The push function is the boundary (mocked). Tombstone-only pushes need
  * no key material, so the transport runs without crypto configuration.
+ * The wasm module is mocked with a 1:1 JS mirror (transport-mock.ts); the
+ * real wasm is pinned by the browser vector tests.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -11,8 +13,16 @@ import {
   PushRejectedError,
   TransientKeyResolutionError,
 } from "./transport.js";
+import {
+  wasmMock,
+  createTransportWasmMock,
+  type TransportWasmCodec,
+} from "./transport-mock.js";
 
-const unwrapState = vi.hoisted(() => ({ keys: [] as Uint8Array[] }));
+vi.mock(
+  "../wasm-init.js",
+  async () => (await import("./transport-mock.js")).wasmMock,
+);
 
 vi.mock("../crypto/index.js", () => ({
   deriveNextEpochKey: () => new Uint8Array(32).fill(7),
@@ -60,12 +70,7 @@ vi.mock("../crypto/index.js", () => ({
   maxEpochDeriveDistance: () => 1000,
 }));
 vi.mock("../crypto/internals.js", () => ({
-  generateDEK: () => new Uint8Array(44),
-  wrapDEK: (dek: Uint8Array) => dek,
-  unwrapDEK: (_wrapped: Uint8Array, key: Uint8Array) => {
-    unwrapState.keys.push(key);
-    throw new Error("unwrap failed (garbage wrapped DEK)");
-  },
+  generateDEK: () => new Uint8Array(32),
   encryptV4: (data: Uint8Array) => data,
   decryptV4: () => {
     throw new Error("decrypt failed");
@@ -150,6 +155,82 @@ describe("SyncTransport.push", () => {
     expect(acks).toEqual([]);
     expect(push).not.toHaveBeenCalled();
   });
+
+  it("without encryption, pads the CBOR envelope to the smallest bucket and sends no wrapped DEK", async () => {
+    const pushed: unknown[] = [];
+    const transport = new SyncTransport({
+      push: async (changes) => {
+        pushed.push(...changes);
+        return { ok: true, sequence: 4 };
+      },
+      spaceId: "space-1",
+    });
+
+    const acks = await transport.push("notes", [
+      {
+        id: "n1",
+        _v: 2,
+        crdt: new Uint8Array([1, 2, 3]),
+        deleted: false,
+        sequence: 1,
+        meta: undefined,
+      },
+    ]);
+
+    expect(acks).toEqual([{ id: "n1", sequence: 4 }]);
+    const change = pushed[0] as {
+      id: string;
+      blob: Uint8Array;
+      wrappedDek?: Uint8Array;
+    };
+    expect(change.id).toBe("n1");
+    expect(change.wrappedDek).toBeUndefined();
+    // Smallest bucket (256) with a u32-LE length prefix for the CBOR envelope.
+    expect(change.blob).toHaveLength(256);
+    const codec = wasmMock.ensureWasm() as TransportWasmCodec;
+    const env = codec.decodeBlobEnvelope(codec.unpad(change.blob));
+    expect(env).toEqual({
+      collection: "notes",
+      version: 2,
+      crdt: new Uint8Array([1, 2, 3]),
+    });
+  });
+
+  it("raw-key push resolves the current epoch KEK and forwards to wasm.encryptOutbound", async () => {
+    const key = new Uint8Array(32).fill(0x5a);
+    const pushed: unknown[] = [];
+    const transport = new SyncTransport({
+      push: async (changes) => {
+        pushed.push(...changes);
+        return { ok: true, sequence: 9 };
+      },
+      spaceId: "space-1",
+      epochConfig: { epoch: 7, epochKey: key },
+    });
+
+    await transport.push("notes", [
+      {
+        id: "n2",
+        _v: 1,
+        crdt: new Uint8Array([9, 9]),
+        deleted: false,
+        sequence: 2,
+        meta: undefined,
+      },
+    ]);
+
+    const call = wasmMock.calls.encryptOutbound.at(-1);
+    expect(call).toBeDefined();
+    expect(call!.recordId).toBe("n2");
+    expect(call!.spaceId).toBe("space-1");
+    expect(call!.epoch).toBe(7);
+    expect(call!.kek).toEqual(key);
+    // Wire shape: wrapped DEK is the 4-byte BE epoch prefix + 40-byte AES-KW.
+    const change = pushed[0] as { blob: Uint8Array; wrappedDek: Uint8Array };
+    expect(change.wrappedDek).toHaveLength(44);
+    expect(new DataView(change.wrappedDek.buffer).getUint32(0, false)).toBe(7);
+    expect(change.blob).toHaveLength(256);
+  });
 });
 
 describe("SyncTransport.pull failure classification (AUD-024)", () => {
@@ -224,9 +305,9 @@ describe("SyncTransport.pull failure classification (AUD-024)", () => {
     const result = await transport.pull("notes", 0);
 
     expect(resolveEpochKey).toHaveBeenCalledWith(0);
-    // The resolved share — not the base or a derived key — was handed to
-    // unwrapDEK (the mock unwrap then fails on the garbage DEK).
-    expect(unwrapState.keys.at(-1)).toEqual(share);
+    // The resolved share — not the base or a derived key — was handed to the
+    // wasm pipeline (which then fails on the garbage DEK, as expected).
+    expect(wasmMock.calls.decryptInbound.at(-1)!.kek).toEqual(share);
     expect(result.failures).toHaveLength(1);
     expect(result.failures![0]!.retryable).toBe(false);
   });
@@ -264,5 +345,88 @@ describe("SyncTransport.shouldAdvanceEpoch fail-safe", () => {
     expect(mk(null).shouldAdvanceEpoch()).toBe(false);
     expect(mk(Number.NaN).shouldAdvanceEpoch()).toBe(false);
     expect(mk(0).shouldAdvanceEpoch()).toBe(false);
+  });
+});
+
+// --- Conformance vectors: pin the mock's deterministic surfaces to the
+// committed vector file (same file the real wasm is pinned by in Rust and
+// browser tests — mock drift is caught here). ---
+import vectors from "../../../crates/betterbase-sync-core/test-vectors/envelope-pipeline.json";
+
+function fromHex(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function buildAad(spaceId: string, recordId: string): Uint8Array {
+  const enc = new TextEncoder();
+  const a = enc.encode(spaceId);
+  const r = enc.encode(recordId);
+  const out = new Uint8Array(4 + a.length + r.length);
+  new DataView(out.buffer).setUint32(0, a.length, false);
+  out.set(a, 4);
+  out.set(r, 4 + a.length);
+  return out;
+}
+
+const hexOf = (bytes: Uint8Array) =>
+  Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
+describe("transport wasm-mock conformance (envelope-pipeline.json)", () => {
+  const api = createTransportWasmMock().ensureWasm();
+
+  it("encodeBlobEnvelope matches the vector file", () => {
+    for (const c of vectors.envelope.cases) {
+      expect(
+        hexOf(api.encodeBlobEnvelope(c.c, c.v, fromHex(c.crdt), c.h)),
+      ).toBe(c.expected);
+    }
+  });
+
+  it("padToBucket matches the vector file", () => {
+    const buckets = Uint32Array.from(vectors.padding.buckets);
+    for (const c of vectors.padding.cases) {
+      const padded = api.padToBucket(fromHex(c.input), buckets);
+      expect(hexOf(padded)).toBe(c.expected);
+      expect(hexOf(api.unpad(padded, buckets))).toBe(c.input);
+    }
+  });
+
+  it("peekEpoch matches the vector file", () => {
+    for (const c of vectors.peek.cases) {
+      expect(api.peekEpoch(fromHex(c.wrapped))).toBe(c.expectedEpoch);
+    }
+  });
+
+  it("encryptOutbound wraps the DEK under the given epoch (prefix matches vector)", () => {
+    // The mock models the wire shape only (no real AES-KW); the byte-exact
+    // wrap is pinned by the Rust vectors_* tests and the real-wasm browser
+    // test. Here we pin the [u32 BE epoch] prefix the transport relies on.
+    const p = vectors.pipeline.cases[0];
+    if (!p) throw new Error("vector file missing pipeline case");
+    const epoch = new DataView(fromHex(p.wrappedDek).buffer).getUint32(
+      0,
+      false,
+    );
+    const { wrappedDek } = api.encryptOutbound(
+      p.expected.c,
+      p.expected.v,
+      fromHex(p.expected.crdt),
+      p.expected.h,
+      p.recordId,
+      p.spaceId,
+      fromHex(p.kek),
+      epoch,
+    );
+    expect(hexOf(wrappedDek.slice(0, 4))).toBe(p.wrappedDek.slice(0, 8));
+  });
+
+  it("AAD layout matches the vector file (incl. non-ASCII UTF-8 byte lengths)", () => {
+    for (const c of vectors.aad.cases) {
+      expect(hexOf(buildAad(c.spaceId, c.recordId))).toBe(c.expected);
+    }
   });
 });

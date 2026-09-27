@@ -26,7 +26,7 @@ import type {
   SyncEventData,
   EpochConfig,
 } from "./types.js";
-import { cborEncode, cborDecode } from "./cbor.js";
+import { ensureWasm } from "../wasm-init.js";
 import {
   maxEpochDeriveDistance,
   selectEpochKey,
@@ -38,13 +38,7 @@ import {
   parseEditChain,
   type EditEntry,
 } from "../crypto/index.js";
-import {
-  generateDEK,
-  wrapDEK,
-  unwrapDEK,
-  encryptV4,
-  decryptV4,
-} from "../crypto/internals.js";
+import { generateDEK, encryptV4, decryptV4 } from "../crypto/internals.js";
 import {
   webcryptoWrapDEK,
   webcryptoUnwrapDEK,
@@ -75,17 +69,6 @@ interface ConversionResult {
   records: RemoteRecord[];
   failures: Array<{ id: string; sequence: number; error: Error }>;
 }
-
-/**
- * Default padding bucket sizes in bytes.
- * Data is padded to the smallest bucket that fits.
- */
-export const DEFAULT_PADDING_BUCKETS = [
-  256, 1024, 4096, 16384, 65536, 262144, 1048576,
-] as const;
-
-/** Length prefix size for padding (4 bytes, u32 LE). */
-const PADDING_LENGTH_PREFIX = 4;
 
 /** Identity for signing edit chain entries. */
 export interface EditChainIdentity {
@@ -176,7 +159,8 @@ export class TransientKeyResolutionError extends Error {
 export class SyncTransport implements SyncTransportInterface {
   private pushFn: (changes: Change[], epoch: number) => Promise<PushResult>;
   private spaceId?: string;
-  private paddingBuckets: number[];
+  /** `null` = use the wasm default bucket table (single source of truth in Rust). */
+  private paddingBuckets: Uint32Array | null;
   private epochConfig?: EpochConfig;
   private identity?: EditChainIdentity;
   private editChainCollections?: Set<string>;
@@ -206,7 +190,18 @@ export class SyncTransport implements SyncTransportInterface {
   constructor(config: SyncTransportConfig) {
     this.pushFn = config.push;
     this.spaceId = config.spaceId;
-    this.paddingBuckets = config.paddingBuckets ?? [...DEFAULT_PADDING_BUCKETS];
+    if (config.paddingBuckets) {
+      for (const bucket of config.paddingBuckets) {
+        if (!Number.isInteger(bucket) || bucket <= 0) {
+          throw new Error(
+            `invalid padding bucket: ${String(bucket)} (must be a positive integer)`,
+          );
+        }
+      }
+      this.paddingBuckets = Uint32Array.from(config.paddingBuckets);
+    } else {
+      this.paddingBuckets = null;
+    }
     this.epochConfig = config.epochConfig;
     this.identity = config.identity;
     this.editChainCollections = config.editChainCollections;
@@ -374,7 +369,7 @@ export class SyncTransport implements SyncTransportInterface {
         this.appendEditChainEntry(envelope, record, collection);
       }
 
-      const { blob, wrappedDEK } = await this.encryptEnvelope(
+      const { blob, wrappedDek } = await this.encryptEnvelope(
         envelope,
         record.id,
       );
@@ -382,7 +377,7 @@ export class SyncTransport implements SyncTransportInterface {
         id: record.id,
         blob,
         sequence: record.sequence,
-        ...(wrappedDEK ? { wrappedDek: wrappedDEK } : {}),
+        ...(wrappedDek ? { wrappedDek } : {}),
       };
     } catch (err) {
       // Per-record encryption failure (e.g., padding overflow).
@@ -835,40 +830,60 @@ export class SyncTransport implements SyncTransportInterface {
    * Encrypt an envelope using a fresh per-record DEK.
    * Returns the encrypted blob and the wrapped DEK.
    *
-   * CryptoKey path (personal space): uses Web Crypto for AES-KW wrap.
-   * Uint8Array path (shared spaces): uses WASM for AES-KW wrap.
+   * CryptoKey path (personal space): non-extractable keys can't enter wasm,
+   * so AES-KW wrap/unwrap runs via Web Crypto while v4/pad/CBOR run in wasm
+   * (byte-compatible with the Rust pipeline, pinned by the conformance
+   * vectors). Raw-key path (shared spaces): the full pipeline runs in wasm
+   * (canonical).
    */
   private async encryptEnvelope(
     envelope: BlobEnvelope,
     recordId: string,
-  ): Promise<{ blob: Uint8Array; wrappedDEK?: Uint8Array }> {
-    const bytes = cborEncode(envelope);
-    const padded = this.pad(bytes);
+  ): Promise<{ blob: Uint8Array; wrappedDek?: Uint8Array }> {
+    // spaceId is guaranteed by constructor when kek is set
+    const wasm = ensureWasm();
+    // Canonical CBOR encode (only the branches that take envelope fields
+    // need it; the raw-key path re-encodes inside encryptOutbound).
+    const encode = () =>
+      wasm.encodeBlobEnvelope(
+        envelope.c,
+        envelope.v,
+        envelope.crdt,
+        envelope.h ?? null,
+      );
 
-    if (this.baseKek) {
-      // spaceId is guaranteed by constructor when kek is set
+    if (this.baseKek instanceof CryptoKey) {
       const context = { spaceId: this.spaceId!, recordId };
+      const padded = wasm.padToBucket(encode(), this.paddingBuckets);
       const dek = generateDEK();
       try {
         const blob = encryptV4(padded, dek, context);
-
-        let wrappedDEK: Uint8Array;
-        if (this.baseKek instanceof CryptoKey) {
-          // Web Crypto path — personal space
-          const kek = await this.getKEKForEpochCryptoKey(this.currentEpoch);
-          wrappedDEK = await webcryptoWrapDEK(dek, kek, this.currentEpoch);
-        } else {
-          // WASM path — shared spaces
-          const kek = this.getKEKForEpoch(this.currentEpoch);
-          wrappedDEK = wrapDEK(dek, kek, this.currentEpoch);
-        }
-        return { blob, wrappedDEK };
+        const kek = await this.getKEKForEpochCryptoKey(this.currentEpoch);
+        const wrappedDek = await webcryptoWrapDEK(dek, kek, this.currentEpoch);
+        return { blob, wrappedDek };
       } finally {
         dek.fill(0); // Zero plaintext DEK after use
       }
     }
 
-    return { blob: padded };
+    if (this.baseKek) {
+      // Raw-key path: caller-resolved epoch KEK, pipeline inside wasm
+      const kek = this.getKEKForEpoch(this.currentEpoch);
+      return wasm.encryptOutbound(
+        envelope.c,
+        envelope.v,
+        envelope.crdt,
+        envelope.h ?? null,
+        recordId,
+        this.spaceId!,
+        kek,
+        this.currentEpoch,
+        this.paddingBuckets,
+      );
+    }
+
+    // No encryption configured
+    return { blob: wasm.padToBucket(encode(), this.paddingBuckets) };
   }
 
   /**
@@ -980,60 +995,58 @@ export class SyncTransport implements SyncTransportInterface {
   }
 
   /**
-   * Decrypt an envelope using the record's DEK.
+   * Decrypt an inbound blob to its BlobEnvelope.
+   *
+   * CryptoKey path (personal space): Web Crypto AES-KW unwrap + v4 decrypt
+   * (non-extractable keys can't enter wasm), then wasm unpad + decode.
+   * Raw-key path (shared spaces): peek the epoch from the wrapped DEK,
+   * resolve the epoch KEK (canonical Rust ladder), then run the full
+   * pipeline (unwrap -> v4 -> unpad -> decode) inside wasm.
    */
   private async decryptEnvelope(
     blob: Uint8Array,
     recordId: string,
     wrappedDEKBytes?: Uint8Array,
   ): Promise<BlobEnvelope> {
-    const raw = await this.decryptBlob(blob, recordId, wrappedDEKBytes);
-    const decrypted = this.unpad(raw);
-    return this.decodeEnvelope(decrypted);
-  }
+    const wasm = ensureWasm();
 
-  private async decryptBlob(
-    blob: Uint8Array,
-    recordId: string,
-    wrappedDEKBytes?: Uint8Array,
-  ): Promise<Uint8Array> {
     if (this.baseKek && wrappedDEKBytes) {
       // spaceId is guaranteed by constructor when kek is set
-      const context = { spaceId: this.spaceId!, recordId };
-
       // Peek at epoch from wrapped DEK prefix (first 4 bytes, u32 BE)
-      const dekEpoch = new DataView(
-        wrappedDEKBytes.buffer,
-        wrappedDEKBytes.byteOffset,
-        wrappedDEKBytes.byteLength,
-      ).getUint32(0, false);
+      const dekEpoch = wasm.peekEpoch(wrappedDEKBytes);
 
       if (this.baseKek instanceof CryptoKey) {
         // Web Crypto path — personal space
+        const context = { spaceId: this.spaceId!, recordId };
         const kek = await this.getKEKForEpochCryptoKey(dekEpoch);
         const { dek } = await webcryptoUnwrapDEK(wrappedDEKBytes, kek);
         try {
-          return decryptV4(blob, dek, context);
-        } finally {
-          dek.fill(0);
-        }
-      } else {
-        // WASM path — shared spaces. A DEK at a future epoch may belong to a
-        // fresh-key rotation (AUD-024): resolve its distributed key before
-        // falling back to forward derivation from the base.
-        const kek = await this.kekForEpoch(dekEpoch);
-        const { dek } = unwrapDEK(wrappedDEKBytes, kek);
-        try {
-          return decryptV4(blob, dek, context);
+          const padded = decryptV4(blob, dek, context);
+          return this.decodeEnvelope(wasm.unpad(padded, this.paddingBuckets));
         } finally {
           dek.fill(0);
         }
       }
+
+      // Raw-key path — shared spaces. A DEK at a future epoch may belong to a
+      // fresh-key rotation (AUD-024): resolve its distributed key before
+      // falling back to forward derivation from the base.
+      const kek = await this.kekForEpoch(dekEpoch);
+      return this.toBlobEnvelope(
+        wasm.decryptInbound(
+          blob,
+          wrappedDEKBytes,
+          recordId,
+          this.spaceId!,
+          kek,
+          this.paddingBuckets,
+        ),
+      );
     }
 
     if (!this.baseKek) {
       // No encryption configured
-      return blob;
+      return this.decodeEnvelope(wasm.unpad(blob, this.paddingBuckets));
     }
 
     throw new Error("Missing wrapped DEK for encrypted record");
@@ -1077,107 +1090,28 @@ export class SyncTransport implements SyncTransportInterface {
     return this.getKEKForEpoch(dekEpoch);
   }
 
-  private decodeEnvelope(decrypted: Uint8Array): BlobEnvelope {
-    let parsed: unknown;
-    try {
-      parsed = cborDecode(decrypted);
-    } catch {
-      throw new Error(
-        `Failed to decode CBOR envelope (${decrypted.length} bytes)`,
-      );
-    }
-
-    const obj = parsed as Record<string, unknown>;
-    if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      !("c" in obj) ||
-      !("v" in obj) ||
-      !("crdt" in obj) ||
-      typeof obj.c !== "string" ||
-      typeof obj.v !== "number" ||
-      !(obj.crdt instanceof Uint8Array)
-    ) {
-      throw new Error(
-        `Invalid envelope structure: expected {c: string, v: number, crdt: Uint8Array}, ` +
-          `got {c: ${typeof obj.c}, v: ${typeof obj.v}, crdt: ${obj.crdt?.constructor?.name ?? typeof obj.crdt}}`,
-      );
-    }
-
+  private toBlobEnvelope(env: {
+    collection: string;
+    version: number;
+    crdt: Uint8Array;
+    editChain?: string;
+  }): BlobEnvelope {
     const envelope: BlobEnvelope = {
-      c: obj.c as string,
-      v: obj.v as number,
-      crdt: new Uint8Array(obj.crdt),
+      c: env.collection,
+      v: env.version,
+      crdt: env.crdt,
     };
-    if (typeof obj.h === "string") {
-      envelope.h = obj.h;
+    if (env.editChain !== undefined) {
+      envelope.h = env.editChain;
     }
     return envelope;
   }
 
   /**
-   * Pad data to a fixed-size bucket.
-   * Format: [4 bytes: u32 LE length][data][zero padding]
-   * If no buckets are configured, returns the data with length prefix only.
+   * Decode a decrypted (unpadded) envelope. The CBOR shape is canonical in
+   * Rust (decodeBlobEnvelope); validation errors come from there.
    */
-  private pad(data: Uint8Array): Uint8Array {
-    if (this.paddingBuckets.length === 0) {
-      return data;
-    }
-
-    const totalNeeded = PADDING_LENGTH_PREFIX + data.length;
-    let bucketSize = 0;
-    for (const bucket of this.paddingBuckets) {
-      if (bucket >= totalNeeded) {
-        bucketSize = bucket;
-        break;
-      }
-    }
-    if (bucketSize === 0) {
-      throw new Error(
-        `Data too large for padding: ${data.length} bytes exceeds max bucket ${this.paddingBuckets[this.paddingBuckets.length - 1]}`,
-      );
-    }
-
-    const padded = new Uint8Array(bucketSize);
-    // Write length prefix (u32 LE)
-    const view = new DataView(
-      padded.buffer,
-      padded.byteOffset,
-      padded.byteLength,
-    );
-    view.setUint32(0, data.length, true);
-    padded.set(data, PADDING_LENGTH_PREFIX);
-    // Remaining bytes are already zero
-    return padded;
-  }
-
-  /**
-   * Remove padding from data.
-   * Reads the 4-byte length prefix and extracts the original data.
-   * If no buckets are configured, returns the data as-is.
-   */
-  private unpad(data: Uint8Array): Uint8Array {
-    if (this.paddingBuckets.length === 0) {
-      return data;
-    }
-
-    if (data.length < PADDING_LENGTH_PREFIX) {
-      throw new Error(`Padded data too short: ${data.length} bytes`);
-    }
-
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    const originalLength = view.getUint32(0, true);
-
-    if (originalLength > data.length - PADDING_LENGTH_PREFIX) {
-      throw new Error(
-        `Invalid padding: claimed length ${originalLength} exceeds available data ${data.length - PADDING_LENGTH_PREFIX}`,
-      );
-    }
-
-    return data.slice(
-      PADDING_LENGTH_PREFIX,
-      PADDING_LENGTH_PREFIX + originalLength,
-    );
+  private decodeEnvelope(decrypted: Uint8Array): BlobEnvelope {
+    return this.toBlobEnvelope(ensureWasm().decodeBlobEnvelope(decrypted));
   }
 }

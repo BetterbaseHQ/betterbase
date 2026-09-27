@@ -3,7 +3,7 @@
 use crate::error::SyncError;
 use betterbase_crypto::{derive_next_epoch_key, unwrap_dek, wrap_dek};
 use std::collections::HashMap;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Read the epoch prefix from a wrapped DEK (first 4 bytes, big-endian u32).
 pub fn peek_epoch(wrapped_dek: &[u8]) -> Result<u32, SyncError> {
@@ -97,9 +97,8 @@ pub fn rewrap_deks(
             record_id: id.clone(),
         })?;
 
-        let (mut dek, _epoch) = unwrap_dek(wrapped_dek, unwrap_key)?;
+        let dek = Zeroizing::new(unwrap_dek(wrapped_dek, unwrap_key)?.0);
         let rewrapped = wrap_dek(&dek, new_key, new_epoch)?;
-        dek.zeroize();
 
         result.push((id.clone(), rewrapped.to_vec()));
     }
@@ -265,19 +264,21 @@ mod tests {
     }
 
     #[test]
-    fn derive_forward_matches_epoch_cache() {
-        use crate::epoch_cache::EpochKeyCache;
-
+    fn derive_forward_matches_chained_derivation() {
         let root = random_key();
         let space_id = "space-test";
 
         // derive_forward from epoch 0 to epoch 5
         let forward_key = derive_forward(&root, space_id, 0, 5).unwrap();
 
-        // EpochKeyCache.get_kek should produce the same key
-        let mut cache = EpochKeyCache::new(&root, 0, space_id);
-        let cache_key = cache.get_kek(5).unwrap();
+        // Chaining derive_next_epoch_key must produce the same key.
+        let mut chained = root.to_vec();
+        for epoch in 1..=5 {
+            chained = derive_next_epoch_key(&chained, space_id, epoch)
+                .unwrap()
+                .to_vec();
+        }
 
-        assert_eq!(forward_key, cache_key.to_vec());
+        assert_eq!(forward_key, chained);
     }
 }

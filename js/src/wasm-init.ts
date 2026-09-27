@@ -156,26 +156,56 @@ export interface WasmModule {
   parseWebfingerResponse(json: string): Record<string, unknown>;
 
   // --- sync ---
-  padToBucket(data: Uint8Array): Uint8Array;
-  unpad(data: Uint8Array): Uint8Array;
+  /**
+   * BlobEnvelope CBOR encoding (canonical, frozen v1 contract).
+   * `editChain` is omitted from the encoding when null.
+   */
+  encodeBlobEnvelope(
+    collection: string,
+    version: number,
+    crdt: Uint8Array,
+    editChain: string | null,
+  ): Uint8Array;
+  /** BlobEnvelope CBOR decoding with shape validation. */
+  decodeBlobEnvelope(data: Uint8Array): {
+    collection: string;
+    version: number;
+    crdt: Uint8Array;
+    editChain?: string;
+  };
+  /**
+   * Bucket padding for size obfuscation. `buckets` is `null` = standard
+   * buckets (256 .. 1MiB); pass `[]` to disable padding.
+   */
+  padToBucket(data: Uint8Array, buckets?: Uint32Array | null): Uint8Array;
+  unpad(data: Uint8Array, buckets?: Uint32Array | null): Uint8Array;
+  /**
+   * Full outbound pipeline (canonical in Rust): BlobEnvelope CBOR -> pad ->
+   * fresh DEK -> v4 (AAD = spaceId + recordId) -> AES-KW wrap under the
+   * caller-resolved epoch KEK. `buckets` is `null` = standard buckets.
+   */
   encryptOutbound(
     collection: string,
     version: number,
     crdt: Uint8Array,
-    editChain: string | undefined,
+    editChain: string | null,
     recordId: string,
-    epochKey: Uint8Array,
-    baseEpoch: number,
-    currentEpoch: number,
     spaceId: string,
+    kek: Uint8Array,
+    epoch: number,
+    buckets?: Uint32Array | null,
   ): { blob: Uint8Array; wrappedDek: Uint8Array };
+  /**
+   * Full inbound pipeline (canonical in Rust): AES-KW unwrap under the
+   * caller-resolved epoch KEK -> v4 decrypt -> unpad -> BlobEnvelope CBOR.
+   */
   decryptInbound(
     blob: Uint8Array,
     wrappedDek: Uint8Array,
     recordId: string,
-    epochKey: Uint8Array,
-    baseEpoch: number,
     spaceId: string,
+    kek: Uint8Array,
+    buckets?: Uint32Array | null,
   ): {
     collection: string;
     version: number;

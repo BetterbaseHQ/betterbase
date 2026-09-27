@@ -229,6 +229,7 @@ dependencies = [
 name = "betterbase-sync-core"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "betterbase-crypto",
  "ciborium",
  "getrandom 0.4.3",

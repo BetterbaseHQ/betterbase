@@ -54,11 +54,6 @@ const DECL_FILES = new Set([
  * flagged — the list must shrink as the surface is wired up.
  */
 const DEAD_WITH_PLAN = {
-  decryptInbound:
-    "task 7: transport.ts envelope pipeline moves to the Rust bindings (audit #2)",
-  encryptOutbound:
-    "task 7: transport.ts envelope pipeline moves to the Rust bindings (audit #2)",
-  padToBucket: "task 7: envelope padding moves to the Rust pipeline (audit #2)",
   CURRENT_VERSION:
     "version constants: TS hardcodes 4 in sync/types.ts instead of reading the wasm constant (audit: drift risk)",
   filesBlobDir:
@@ -79,8 +74,6 @@ const DEAD_WITH_PLAN = {
  * the wasm export.
  */
 const NAME_COLLISIONS = {
-  unpad:
-    "live hits are transport.ts's private unpad(); wasm twin dies when envelope unpadding moves to the Rust pipeline (task 7, audit #2)",
   rewrapDEKs:
     "live hits are the WSClient.rewrapDEKs RPC method; wasm batch-rewrap twin is pre-AUD-024/026 — task 12 ports rewrap orchestration to Rust",
   SUPPORTED_VERSIONS:
