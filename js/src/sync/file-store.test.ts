@@ -138,6 +138,47 @@ vi.mock("./file-policy.js", () => {
       uploadError: error,
       attempts: (m.attempts ?? 0) + 1,
     }),
+    filePlanMigration: (
+      all: M[],
+      toSpaceId: string,
+      recordIds: Record<string, string | null>,
+      cachedKeys: string[],
+      fetchableKeys: string[],
+    ) => {
+      const cached = new Set(cachedKeys);
+      const fetchable = new Set(fetchableKeys);
+      return {
+        toSpaceId,
+        actions: all.map((m) => {
+          const fileId = m.fileId as string;
+          let action:
+            | { reKey: { targetRecordId: string | null } }
+            | {
+                skip: {
+                  reason: "uploadInFlight" | "noTargetRecordId" | "noBytes";
+                };
+              };
+          if (m.uploadStatus === "uploading") {
+            action = { skip: { reason: "uploadInFlight" } };
+          } else if (!cached.has(m.key) && !fetchable.has(m.key)) {
+            action = { skip: { reason: "noBytes" } };
+          } else if (Object.hasOwn(recordIds, fileId)) {
+            const target: string | null = recordIds[fileId] ?? null;
+            action =
+              target === null
+                ? { skip: { reason: "noTargetRecordId" } }
+                : { reKey: { targetRecordId: target } };
+          } else {
+            action = {
+              reKey: {
+                targetRecordId: (m.recordId as string | undefined) ?? null,
+              },
+            };
+          }
+          return { key: m.key, action };
+        }),
+      };
+    },
     fileClearQueueState: (m: M) => {
       const {
         recordId,
@@ -155,6 +196,30 @@ vi.mock("./file-policy.js", () => {
       void attempts;
       void lastAttemptAt;
       return rest;
+    },
+    fileApplyReKey: (
+      m: M,
+      toSpaceId: string,
+      targetRecordId: string | null,
+      now: number,
+    ) => {
+      const base: M = {
+        key: `${toSpaceId}\0${m.fileId}`,
+        spaceId: toSpaceId,
+        fileId: m.fileId,
+        cachedAt: m.cachedAt,
+        lastAccessedAt: now,
+        size: 0,
+      };
+      return targetRecordId === null
+        ? base
+        : {
+            ...base,
+            recordId: targetRecordId,
+            uploadStatus: "pending",
+            queuedAt: now,
+            attempts: 0,
+          };
     },
   };
 });
@@ -1523,6 +1588,42 @@ describe("FileStore shared spaces", () => {
     });
     expect(result.migrated).toBe(0);
     expect(result.skipped).toBe(1);
+  });
+
+  it("kicks the queue after migration when the target space is already registered", async () => {
+    // Regression: re-keyed entries are written `pending`; when the
+    // target space's runtime is already registered, the migration
+    // itself must process the queue — a later registerSpace/connect
+    // cannot be assumed (the share flow joins the target first).
+    const personalUpload = vi.fn().mockResolvedValue({ fileId: UUID });
+    const sharedUpload = vi.fn().mockResolvedValue({ fileId: UUID });
+    const store = freshStore();
+    await store.connect(
+      syncConfig(makeFilesClient({ upload: personalUpload })),
+    );
+    store.registerSpace(
+      sharedConfig(makeFilesClient({ upload: sharedUpload })),
+    );
+    await store.put(UUID, data(24), RECORD);
+    // Let the personal upload complete so the entry is not in flight.
+    await vi.waitFor(() => expect(personalUpload).toHaveBeenCalledTimes(1));
+
+    const { migrated } = await store.migrateFilesToSpace([UUID], SHARED, {
+      recordIdOf: () => RECORD2,
+    });
+    expect(migrated).toBe(1);
+
+    // The re-keyed entry uploads to the target space with the remapped
+    // record id — with no further trigger.
+    await vi.waitFor(() =>
+      expect(sharedUpload).toHaveBeenCalledWith(
+        UUID,
+        expect.any(Uint8Array),
+        expect.any(Uint8Array),
+        RECORD2,
+        SHARED,
+      ),
+    );
   });
 
   it("connect() drops runtimes from a previous binding", async () => {

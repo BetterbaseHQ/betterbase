@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { initWasm } from "../../src/wasm-init.js";
 import {
+  fileApplyReKey,
   fileCacheKey,
   fileClearQueueState,
   fileIsClaimable,
   fileMarkUploading,
+  filePlanMigration,
   fileResetStale,
   fileSelectEvictionVictims,
   fileToUploadError,
@@ -234,5 +236,145 @@ describe("file policy (browser, real wasm)", () => {
       meta({ key: "s\0b", size: 50, lastAccessedAt: 200 }),
     ];
     expect(fileSelectEvictionVictims(allMeta, 10)).toEqual(["s\0a", "s\0b"]);
+  });
+});
+
+describe("file migration planning (browser, real wasm)", () => {
+  beforeAll(async () => {
+    await initWasm();
+  });
+
+  const T = 2_000_000;
+  function meta(
+    o: Partial<MetaEntry> & { key: string; fileId: string },
+  ): MetaEntry {
+    return {
+      spaceId: "s",
+      cachedAt: T - 1000,
+      lastAccessedAt: T - 1000,
+      size: 10,
+      ...o,
+    };
+  }
+
+  it("in-flight uploads are never migrated", () => {
+    const plan = filePlanMigration(
+      [
+        meta({
+          key: "s\0a",
+          fileId: "a",
+          uploadStatus: "uploading",
+          lastAttemptAt: T - 100,
+        }),
+      ],
+      "shared",
+      { a: "new" },
+      ["s\0a"],
+      ["s\0a"],
+    );
+    expect(plan).toEqual({
+      toSpaceId: "shared",
+      actions: [
+        { key: "s\0a", action: { skip: { reason: "uploadInFlight" } } },
+      ],
+    });
+  });
+
+  it("missing bytes skip only when neither cached nor fetchable", () => {
+    const e = [meta({ key: "s\0a", fileId: "a" })];
+    // Fetchable from the source space's server copy → re-key.
+    let plan = filePlanMigration(e, "shared", { a: "new" }, [], ["s\0a"]);
+    expect(plan.actions[0].action).toEqual({
+      reKey: { targetRecordId: "new" },
+    });
+    // Not cached anywhere → skip honestly.
+    plan = filePlanMigration(e, "shared", { a: "new" }, [], []);
+    expect(plan.actions[0].action).toEqual({ skip: { reason: "noBytes" } });
+  });
+
+  it("a requested-but-unavailable remap skips (no stale ids)", () => {
+    const plan = filePlanMigration(
+      [meta({ key: "s\0a", fileId: "a", recordId: "old" })],
+      "shared",
+      { a: null },
+      ["s\0a"],
+      [],
+    );
+    expect(plan.actions[0].action).toEqual({
+      skip: { reason: "noTargetRecordId" },
+    });
+  });
+
+  it("without a remap request the source record id is kept", () => {
+    const plan = filePlanMigration(
+      [meta({ key: "s\0a", fileId: "a", recordId: "old" })],
+      "shared",
+      {},
+      ["s\0a"],
+      [],
+    );
+    expect(plan.actions[0].action).toEqual({
+      reKey: { targetRecordId: "old" },
+    });
+  });
+
+  it("without a remap request a record-less file re-keys plain", () => {
+    const plan = filePlanMigration(
+      [meta({ key: "s\0a", fileId: "a" })],
+      "shared",
+      {},
+      ["s\0a"],
+      [],
+    );
+    expect(plan.actions[0].action).toEqual({ reKey: { targetRecordId: null } });
+  });
+});
+
+describe("file re-key apply (browser, real wasm)", () => {
+  beforeAll(async () => {
+    await initWasm();
+  });
+
+  const T = 2_000_000;
+  const source: MetaEntry = {
+    key: "s\0a",
+    spaceId: "s",
+    fileId: "a",
+    cachedAt: T - 5000,
+    lastAccessedAt: T - 4000,
+    size: 10,
+    recordId: "old",
+    uploadStatus: "pending",
+    queuedAt: T - 3000,
+    attempts: 2,
+    lastAttemptAt: T - 2000,
+  };
+
+  it("re-keys queued under the target record id with a fresh attempt history", () => {
+    const target = fileApplyReKey(source, "shared", "new", T);
+    expect(target).toEqual({
+      key: "shared\0a",
+      spaceId: "shared",
+      fileId: "a",
+      cachedAt: T - 5000, // preserved
+      lastAccessedAt: T, // fresh
+      size: 0, // the shell fills from the bytes it writes
+      recordId: "new",
+      uploadStatus: "pending",
+      queuedAt: T,
+      attempts: 0,
+    });
+  });
+
+  it("null record id re-keys as a plain, non-queued cache entry", () => {
+    const target = fileApplyReKey(source, "shared", null, T);
+    expect(target).toEqual({
+      key: "shared\0a",
+      spaceId: "shared",
+      fileId: "a",
+      cachedAt: T - 5000,
+      lastAccessedAt: T,
+      size: 0,
+    });
   });
 });

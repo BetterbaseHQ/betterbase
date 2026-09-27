@@ -28,7 +28,10 @@ pub mod storage;
 
 pub use eviction::{select_eviction_victims, EvictionBudget};
 pub use meta::{cache_key, FileMeta, UploadStatus};
-pub use migration::{plan_space_migration, MigrationAction, MigrationOutcome, MigrationPlan};
+pub use migration::{
+    apply_re_key, plan_space_migration, re_key_meta, MigrationAction, MigrationOutcome,
+    MigrationPlan,
+};
 pub use queue::{
     clear_queue_state, is_claimable, is_claimable_at, is_stale_claim, mark_uploading,
     next_claim_batch, reset_stale_claims, stale_indices, to_upload_error, STALE_UPLOAD_MS,

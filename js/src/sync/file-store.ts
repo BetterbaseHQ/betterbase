@@ -58,10 +58,12 @@ import {
   type MetaEntry,
 } from "./file-storage.js";
 import {
+  fileApplyReKey,
   fileCacheKey,
   fileClearQueueState,
   fileIsClaimable,
   fileMarkUploading,
+  filePlanMigration,
   fileResetStale,
   fileSelectEvictionVictims,
   fileToUploadError,
@@ -798,93 +800,122 @@ export class FileStore {
     let skipped = 0;
     let failed = 0;
 
+    // Planning lives in Rust — the durable skip/re-key rules are the
+    // cross-platform contract. Gather the per-file facts: the source
+    // meta (when present), which files have cached bytes, which are
+    // fetchable (a sync runtime exists for the source space), and the
+    // record-remap tri-state.
+    const metas: MetaEntry[] = [];
+    const cachedKeys: string[] = [];
+    const fetchableKeys: string[] = [];
+    const recordIds: Record<string, string | null> = {};
     for (const fileId of fileIds) {
       try {
         validateFileId(fileId);
         const fromKey = fileCacheKey(fromSpaceId, fileId);
-        const toKey = fileCacheKey(toSpaceId, fileId);
+        const stored = await this.storage.getMeta(fromKey);
+        // Bytes not on this device — never cached, or evicted after a
+        // completed upload. There is no persisted meta to reuse in that
+        // case, so synthesize one for planning.
+        metas.push(
+          stored ?? {
+            key: fromKey,
+            spaceId: fromSpaceId,
+            fileId,
+            cachedAt: now,
+            lastAccessedAt: now,
+            size: 0,
+          },
+        );
+        if (stored && (await this.storage.getBlob(fromKey)))
+          cachedKeys.push(fromKey);
+        // A fetch is possible iff the source space can serve the file:
+        // a sync runtime is registered for it. (If the server no longer
+        // has it, the 404 during the actual fetch downgrades the re-key
+        // to a skip at execution time.)
+        if (this.syncConfig !== null && this.spaceRuntimes.has(fromSpaceId)) {
+          fetchableKeys.push(fromKey);
+        }
+        if (opts?.recordIdOf)
+          recordIds[fileId] = opts.recordIdOf(fileId) ?? null;
+      } catch (e) {
+        // Per-file failure boundary (storage read, validation, remap
+        // callback) — count it and keep going, matching the execution
+        // phase below.
+        console.error(
+          `FileStore: migration of ${fileId} failed during planning`,
+          e,
+        );
+        failed += 1;
+      }
+    }
+    const plan = filePlanMigration(
+      metas,
+      toSpaceId,
+      recordIds,
+      cachedKeys,
+      fetchableKeys,
+    );
+    const metaByKey = new Map(metas.map((m) => [m.key, m]));
 
-        let oldMeta = await this.storage.getMeta(fromKey);
-        if (oldMeta?.uploadStatus === "uploading") {
-          // A pass may hold this entry object mid-upload; migrating under
-          // it would let clearUploadState/markUploadError re-write the
-          // deleted old key. Leave it — the next migration attempt (or
-          // the completed upload) resolves the entry.
+    // Execution is the shell's job: fetch uncached bytes, re-key the
+    // blob, delete the source.
+    for (const { key: fromKey, action } of plan.actions) {
+      let fileId: string | undefined;
+      try {
+        const source = metaByKey.get(fromKey);
+        if (!source) {
+          // Unreachable (the plan lists exactly the gathered entries);
+          // count it so an invariant break stays observable.
+          failed += 1;
+          continue;
+        }
+        fileId = source.fileId;
+        if ("skip" in action) {
+          console.warn(
+            `FileStore: skipping migration of ${fileId} — ${action.skip.reason}`,
+          );
           skipped += 1;
           continue;
         }
-        let oldBlob = oldMeta ? await this.storage.getBlob(fromKey) : null;
-        if (!oldBlob) {
-          // Bytes not on this device — never cached, or evicted after a
-          // completed upload. Pull them from the source space so the
-          // migration still re-keys the server copy (records without
-          // bytes render "Unavailable" for every other member forever).
-          // fetchAndDecrypt returns null when there's no runtime for the
-          // source space or the server no longer has the file — skip in
-          // that case; transient network failures propagate and count as
-          // failed (the caller can retry the migration).
-          const fetched = await this.fetchAndDecrypt(fileId, fromSpaceId);
-          if (fetched === null) {
+        // Re-check the in-flight claim at apply time: an upload pass
+        // may have claimed the entry since planning (gathering and
+        // fetching prior files takes time). Migrating under it would
+        // let the pass re-write the deleted source key.
+        const fresh = await this.storage.getMeta(fromKey);
+        if (fresh?.uploadStatus === "uploading") {
+          skipped += 1;
+          continue;
+        }
+        const toKey = fileCacheKey(toSpaceId, source.fileId);
+
+        // Use the bytes we hold — fetchAndDecrypt's cache write is
+        // best-effort, so under quota pressure a re-read could lose
+        // them.
+        let blob: Uint8Array | null =
+          (await this.storage.getBlob(fromKey)) ?? null;
+        if (!blob) {
+          // fetchAndDecrypt returns null when there's no runtime for
+          // the source space or the server no longer has the file —
+          // skip in that case; transient network failures propagate
+          // and count as failed (the caller can retry the migration).
+          blob = await this.fetchAndDecrypt(source.fileId, fromSpaceId);
+          if (blob === null) {
             console.warn(
               `FileStore: skipping migration of ${fileId} — no cached bytes and the source space can't serve them`,
             );
             skipped += 1;
             continue;
           }
-          // Use the bytes we hold — fetchAndDecrypt's cache write is
-          // best-effort, so under quota pressure a re-read could lose
-          // them. A never-cached file has no persisted meta to reuse
-          // anyway (evicted files lose meta with their bytes), so
-          // synthesize it; the target record id comes from recordIdOf.
-          oldMeta = {
-            key: fromKey,
-            spaceId: fromSpaceId,
-            fileId,
-            cachedAt: now,
-            lastAccessedAt: now,
-            size: fetched.byteLength,
-          };
-          oldBlob = fetched;
-        }
-        if (!oldMeta || !oldBlob) {
-          skipped += 1;
-          continue;
         }
 
-        let recordId = oldMeta.recordId;
-        if (opts?.recordIdOf) {
-          const remapped = opts.recordIdOf(fileId);
-          if (remapped === undefined) {
-            // An explicit remap was requested but unavailable — falling
-            // back to the OLD record id would queue an upload the target
-            // space's server rejects (record doesn't exist there).
-            console.warn(
-              `FileStore: skipping migration of ${fileId} — no target-space record id`,
-            );
-            skipped += 1;
-            continue;
-          }
-          recordId = remapped;
-        }
-
-        const newMeta: MetaEntry = {
-          key: toKey,
-          spaceId: toSpaceId,
-          fileId,
-          cachedAt: oldMeta.cachedAt,
-          lastAccessedAt: now,
-          size: oldMeta.size,
-          ...(recordId !== undefined
-            ? {
-                recordId,
-                uploadStatus: "pending" as const,
-                queuedAt: now,
-                attempts: 0,
-              }
-            : {}),
-        };
-        await this.storage.putFile(newMeta, oldBlob);
-        if (recordId !== undefined) this.enqueuedCount += 1;
+        // The target entry shape is canonical in Rust (the apply shape
+        // of a re-key); the shell supplies the bytes.
+        const recordId = action.reKey.targetRecordId;
+        const newMeta = fileApplyReKey(source, toSpaceId, recordId, now);
+        newMeta.size = blob.byteLength;
+        await this.storage.putFile(newMeta, blob);
+        if (recordId !== null) this.enqueuedCount += 1;
         await this.storage.deleteFile(fromKey);
 
         // Keep any live object URL working under the new key.
@@ -894,12 +925,15 @@ export class FileStore {
           this.urlCache.set(toKey, cachedUrl);
         }
         migrated += 1;
-      } catch (err) {
-        console.error(`FileStore: migration of ${fileId} failed`, err);
+      } catch (e) {
+        console.error(`FileStore: migration of ${fileId ?? fromKey} failed`, e);
         failed += 1;
       }
     }
 
+    // The re-keyed entries are `pending` — if the target space's
+    // runtime is already registered, process them now (a later
+    // registerSpace/connect/put cannot be assumed).
     if (migrated > 0) {
       this.notify();
       await this.fireQueueChange();

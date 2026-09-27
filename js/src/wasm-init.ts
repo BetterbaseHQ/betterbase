@@ -213,6 +213,19 @@ export interface WasmModule {
   fileMarkUploading(metaJson: string, nowMs: number): string;
   fileToUploadError(metaJson: string, error: string): string;
   fileClearQueueState(metaJson: string): string;
+  filePlanMigration(
+    entriesJson: string,
+    toSpaceId: string,
+    recordIdsJson: string,
+    cachedKeysJson: string,
+    fetchableKeysJson: string,
+  ): string;
+  fileApplyReKey(
+    sourceMetaJson: string,
+    toSpaceId: string,
+    targetRecordId: string | null,
+    nowMs: number,
+  ): string;
 }
 
 // --- Shared types ---

@@ -74,3 +74,69 @@ export function fileToUploadError(meta: MetaEntry, error: string): MetaEntry {
 export function fileClearQueueState(meta: MetaEntry): MetaEntry {
   return JSON.parse(ensureWasm().fileClearQueueState(metaJson(meta)));
 }
+
+// --- space migration planning -------------------------------------------
+
+/** How one file migrates (mirrors the Rust `MigrationAction`). */
+export type FileMigrationAction =
+  | {
+      reKey: {
+        /** Target record id; `null` re-keys as a plain cache file. */
+        targetRecordId: string | null;
+      };
+    }
+  | {
+      skip: {
+        reason: "uploadInFlight" | "noTargetRecordId" | "noBytes";
+      };
+    };
+
+export interface FileMigrationPlan {
+  toSpaceId: string;
+  actions: Array<{ key: string; action: FileMigrationAction }>;
+}
+
+/**
+ * The target entry a re-key writes (canonical apply shape from Rust):
+ * the same file under the target space's key, queued pending under the
+ * target record id when given, a plain cache entry for `null`. `size`
+ * is zero — the caller fills it from the bytes it writes.
+ */
+export function fileApplyReKey(
+  sourceMeta: MetaEntry,
+  toSpaceId: string,
+  targetRecordId: string | null,
+  nowMs: number,
+): MetaEntry {
+  return JSON.parse(
+    ensureWasm().fileApplyReKey(
+      JSON.stringify(sourceMeta),
+      toSpaceId,
+      targetRecordId,
+      nowMs,
+    ),
+  );
+}
+
+/**
+ * Plan a space migration over the source entries — the durable
+ * skip/re-key rules live in Rust. `recordIds` encodes the remap
+ * tri-state: key ABSENT = no remap requested; `null` = remap requested
+ * but unavailable; a string = remap to that record id.
+ */
+export function filePlanMigration(
+  entries: MetaEntry[],
+  toSpaceId: string,
+  recordIds: Record<string, string | null>,
+  cachedKeys: string[],
+  fetchableKeys: string[],
+): FileMigrationPlan {
+  const json = ensureWasm().filePlanMigration(
+    JSON.stringify(entries),
+    toSpaceId,
+    JSON.stringify(recordIds),
+    JSON.stringify(cachedKeys),
+    JSON.stringify(fetchableKeys),
+  );
+  return JSON.parse(json) as FileMigrationPlan;
+}
