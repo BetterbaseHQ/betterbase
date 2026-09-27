@@ -71,13 +71,50 @@ import { RPCCallError } from "./rpc-connection.js";
 // Crypto stubs: identity unwrap/wrap with a 4-byte big-endian epoch prefix.
 vi.mock("../crypto/index.js", async () => {
   const { MAX_EPOCH_DERIVE_DISTANCE } = await import("./epoch-ladder-mock.js");
+  const deriveNextEpochKeyMock = (
+    key: Uint8Array,
+    _space: string,
+    epoch: number,
+  ): Uint8Array => {
+    const next = new Uint8Array(key);
+    new DataView(next.buffer).setUint32(0, epoch, false);
+    return next;
+  };
   return {
-    deriveNextEpochKey: (key: Uint8Array, _space: string, epoch: number) => {
-      const next = new Uint8Array(key);
-      new DataView(next.buffer).setUint32(0, epoch, false);
-      return next;
-    },
+    deriveNextEpochKey: deriveNextEpochKeyMock,
     maxEpochDeriveDistance: () => MAX_EPOCH_DERIVE_DISTANCE,
+    // 1:1 mirror of Rust `peek_epoch` (betterbase-sync-core/reencrypt.rs):
+    // first 4 bytes, big-endian u32; short input throws MissingDek.
+    peekEpoch: (wrapped: Uint8Array) => {
+      if (wrapped.length < 4) {
+        throw new Error("Missing wrapped DEK for encrypted record");
+      }
+      return new DataView(
+        wrapped.buffer,
+        wrapped.byteOffset,
+        wrapped.byteLength,
+      ).getUint32(0, false);
+    },
+    // 1:1 mirror of Rust `derive_forward` (betterbase-sync-core/reencrypt.rs):
+    // backward throws, same epoch returns a copy, else chains deriveNextEpochKey.
+    deriveForward: (
+      key: Uint8Array,
+      space: string,
+      fromEpoch: number,
+      toEpoch: number,
+    ): Uint8Array => {
+      if (toEpoch < fromEpoch) {
+        throw new Error(
+          `Cannot derive backward: epoch ${toEpoch} < base epoch ${fromEpoch}`,
+        );
+      }
+      if (toEpoch === fromEpoch) return new Uint8Array(key);
+      let current = key;
+      for (let e = fromEpoch + 1; e <= toEpoch; e++) {
+        current = deriveNextEpochKeyMock(current, space, e);
+      }
+      return current;
+    },
   };
 });
 vi.mock("../crypto/internals.js", () => ({

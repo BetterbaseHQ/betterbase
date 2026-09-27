@@ -87,3 +87,33 @@ export function selectEpochKey(
     shareKey,
   );
 }
+
+/**
+ * Read the epoch prefix (first 4 bytes, big-endian u32) of a wrapped DEK
+ * without unwrapping it.
+ *
+ * Canonical in Rust (`peek_epoch`, betterbase-sync-core). Throws an error
+ * string on short input (malformed envelope) — treat thrown values via
+ * `instanceof Error ? e.message : String(e)` like the rest of the wasm
+ * surface.
+ */
+export function peekEpoch(wrappedDek: Uint8Array): number {
+  return ensureWasm().peekEpoch(wrappedDek);
+}
+
+/**
+ * Derive a key forward from one epoch to another by chaining the epoch KDF.
+ * Unbounded here (the DoS cap is enforced by the AUD-024 selection ladder,
+ * `selectEpochKey`).
+ *
+ * Canonical in Rust (`derive_forward`, betterbase-sync-core): same epoch
+ * returns a copy; backward derivation throws an error string.
+ */
+export function deriveForward(
+  key: Uint8Array,
+  spaceId: string,
+  fromEpoch: number,
+  toEpoch: number,
+): Uint8Array {
+  return ensureWasm().deriveForward(key, spaceId, fromEpoch, toEpoch);
+}

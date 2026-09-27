@@ -76,12 +76,13 @@
     "build:ts": "tsc --project tsconfig.json",
     "build": "pnpm build:wasm && pnpm build:ts",
     "typecheck": "tsc --noEmit",
+    "check:wasm-exports": "node scripts/check-wasm-exports.mjs",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "test:browser": "vitest run --passWithNoTests --config vitest.browser.config.ts",
     "bench": "vitest bench --config vitest.bench.config.ts",
     "format": "prettier --write .",
-    "check": "prettier --write . && pnpm typecheck && pnpm test && pnpm test:browser"
+    "check": "prettier --write . && pnpm typecheck && pnpm check:wasm-exports && pnpm test && pnpm test:browser"
   },
   "dependencies": {
     "cborg": "^4.5.8",

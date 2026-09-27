@@ -29,6 +29,8 @@ export {
   deriveEpochKeyFromRoot,
   selectEpochKey,
   maxEpochDeriveDistance,
+  peekEpoch,
+  deriveForward,
 } from "./epoch.js";
 export type { EpochKeySource, ResolvedEpochKey } from "./epoch.js";
 

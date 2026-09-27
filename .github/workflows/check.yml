@@ -79,5 +79,7 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm exec prettier --check .
       - run: pnpm typecheck
+      # Every wasm export must have a live TS call site (or be allowlisted)
+      - run: pnpm check:wasm-exports
       - run: pnpm test
       - run: pnpm test:browser

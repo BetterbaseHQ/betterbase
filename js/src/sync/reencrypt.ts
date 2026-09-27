@@ -10,7 +10,12 @@
  * 5. epoch.complete RPC to clear rewrap_epoch
  */
 
-import { deriveNextEpochKey, maxEpochDeriveDistance } from "../crypto/index.js";
+import {
+  deriveForward,
+  deriveNextEpochKey,
+  maxEpochDeriveDistance,
+  peekEpoch,
+} from "../crypto/index.js";
 import { unwrapDEK, wrapDEK } from "../crypto/internals.js";
 import {
   webcryptoWrapDEK,
@@ -20,6 +25,10 @@ import {
 import type { WSClient } from "./ws-client.js";
 import type { WSEpochConflictResult } from "./ws-frames.js";
 import { RPCCallError } from "./rpc-connection.js";
+
+// Canonical wasm helpers (betterbase-sync-core), re-exported so existing
+// import paths (./reencrypt.js) keep working.
+export { deriveForward, peekEpoch };
 
 /**
  * Thrown when epoch advancement fails due to server state mismatch (conflict).
@@ -450,15 +459,6 @@ async function rewrapAllDEKsCryptoKey(
   }
 }
 
-/** Read the epoch prefix from a wrapped DEK without unwrapping it (first 4 bytes, big-endian u32). */
-export function peekEpoch(wrappedDEK: Uint8Array): number {
-  return new DataView(
-    wrappedDEK.buffer,
-    wrappedDEK.byteOffset,
-    wrappedDEK.byteLength,
-  ).getUint32(0, false);
-}
-
 /**
  * Fetch file DEKs, treating a `forbidden` rejection as "none exist".
  *
@@ -484,26 +484,4 @@ async function getFileDEKsIfPermitted(
     if (err instanceof RPCCallError && err.code === "forbidden") return [];
     throw err;
   }
-}
-
-/**
- * Derive a key forward from one epoch to another by chaining deriveNextEpochKey.
- */
-export function deriveForward(
-  key: Uint8Array,
-  spaceId: string,
-  fromEpoch: number,
-  toEpoch: number,
-): Uint8Array {
-  if (toEpoch < fromEpoch) {
-    throw new Error(
-      `Cannot derive backward: fromEpoch=${fromEpoch}, toEpoch=${toEpoch}`,
-    );
-  }
-  if (toEpoch === fromEpoch) return key;
-  let current = key;
-  for (let e = fromEpoch + 1; e <= toEpoch; e++) {
-    current = deriveNextEpochKey(current, spaceId, e);
-  }
-  return current;
 }
