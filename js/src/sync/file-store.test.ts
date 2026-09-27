@@ -370,7 +370,10 @@ describe("storage queuedForSpace parity", () => {
     const now = Date.now();
     const staleBefore = now - 15 * 60 * 1000 - 1;
     const storage = new InMemoryFileStorage();
-    const entry = (fileId: string, extra: Partial<MetaEntry> = {}): MetaEntry => ({
+    const entry = (
+      fileId: string,
+      extra: Partial<MetaEntry> = {},
+    ): MetaEntry => ({
       key: `sp\0${fileId}`,
       spaceId: "sp",
       fileId,

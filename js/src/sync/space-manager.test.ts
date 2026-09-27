@@ -1137,6 +1137,101 @@ describe("SpaceManager", () => {
       );
     });
 
+    it("wraps post-revocation failures in the pre-port message", async () => {
+      const self = await ident("self");
+      const victim = await ident("victim");
+      const friend = await ident("friend");
+      await activate();
+
+      membershipLog.entries = [
+        await logEntry({
+          seq: 1,
+          type: "d",
+          issuer: self,
+          audience: victim,
+          cmd: "/space/write",
+          mailboxId: "cd".repeat(32),
+          publicKeyJwk: victim.jwk,
+        }),
+        await logEntry({
+          seq: 2,
+          type: "d",
+          issuer: self,
+          audience: friend,
+          cmd: "/space/write",
+          mailboxId: "cd".repeat(32),
+          publicKeyJwk: friend.jwk,
+        }),
+      ];
+      server.handle("membership.revoke", () => ({}));
+      // The revocation commits, then the epoch advance fails: the run
+      // aborts, and the error is wrapped (pre-port "Member revoked, but …").
+      server.handle("epoch.begin", (_params, reply) => {
+        const req = reply.socket.sentFrames
+          .filter((f) => f.method === "epoch.begin")
+          .pop();
+        reply.socket.serverMessage({
+          type: 1,
+          id: req!.id as string,
+          error: { code: "internal", message: "advance boom" },
+        });
+      });
+
+      await expect(manager.removeMember("s1", victim.did)).rejects.toThrow(
+        /Member revoked but rotation did not complete: .*advance boom/,
+      );
+    });
+
+    it("leaves pre-revocation failures raw (no revoked claim)", async () => {
+      const self = await ident("self");
+      const victim = await ident("victim");
+      const friend = await ident("friend");
+      await activate();
+
+      membershipLog.entries = [
+        await logEntry({
+          seq: 1,
+          type: "d",
+          issuer: self,
+          audience: victim,
+          cmd: "/space/write",
+          mailboxId: "cd".repeat(32),
+          publicKeyJwk: victim.jwk,
+        }),
+        await logEntry({
+          seq: 2,
+          type: "d",
+          issuer: self,
+          audience: friend,
+          cmd: "/space/write",
+          mailboxId: "cd".repeat(32),
+          publicKeyJwk: friend.jwk,
+        }),
+      ];
+      // The FIRST machine action (revokeUcans) fails: nothing was revoked,
+      // so the error propagates raw without the "Member revoked" wrap.
+      server.handle("membership.revoke", (_params, reply) => {
+        const req = reply.socket.sentFrames
+          .filter((f) => f.method === "membership.revoke")
+          .pop();
+        reply.socket.serverMessage({
+          type: 1,
+          id: req!.id as string,
+          error: { code: "internal", message: "revoke boom" },
+        });
+      });
+
+      let error: Error | undefined;
+      try {
+        await manager.removeMember("s1", victim.did);
+      } catch (e) {
+        error = e as Error;
+      }
+      expect(error).toBeDefined();
+      expect(error!.message).toContain("revoke boom");
+      expect(error!.message).not.toContain("Member revoked");
+    });
+
     it("sends epoch.begin(set_min_epoch) on the wire, ordered revoke → begin → shares → complete", async () => {
       const self = await ident("self");
       const victim = await ident("victim");
@@ -1199,6 +1294,11 @@ describe("SpaceManager", () => {
         epoch: 2,
         set_min_epoch: true,
       });
+      // Exactly one revocation per revoked CID: the machine's `revokeUcans`
+      // action is the sole revocation path (no duplicate manual loop).
+      const revokes = order.filter((s) => s.startsWith("revoke:"));
+      expect(revokes).toHaveLength(1);
+      expect(new Set(revokes).size).toBe(1);
       // Full chain ordering: every revoke lands before the epoch advance;
       // shares distribute before completion (crash safety, D-005); the
       // victim's mailbox notice goes out only after the space is re-keyed.

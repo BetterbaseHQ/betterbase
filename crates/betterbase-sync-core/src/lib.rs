@@ -7,6 +7,7 @@ pub mod membership;
 pub mod padding;
 pub mod pull;
 pub mod reencrypt;
+pub mod rotation;
 pub mod transport;
 pub mod types;
 
@@ -31,5 +32,9 @@ pub use pull::{
     SpaceAssembly,
 };
 pub use reencrypt::{derive_forward, peek_epoch, rewrap_deks};
+pub use rotation::{
+    should_rotate, KeyMode, RotationAction, RotationError, RotationEvent, RotationKind,
+    RotationSpec, RotationState,
+};
 pub use transport::{decrypt_record, encrypt_record};
 pub use types::BlobEnvelope;

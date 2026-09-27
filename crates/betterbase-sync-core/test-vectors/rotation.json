@@ -1,0 +1,2613 @@
+{
+  "cases": [
+    {
+      "name": "scheduled personal success: derive, advance, rewrap full chain, commit",
+      "start": {
+        "kind": "scheduled",
+        "currentEpoch": 1,
+        "shared": false
+      },
+      "actions": [
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 2,
+          "setMinEpoch": false
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 1,
+          "toEpoch": 2,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 2
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 2,
+        "shared": false,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "scheduled shared success: read log under old key, fresh key, distribute, rewrap, complete, commit, re-encrypt log",
+      "start": {
+        "kind": "scheduled",
+        "currentEpoch": 3,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 4,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 4,
+          "setMinEpoch": false
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "distributeShares",
+          "epoch": 4
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 3,
+          "toEpoch": 4,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 4
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 4
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 4
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 4,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "scheduled conflict with orphaned advance: complete it (distributed share) and stop",
+      "start": {
+        "kind": "scheduled",
+        "currentEpoch": 2,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 3,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 3,
+          "setMinEpoch": false
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 3
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 2,
+          "toEpoch": 3,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 3
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 3
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 3
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 3,
+          "rewrapEpoch": 3
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": true
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 3,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "scheduled conflict, orphaned advance already complete (rewrap at or below current): stop without rewrapping",
+      "start": {
+        "kind": "scheduled",
+        "currentEpoch": 5,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 6,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 6,
+          "setMinEpoch": false
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 7,
+          "rewrapEpoch": 5
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 5,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "scheduled conflict with no rewrap: adopt the completed server epoch (derived key)",
+      "start": {
+        "kind": "scheduled",
+        "currentEpoch": 1,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 2,
+          "setMinEpoch": false
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 2
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 2,
+          "rewrapEpoch": null
+        },
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 2,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "scheduled conflict with no rewrap: adopt with a distributed share (no rewrap needed)",
+      "start": {
+        "kind": "scheduled",
+        "currentEpoch": 1,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 2,
+          "setMinEpoch": false
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 2
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 2,
+          "rewrapEpoch": null
+        },
+        {
+          "type": "shareResult",
+          "hasShare": true
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 2,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "removal success: revoke, min-epoch advance, distribute, rewrap, complete, removal entries, notice, commit",
+      "start": {
+        "kind": "removal",
+        "currentEpoch": 4,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "revokeUcans"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 5,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 5,
+          "setMinEpoch": true
+        },
+        {
+          "type": "distributeShares",
+          "epoch": 5
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 4,
+          "toEpoch": 5,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 5
+        },
+        {
+          "type": "appendRemovalEntries",
+          "epoch": 5
+        },
+        {
+          "type": "sendRevocationNotice",
+          "epoch": 5
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 5
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 5,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "removal conflict with orphaned advance: complete it (share), then retry the revocation advance",
+      "start": {
+        "kind": "removal",
+        "currentEpoch": 2,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "revokeUcans"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 3,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 3,
+          "setMinEpoch": true
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 3
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 2,
+          "toEpoch": 3,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 3
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 3
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 3
+        },
+        {
+          "type": "generateKey",
+          "epoch": 4,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 4,
+          "setMinEpoch": true
+        },
+        {
+          "type": "distributeShares",
+          "epoch": 4
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 3,
+          "toEpoch": 4,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 4
+        },
+        {
+          "type": "appendRemovalEntries",
+          "epoch": 4
+        },
+        {
+          "type": "sendRevocationNotice",
+          "epoch": 4
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 4
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 3,
+          "rewrapEpoch": 3
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": true
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 4,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "removal conflict with no rewrap: unrecoverable \u2014 error",
+      "start": {
+        "kind": "removal",
+        "currentEpoch": 2,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "revokeUcans"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 3,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 3,
+          "setMinEpoch": true
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 3,
+          "rewrapEpoch": null
+        }
+      ],
+      "error": "advance conflict without a pending rewrap \u2014 cannot proceed (server at epoch 3)"
+    },
+    {
+      "name": "removal conflict with stale rewrap (already at or past it): retry the revocation advance",
+      "start": {
+        "kind": "removal",
+        "currentEpoch": 5,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "revokeUcans"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 6,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 6,
+          "setMinEpoch": true
+        },
+        {
+          "type": "generateKey",
+          "epoch": 6,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 6,
+          "setMinEpoch": true
+        },
+        {
+          "type": "distributeShares",
+          "epoch": 6
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 5,
+          "toEpoch": 6,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 6
+        },
+        {
+          "type": "appendRemovalEntries",
+          "epoch": 6
+        },
+        {
+          "type": "sendRevocationNotice",
+          "epoch": 6
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 6
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 6,
+          "rewrapEpoch": 5
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 6,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "interrupted: complete an orphaned advance with a distributed share (log read under old key)",
+      "start": {
+        "kind": "interrupted",
+        "currentEpoch": 3,
+        "shared": true,
+        "rewrapEpoch": 5
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 5
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 3,
+          "toEpoch": 5,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 5
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 5
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 5
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": true
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 5,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "interrupted derived completion, clean follow-up state: fresh re-rotation follows (D-005)",
+      "start": {
+        "kind": "interrupted",
+        "currentEpoch": 1,
+        "shared": true,
+        "rewrapEpoch": 2
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 2
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 1,
+          "toEpoch": 2,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 2
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 2
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 3,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 3,
+          "setMinEpoch": false
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "distributeShares",
+          "epoch": 3
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 2,
+          "toEpoch": 3,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 3
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 3
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 3
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 3,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "interrupted derived completion while a follow-up is in flight: defer, then run the deferred pass (D-005)",
+      "start": {
+        "kind": "interrupted",
+        "currentEpoch": 1,
+        "shared": true,
+        "rewrapEpoch": 2
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 2
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 1,
+          "toEpoch": 2,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 2
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 2
+        },
+        {
+          "type": "defer"
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 3,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 3,
+          "setMinEpoch": false
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "distributeShares",
+          "epoch": 3
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 2,
+          "toEpoch": 3,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 3
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 3
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 3
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "initialFlags": {
+        "followupActive": true
+      },
+      "finalState": {
+        "currentEpoch": 3,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "interrupted derived completion during the deferred pass: give up loudly (D-005 loop bound)",
+      "start": {
+        "kind": "interrupted",
+        "currentEpoch": 1,
+        "shared": true,
+        "rewrapEpoch": 2
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 2
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 1,
+          "toEpoch": 2,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 2
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 2
+        },
+        {
+          "type": "giveUp"
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "initialFlags": {
+        "followupDeferred": true
+      },
+      "finalState": {
+        "currentEpoch": 2,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "interrupted: rewrap epoch at or below current \u2014 no-op",
+      "start": {
+        "kind": "interrupted",
+        "currentEpoch": 5,
+        "shared": true,
+        "rewrapEpoch": 5
+      },
+      "actions": [
+        {
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "currentEpoch": 5,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "interrupted without a rewrapEpoch in the spec \u2014 invalid spec",
+      "start": {
+        "kind": "interrupted",
+        "currentEpoch": 3,
+        "shared": true
+      },
+      "actions": [],
+      "events": [],
+      "startError": "invalid rotation spec for Interrupted: missing rewrapEpoch"
+    },
+    {
+      "name": "interrupted derived completion whose follow-up advance races again: complete the newer orphan (share), then finish",
+      "start": {
+        "kind": "interrupted",
+        "currentEpoch": 1,
+        "shared": true,
+        "rewrapEpoch": 2
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 2
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 1,
+          "toEpoch": 2,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 2
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 2
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 3,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 3,
+          "setMinEpoch": false
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 4
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 2,
+          "toEpoch": 4,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 4
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 4
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 4
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 4,
+          "rewrapEpoch": 4
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": true
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 4,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "full D-005 loop bound: follow-up, deferred pass, give up \u2014 a persistently conflicting server stops after one deferred pass",
+      "start": {
+        "kind": "scheduled",
+        "currentEpoch": 1,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 2,
+          "setMinEpoch": false
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 2
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 1,
+          "toEpoch": 2,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 2
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 2
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 3,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 3,
+          "setMinEpoch": false
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 3
+        },
+        {
+          "type": "generateKey",
+          "epoch": 3,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 2
+          }
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 2,
+          "toEpoch": 3,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 3
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 3
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 3
+        },
+        {
+          "type": "defer"
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 4,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 4,
+          "setMinEpoch": false
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 4
+        },
+        {
+          "type": "generateKey",
+          "epoch": 4,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 3
+          }
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 3,
+          "toEpoch": 4,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 4
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 4
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 4
+        },
+        {
+          "type": "giveUp"
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 2,
+          "rewrapEpoch": 2
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 3,
+          "rewrapEpoch": 3
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 4,
+          "rewrapEpoch": 4
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 4,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "adopt: resolve the share and commit without a rewrap",
+      "start": {
+        "kind": "adopt",
+        "currentEpoch": 2,
+        "shared": true,
+        "serverEpoch": 6
+      },
+      "actions": [
+        {
+          "type": "resolveShare",
+          "epoch": 6
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 6
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "shareResult",
+          "hasShare": true
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 6,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "adopt: no share \u2014 fall back to derivation (legacy chain)",
+      "start": {
+        "kind": "adopt",
+        "currentEpoch": 4,
+        "shared": false,
+        "serverEpoch": 9
+      },
+      "actions": [
+        {
+          "type": "resolveShare",
+          "epoch": 9
+        },
+        {
+          "type": "generateKey",
+          "epoch": 9,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 4
+          }
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 9
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 9,
+        "shared": false,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "adopt: server epoch at or below current \u2014 no-op",
+      "start": {
+        "kind": "adopt",
+        "currentEpoch": 7,
+        "shared": true,
+        "serverEpoch": 7
+      },
+      "actions": [
+        {
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "currentEpoch": 7,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "adopt without a serverEpoch in the spec \u2014 invalid spec",
+      "start": {
+        "kind": "adopt",
+        "currentEpoch": 2,
+        "shared": true
+      },
+      "actions": [],
+      "events": [],
+      "startError": "invalid rotation spec for Adopt: missing serverEpoch"
+    },
+    {
+      "name": "epoch overflow at u32::MAX \u2014 cannot advance",
+      "start": {
+        "kind": "scheduled",
+        "currentEpoch": 4294967295,
+        "shared": false
+      },
+      "actions": [],
+      "events": [],
+      "startError": "epoch overflow: cannot advance beyond u32::MAX"
+    },
+    {
+      "name": "wrong event type for an action \u2014 unexpected event",
+      "start": {
+        "kind": "scheduled",
+        "currentEpoch": 1,
+        "shared": false
+      },
+      "actions": [
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 2,
+          "setMinEpoch": false
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 1,
+          "toEpoch": 2,
+          "freshKey": false
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": false
+        }
+      ],
+      "error": "unexpected event shareResult for action rewrapDeks"
+    },
+    {
+      "name": "removal: advance conflicts, complete orphaned derived advance, follow up, then retry the revocation advance (D-005)",
+      "start": {
+        "kind": "removal",
+        "currentEpoch": 1,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "revokeUcans"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 2,
+          "setMinEpoch": true
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 2
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 1,
+          "toEpoch": 2,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 2
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 2
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 3,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 3,
+          "setMinEpoch": false
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "distributeShares",
+          "epoch": 3
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 2,
+          "toEpoch": 3,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 3
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 3
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 3
+        },
+        {
+          "type": "generateKey",
+          "epoch": 4,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 4,
+          "setMinEpoch": true
+        },
+        {
+          "type": "distributeShares",
+          "epoch": 4
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 3,
+          "toEpoch": 4,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 4
+        },
+        {
+          "type": "appendRemovalEntries",
+          "epoch": 4
+        },
+        {
+          "type": "sendRevocationNotice",
+          "epoch": 4
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 4
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 2,
+          "rewrapEpoch": 2
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 4,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "removal: advance conflicts with a stale rewrap twice \u2014 bounded retry, error",
+      "start": {
+        "kind": "removal",
+        "currentEpoch": 1,
+        "shared": true
+      },
+      "actions": [
+        {
+          "type": "revokeUcans"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 2,
+          "setMinEpoch": true
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 2,
+          "setMinEpoch": true
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 2,
+          "rewrapEpoch": 1
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "advanceConflict",
+          "serverEpoch": 2,
+          "rewrapEpoch": 1
+        }
+      ],
+      "error": "revocation advance failed after retry (server at epoch 2)",
+      "finalState": {
+        "currentEpoch": 1,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": null,
+        "stack": []
+      }
+    },
+    {
+      "name": "personal interrupted (no share, no membership log)",
+      "start": {
+        "kind": "interrupted",
+        "currentEpoch": 1,
+        "shared": false,
+        "rewrapEpoch": 2
+      },
+      "actions": [
+        {
+          "type": "resolveShare",
+          "epoch": 2
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 1,
+          "toEpoch": 2,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 2
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 2,
+        "shared": false,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "failed action inside a D-005 follow-up is contained (pre-port runFreshFollowup semantics)",
+      "start": {
+        "kind": "interrupted",
+        "currentEpoch": 1,
+        "shared": true,
+        "rewrapEpoch": 2
+      },
+      "actions": [
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "resolveShare",
+          "epoch": 2
+        },
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 1,
+          "toEpoch": 2,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 2
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "reencryptLog",
+          "epoch": 2
+        },
+        {
+          "type": "readLog"
+        },
+        {
+          "type": "generateKey",
+          "epoch": 3,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 3,
+          "setMinEpoch": false
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "shareResult",
+          "hasShare": false
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "actionFailed"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 2,
+        "shared": true,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    },
+    {
+      "name": "failed action on a non-follow-up frame aborts the run",
+      "start": {
+        "kind": "scheduled",
+        "currentEpoch": 1,
+        "shared": false
+      },
+      "actions": [
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        }
+      ],
+      "events": [
+        {
+          "type": "actionFailed"
+        }
+      ],
+      "error": "rotation action generateKey failed",
+      "finalState": {
+        "currentEpoch": 1,
+        "shared": false,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": null,
+        "stack": []
+      }
+    },
+    {
+      "name": "crash residue: a pending deferred pass from a prior aborted run runs to completion (D-005)",
+      "start": {
+        "kind": "scheduled",
+        "currentEpoch": 1,
+        "shared": false
+      },
+      "initialFlags": {
+        "followupActive": false,
+        "followupPending": true,
+        "followupDeferred": false
+      },
+      "actions": [
+        {
+          "type": "generateKey",
+          "epoch": 2,
+          "mode": {
+            "type": "derive",
+            "fromEpoch": 1
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 2,
+          "setMinEpoch": false
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 1,
+          "toEpoch": 2,
+          "freshKey": false
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 2
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 2
+        },
+        {
+          "type": "generateKey",
+          "epoch": 3,
+          "mode": {
+            "type": "fresh"
+          }
+        },
+        {
+          "type": "advanceEpoch",
+          "epoch": 3,
+          "setMinEpoch": false
+        },
+        {
+          "type": "rewrapDeks",
+          "fromEpoch": 2,
+          "toEpoch": 3,
+          "freshKey": true
+        },
+        {
+          "type": "signalComplete",
+          "epoch": 3
+        },
+        {
+          "type": "commitLocal",
+          "epoch": 3
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        },
+        {
+          "type": "stepDone"
+        }
+      ],
+      "finalState": {
+        "currentEpoch": 3,
+        "shared": false,
+        "followupActive": false,
+        "followupPending": false,
+        "followupDeferred": false,
+        "action": {
+          "type": "done"
+        },
+        "stack": []
+      }
+    }
+  ]
+}

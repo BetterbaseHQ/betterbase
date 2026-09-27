@@ -57,6 +57,15 @@ import {
   EpochMismatchError,
 } from "./reencrypt.js";
 import {
+  rotationAbort,
+  rotationStart,
+  rotationStep,
+  shouldRotateSpaceEpoch,
+  type RotationAction,
+  type RotationEvent,
+  type RotationState,
+} from "./rotation.js";
+import {
   spaces,
   type SpaceRole,
   type SpaceStatus,
@@ -74,6 +83,36 @@ import type { WSEpochKeyShareEntry } from "./ws-frames.js";
 interface MemberContact {
   did: string;
   publicKeyJwk?: JsonWebKey;
+}
+
+/**
+ * Per-run context for the rotation machine (audit G3): the epoch keys and
+ * membership state the machine never sees. Keys are generated/derived/
+ * resolved by the host as the machine publishes `generateKey`/`resolveShare`
+ * actions.
+ */
+interface RotationRun {
+  /** epoch → epoch key (the current key is seeded at run start). */
+  keys: Map<number, Uint8Array>;
+  /** True once the revocation action's I/O committed (removal runs). */
+  revoked?: boolean;
+  /** Active-member delivery contacts (from the latest `readLog`; seeded
+   * from the removal fold for removal runs). */
+  contacts: MemberContact[];
+  /** Serialized `d` entry payloads under the pre-rotation key (for
+   * re-encryption after commit). */
+  entryPayloads: string[];
+  /** Removal-run context (`kind = "removal"` runs only). */
+  removal?: {
+    /** UCAN CIDs to revoke server-side (drops subscriptions/connections). */
+    cids: string[];
+    /** UCANs needing revocation log entries. */
+    ucansToRevoke: string[];
+    /** Remaining members' `d` entry payloads (re-encrypted under the new key). */
+    remainingEntries: string[];
+    memberDID: string;
+    contact?: { mailboxId: string; publicKeyJwk: JsonWebKey };
+  };
 }
 
 /** Generate a fresh random 32-byte epoch key (never derived — AUD-024). */
@@ -121,6 +160,23 @@ export interface SpaceManagerConfig {
 }
 
 /**
+ * A rotation machine transition error (audit G3): the wasm machine
+ * rejected a step (bounded removal-retry exhaustion, epoch overflow,
+ * unexpected event). Distinct from host I/O failures — the machine has
+ * already decided (typically: abort), so the host must not replay these
+ * as `actionFailed` (that could let the machine *contain* an error it
+ * already handled and keep a run going that the machine rejected).
+ */
+class MachineTransitionError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), {
+      cause,
+    });
+    this.name = "MachineTransitionError";
+  }
+}
+
+/**
  * SpaceManager orchestrates shared space lifecycle.
  *
  * All space operations go through this class — creating spaces, inviting
@@ -144,16 +200,43 @@ export class SpaceManager {
   private memberRefreshPromises = new Map<string, Promise<Member[]>>();
   /** Spaces currently undergoing admin-initiated removal (suppresses self-revocation). */
   private activeRemovalSpaces = new Set<string>();
-  /** Spaces with a fresh re-rotation follow-up in flight (recursion bound). */
-  private freshFollowupActive = new Set<string>();
   /**
-   * Spaces whose follow-up rotation was suppressed because another one is
-   * in flight; re-armed for exactly one deferred pass when it finishes, so
-   * a derivable epoch is never left in place silently (D-005).
+   * Per-space rotation machine state (audit G3 — canonical logic in the
+   * Rust wasm `betterbase-sync-core::rotation` machine). The machine owns
+   * the rotation lifecycle, epoch-conflict resolution, and the D-005 fresh
+   * re-rotation follow-up (bounded by its active/pending/deferred flags —
+   * the old TS guard sets are gone). The host executes each published
+   * action and feeds results back via `rotationStep`.
    */
-  private freshFollowupPending = new Set<string>();
-  /** Spaces currently running that single deferred pass (give-up guard). */
-  private freshFollowupDeferred = new Set<string>();
+  private rotationStates = new Map<string, RotationState>();
+
+  /**
+   * Per-space in-process mutex serializing rotation runs (e.g. an
+   * epoch-mismatch race with `rotateSpaceKey`). The machine itself rejects
+   * a second start while a run is in flight; the lock makes concurrent
+   * callers queue instead of erroring.
+   *
+   * Client-side safety net only — the server's per-space epoch lock is the
+   * source of truth. It never needs to persist.
+   */
+  private rotationLocks = new Map<string, Promise<void>>();
+
+  private withRotationLock<T>(
+    spaceId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const prev = this.rotationLocks.get(spaceId) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    // Keep the chain alive for the next caller but don't leak rejections.
+    this.rotationLocks.set(
+      spaceId,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return run;
+  }
 
   constructor(config: SpaceManagerConfig) {
     this.config = config;
@@ -746,193 +829,91 @@ export class SpaceManager {
     syncCrypto: SyncCryptoInterface,
   ): Promise<void> {
     const spaceUCAN = this.spaceUCANs.get(spaceId);
-    // Fall back to the persisted record epoch: inviting or rotating before this
-    // session activated the space must not relabel keys as epoch 1 (AUD-034).
-    const currentEpoch = this.spaceEpochOf(spaceId, spaceRecord);
-    const currentKey = this.spaceKeys.get(spaceId)!;
 
-    // 1b. Find all UCAN CIDs for this member from membership log.
-    // A member may have multiple UCANs (re-invite after decline, etc.) — revoke all.
-    // Also collect remaining (non-removed) members' entries so we can re-encrypt them
-    // under the new key after rotation, and the removed member's contact info for
-    // sending a revocation notice.
-    const log = await this.membershipClient.getEntries(
-      spaceId,
-      undefined,
-      spaceUCAN,
-    );
-    // Canonical verified fold (audit G4): the removal UCAN set, the remaining
-    // ACTIVE members (fresh-key shares + re-encrypted log), and the removed
-    // member's last contact all come from one pass. `active` already excludes
-    // `memberDID`. Order-sensitive activation/deactivation (AUD-024) is part
-    // of the fold.
-    const fold = await this.decryptAndFold(
-      log.entries,
-      syncCrypto,
-      spaceId,
-      memberDID,
-    );
-    const ucanCIDs = (fold.removed?.ucans ?? []).map(computeUCANCID);
-    const ucansToRevoke = fold.removed?.revocable ?? []; // UCANs needing revocation log entries
-    const memberContact = fold.removed?.contact;
-    const remainingEntries = fold.active.map((a) => a.payload);
-    const remainingContacts = fold.active.filter(
-      (a): a is FoldedActive & { publicKeyJwk: JsonWebKey } => !!a.publicKeyJwk,
-    );
-
-    if (ucanCIDs.length === 0) {
-      throw new Error(`Member ${memberDID} not found in space ${spaceId}`);
-    }
-
-    // 1c. Revoke all UCANs for this member, naming the DID so the server
-    // drops their subscriptions and closes their open connections (AUD-024).
-    for (const cid of ucanCIDs) {
-      await this.membershipClient.revokeUCAN(
+    // Fold and rotate under the rotation lock so a concurrent rotation
+    // (or another removal) cannot interleave the fold with the key swap.
+    await this.withRotationLock(spaceId, async () => {
+      // 1a. Read the membership log and fold the removal (canonical Rust
+      // fold — see foldRemovalIntoSpace; D-015): the removal UCAN set, the
+      // remaining ACTIVE members (fresh-key shares + re-encrypted log), and
+      // the removed member's last contact all come from one pass.
+      // `active` already excludes `memberDID`. Order-sensitive
+      // activation/deactivation (AUD-024) is part of the fold.
+      const log = await this.membershipClient.getEntries(
         spaceId,
-        cid,
+        undefined,
         spaceUCAN,
+      );
+      const fold = await this.decryptAndFold(
+        log.entries,
+        syncCrypto,
+        spaceId,
         memberDID,
       );
-    }
-
-    // 1d. Advance epoch with setMinEpoch (revokes grace period),
-    // then distribute wrapped fresh-key shares to all remaining members
-    // BEFORE any DEK rewrap (crash safety per D-005: nothing is ever
-    // encrypted under a key that has not already been distributed).
-    // The replacement key is a fresh random secret — never derived from the
-    // old key, so the removed member cannot compute it (AUD-024).
-    let newEpoch = currentEpoch + 1;
-    let newKey = freshSpaceKey();
-    let advanceCurrentKey = currentKey;
-    let advanceCurrentEpoch = currentEpoch;
-
-    try {
-      await advanceEpoch(
-        {
-          ws: this.ws,
-          spaceId,
-          ucan: spaceUCAN,
-        },
-        newEpoch,
-        { setMinEpoch: true },
+      const ucanCIDs = (fold.removed?.ucans ?? []).map(computeUCANCID);
+      const ucansToRevoke = fold.removed?.revocable ?? []; // UCANs needing revocation log entries
+      const memberContact = fold.removed?.contact;
+      const remainingEntries = fold.active.map((a) => a.payload);
+      const remainingContacts = fold.active.filter(
+        (a): a is FoldedActive & { publicKeyJwk: JsonWebKey } =>
+          !!a.publicKeyJwk,
       );
-    } catch (err) {
-      if (err instanceof EpochMismatchError && err.rewrapEpoch !== null) {
-        // Another admin already advanced — help complete their rewrap first
-        // (share-aware: fetches their distributed key, falls back to
-        // derivation for legacy pre-fresh-key epochs).
-        await this.completeInterruptedRewrap(spaceId, err.rewrapEpoch);
 
-        // Now retry our revocation advance on top of the completed epoch
-        advanceCurrentKey = this.spaceKeys.get(spaceId)!;
-        advanceCurrentEpoch = this.spaceEpochs.get(spaceId) ?? err.rewrapEpoch;
-        newEpoch = advanceCurrentEpoch + 1;
-        newKey = freshSpaceKey();
+      if (ucanCIDs.length === 0) {
+        throw new Error(`Member ${memberDID} not found in space ${spaceId}`);
+      }
 
-        await advanceEpoch(
-          {
-            ws: this.ws,
-            spaceId,
-            ucan: spaceUCAN,
-          },
-          newEpoch,
-          { setMinEpoch: true },
-        );
-      } else {
+      // 1b. Rotate the space epoch key with the removal folded into the
+      // membership log. The machine owns the ordering: revoke UCANs,
+      // advance with setMinEpoch (revokes the grace period), distribute
+      // wrapped shares of the fresh key to self + remaining members
+      // BEFORE any DEK rewrap (crash safety per D-005: nothing is ever
+      // encrypted under a key that has not already been distributed),
+      // rewrap all DEKs, signal completion, append revocation entries +
+      // re-encrypted membership entries, notify the removed member, and
+      // commit local state. The replacement key is a fresh random secret —
+      // never derived from the old key, so the removed member cannot
+      // compute it (AUD-024). If another admin advanced meanwhile, the
+      // machine completes their rewrap first, then retries this advance on
+      // top of it (bounded to one retry).
+      const run: RotationRun = {
+        keys: new Map(),
+        contacts: remainingContacts,
+        entryPayloads: [],
+        removal: {
+          cids: ucanCIDs,
+          ucansToRevoke,
+          remainingEntries,
+          memberDID,
+          contact: memberContact,
+        },
+      };
+      // Start the machine first: a start failure (stale busy state, epoch
+      // overflow) happens before any revocation, so it propagates raw
+      // rather than claiming a revocation occurred.
+      const started = this.startRotation(
+        spaceId,
+        spaceRecord,
+        "removal",
+        {},
+        run,
+      );
+      try {
+        await this.driveRotation(spaceId, started, spaceRecord, run);
+      } catch (e) {
+        // Wrap only once the UCANs are actually revoked server-side; a
+        // revocation failure propagates raw (the member is not revoked).
+        if (!run.revoked) throw e;
+        // The UCANs are revoked; the membership-log update and key swap may
+        // still be incomplete. Surface the failure — a retry completes the
+        // run (pre-port semantics: "Member revoked, but …").
         throw new Error(
-          `Member revoked but epoch advance failed. ` +
-            `Original error: ${err instanceof Error ? err.message : String(err)}`,
+          `Member revoked but rotation did not complete: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
         );
       }
-    }
-
-    // 1d-bis. Distribute wrapped shares of the fresh key (self + remaining
-    // members). Must precede the rewrap so an aborted rotation never leaves
-    // ciphertext under an undistributed key.
-    try {
-      const shares = this.buildEpochKeyShares(newKey, remainingContacts);
-      await this.ws.epochKeysPut({
-        space: spaceId,
-        ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
-        epoch: newEpoch,
-        keys: shares,
-      });
-    } catch (err) {
-      throw new Error(
-        `Member revoked but fresh-key distribution failed. ` +
-          `Original error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    // 1e. Rewrap all DEKs under the fresh epoch key.
-    try {
-      await rewrapAllDEKs({
-        ws: this.ws,
-        spaceId,
-        ucan: spaceUCAN,
-        currentEpoch: advanceCurrentEpoch,
-        currentKey: advanceCurrentKey,
-        newEpoch,
-        newKey,
-        freshKey: true,
-      });
-    } catch (err) {
-      throw new Error(
-        `Member revoked but DEK re-wrapping failed. Space may need re-sync. ` +
-          `Original error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    // 1f. Signal completion (server clears rewrap_epoch).
-    await this.ws.epochComplete({
-      space: spaceId,
-      ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
-      epoch: newEpoch,
     });
-
-    // 1g. Build new SyncCrypto for re-encryption WITHOUT replacing in-memory state yet.
-    // updateLocalEpochState() will zero old key material and swap atomically.
-    // If we stored newKey in this.spaceKeys now, updateLocalEpochState would zero it
-    // (same reference) before constructing the replacement SyncCrypto.
-    const newCrypto = new SyncCrypto(newKey);
-
-    // 1h. Append signed revocation entries for each revoked UCAN.
-    for (const ucan of ucansToRevoke) {
-      const revokeEntry = this.signMembershipEntry(
-        "r",
-        spaceId,
-        ucan,
-        newEpoch,
-      );
-      await this.appendMembershipEntryWithRetry(
-        spaceId,
-        newCrypto,
-        serializeMembershipEntry(revokeEntry),
-        spaceUCAN,
-      );
-    }
-
-    // 1i. Re-append remaining members' entries encrypted under the new key.
-    // After key rotation, old membership log entries are unreadable with the new key.
-    // Re-encrypting ensures getMembers() can still list active members.
-    // Entries keep their original signatures — the admin re-encrypts but doesn't re-sign.
-    for (const entryPayload of remainingEntries) {
-      await this.appendMembershipEntryWithRetry(
-        spaceId,
-        newCrypto,
-        entryPayload,
-        spaceUCAN,
-      );
-    }
-
-    // 1j. Send revocation notice to the removed member's mailbox (best effort).
-    // This provides deterministic revocation detection even when Bob is offline.
-    if (memberContact) {
-      await this.sendRevocationNotice(spaceId, newEpoch, memberContact);
-    }
-
-    // 1k. Persist updated key and epoch (zeros old key material, swaps crypto state).
-    await this.updateLocalEpochState(spaceId, spaceRecord, newKey, newEpoch);
   }
 
   // --------------------------------------------------------------------------
@@ -1007,161 +988,422 @@ export class SpaceManager {
    * Returns true if the epoch advance interval has been exceeded.
    */
   shouldRotateSpace(spaceId: string): boolean {
-    const epoch = this.spaceEpochs.get(spaceId);
-    if (epoch === undefined) return false;
+    // A space not activated this session is out of scope (no tracked
+    // epoch to rotate).
+    if (!this.spaceEpochs.has(spaceId)) return false;
     const advancedAt = this.spaceEpochAdvancedAt.get(spaceId);
-    // A missing or invalid timestamp must read as "not due", never as
+    // A missing/invalid timestamp must read as "not due", never as
     // epoch-zero: `Date.now() - null` is ~1.8e12 and would instantly
-    // "overdue" the rotation (the every-fresh-device rotation bug). Records
-    // hydrated from the db can carry null for unset optionals.
-    if (
+    // "overdue" the rotation (the every-fresh-device rotation bug).
+    // Records hydrated from the db can carry null for unset optionals.
+    const normalized =
       advancedAt === undefined ||
       advancedAt === null ||
-      !Number.isFinite(advancedAt) ||
-      advancedAt <= 0
-    ) {
-      return false;
-    }
-    // Only admins can advance the epoch on the server — skip for other roles
-    // to avoid repeated 403 errors on every pull.
-    const role = this.spaceRoles.get(spaceId);
-    if (role !== "admin") return false;
-    return Date.now() - advancedAt >= DEFAULT_EPOCH_ADVANCE_INTERVAL_MS;
+      !Number.isFinite(advancedAt)
+        ? null
+        : advancedAt;
+    // Canonical policy (audit G3, wasm machine module): admin-only (only
+    // admins can call `epoch.begin`), inclusive interval.
+    return shouldRotateSpaceEpoch(
+      Date.now(),
+      normalized,
+      this.spaceRoles.get(spaceId) === "admin",
+      DEFAULT_EPOCH_ADVANCE_INTERVAL_MS,
+    );
   }
 
   /**
    * Rotate the epoch key for a space.
    *
-   * Three-step server-authoritative flow:
-   * 1. Advance epoch on server (CAS — sets rewrap_epoch)
-   * 2. Re-wrap all DEKs (idempotent)
-   * 3. Signal completion (server clears rewrap_epoch)
-   *
-   * If another device already advanced (409), helps complete or adopts.
+   * Drives the canonical rotation state machine (audit G3, wasm
+   * `rotationStart`/`rotationStep`): a fresh random key for shared spaces
+   * (distributed to active members), a derived key for personal spaces,
+   * epoch-conflict resolution (help-complete or adopt), and the D-005 fresh
+   * re-rotation follow-up when a completion lands on a derived epoch.
    *
    * @param spaceId - The space to rotate
    */
   async rotateSpaceKey(spaceId: string): Promise<void> {
-    const currentKey = this.spaceKeys.get(spaceId);
-    if (!currentKey) throw new Error(`No space key for space ${spaceId}`);
-
-    const spaceUCAN = this.spaceUCANs.get(spaceId);
-
+    if (!this.spaceKeys.has(spaceId))
+      throw new Error(`No space key for space ${spaceId}`);
     const spaceRecord = await this.findBySpaceId(spaceId);
     if (!spaceRecord) throw new Error(`No space record for ${spaceId}`);
 
-    // Fall back to the persisted record epoch (AUD-034): rotating before this
-    // session activated the space must not derive from epoch 1.
-    const currentEpoch = this.spaceEpochOf(spaceId, spaceRecord);
-    const newEpoch = currentEpoch + 1;
-
-    // Shared spaces rotate to a FRESH random key distributed to every active
-    // member (AUD-024). Personal spaces keep the derived chain (no members
-    // to exclude; derivation is harmless there).
-    const isShared = !!spaceUCAN;
-    const newKey = isShared
-      ? freshSpaceKey()
-      : deriveForward(currentKey, spaceId, currentEpoch, newEpoch);
-
-    // 1. Advance epoch on server (CAS — sets rewrap_epoch)
-    try {
-      await advanceEpoch(
+    await this.withRotationLock(spaceId, () =>
+      this.runRotation(
+        spaceId,
+        spaceRecord,
+        "scheduled",
+        {},
         {
-          ws: this.ws,
-          spaceId,
-          ucan: spaceUCAN,
+          keys: new Map(),
+          contacts: [],
+          entryPayloads: [],
         },
-        newEpoch,
-      );
-    } catch (err) {
-      if (err instanceof EpochMismatchError) {
-        await this.handleEpochMismatch(spaceId, spaceRecord, err);
-        return;
-      }
-      throw err;
-    }
+      ),
+    );
+  }
 
-    // 2. Distribute wrapped shares BEFORE any rewrap (D-005 crash safety).
-    let memberEntryPayloads: string[] = [];
-    if (isShared) {
-      const { contacts, entryPayloads } =
-        await this.collectMemberState(spaceId);
-      memberEntryPayloads = entryPayloads;
-      await this.ws.epochKeysPut({
-        space: spaceId,
-        ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
-        epoch: newEpoch,
-        keys: this.buildEpochKeyShares(newKey, contacts),
-      });
-    }
+  /**
+   * Start a rotation run on the machine (audit G3): seed the per-run key
+   * cache and call `rotationStart`. Pure bookkeeping — no network I/O —
+   * so a failure (stale busy state, epoch overflow) means nothing has been
+   * done to the space yet.
+   */
+  private startRotation(
+    spaceId: string,
+    spaceRecord: SpaceRecord & SpaceFields,
+    kind: "scheduled" | "removal" | "interrupted" | "adopt",
+    specExtra: { rewrapEpoch?: number; serverEpoch?: number },
+    run: RotationRun,
+  ): RotationState {
+    // Seed the per-run key cache with the current epoch key. The record
+    // fallback covers pre-activation runs (AUD-034).
+    const currentEpoch = this.spaceEpochOf(spaceId, spaceRecord);
+    const currentKey =
+      this.spaceKeys.get(spaceId) ?? base64ToBytes(spaceRecord.spaceKey);
+    run.keys.set(currentEpoch, currentKey);
 
-    // 3. Rewrap all DEKs (idempotent)
-    await rewrapAllDEKs({
-      ws: this.ws,
-      spaceId,
-      ucan: spaceUCAN,
+    const state = rotationStart(this.rotationStates.get(spaceId) ?? null, {
+      kind,
       currentEpoch,
-      currentKey,
-      newEpoch,
-      newKey,
-      freshKey: isShared,
+      shared: this.spaceUCANs.get(spaceId) != null,
+      ...specExtra,
     });
+    this.rotationStates.set(spaceId, state);
+    return state;
+  }
 
-    // 4. Signal completion (server clears rewrap_epoch)
-    await this.ws.epochComplete({
-      space: spaceId,
-      ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
-      epoch: newEpoch,
-    });
-
-    // 5. Update local state
-    await this.updateLocalEpochState(spaceId, spaceRecord, newKey, newEpoch);
-
-    // 6. Re-encrypt the membership log under the new key so the NEXT
-    // rotation (or another admin's contact collection) can still read it.
-    // Entries keep their original signatures.
-    if (isShared && memberEntryPayloads.length > 0) {
-      const newCrypto = new SyncCrypto(this.spaceKeys.get(spaceId) ?? newKey);
-      for (const entryPayload of memberEntryPayloads) {
-        await this.appendMembershipEntryWithRetry(
+  /**
+   * Drive a started rotation run to completion (audit G3).
+   *
+   * Loops: execute the machine's pending action, feed the result back,
+   * repeat until the machine reports `done`. On failure the machine is
+   * aborted (committed progress and D-005 flags survive) and the error is
+   * rethrown.
+   */
+  private async driveRotation(
+    spaceId: string,
+    state: RotationState,
+    spaceRecord: SpaceRecord & SpaceFields,
+    run: RotationRun,
+  ): Promise<void> {
+    let current = state;
+    try {
+      while (true) {
+        const action = current.action;
+        if (!action)
+          throw new Error(
+            `No pending rotation action for ${spaceId} — run state lost`,
+          );
+        if (action.type === "done") break;
+        current = await this.executeRotationAction(
           spaceId,
-          newCrypto,
-          entryPayload,
-          spaceUCAN,
+          spaceRecord,
+          current,
+          action,
+          run,
         );
+      }
+    } catch (e) {
+      current = rotationAbort(current);
+      this.rotationStates.set(spaceId, current);
+      throw e;
+    }
+    this.rotationStates.set(spaceId, current);
+  }
+
+  /** Start and drive a full rotation run (audit G3). */
+  private async runRotation(
+    spaceId: string,
+    spaceRecord: SpaceRecord & SpaceFields,
+    kind: "scheduled" | "removal" | "interrupted" | "adopt",
+    specExtra: { rewrapEpoch?: number; serverEpoch?: number },
+    run: RotationRun,
+  ): Promise<void> {
+    const state = this.startRotation(
+      spaceId,
+      spaceRecord,
+      kind,
+      specExtra,
+      run,
+    );
+    await this.driveRotation(spaceId, state, spaceRecord, run);
+  }
+
+  /**
+   * Execute one machine action, containing host failures (audit G3). The
+   * machine decides containment: a failed D-005 follow-up frame is
+   * discarded (the committed completion stands — the run continues with the
+   * parent); any other failure aborts the run and the original error
+   * propagates to the caller.
+   */
+  private async executeRotationAction(
+    spaceId: string,
+    spaceRecord: SpaceRecord & SpaceFields,
+    state: RotationState,
+    action: RotationAction,
+    run: RotationRun,
+  ): Promise<RotationState> {
+    try {
+      return await this.executeRotationStep(
+        spaceId,
+        spaceRecord,
+        state,
+        action,
+        run,
+      );
+    } catch (e) {
+      // Machine transition errors are already decided by the machine —
+      // surface them raw (runRotation persists the aborted state).
+      if (e instanceof MachineTransitionError) throw e;
+      // Host-side I/O failure: the action did not complete. Report it —
+      // the machine decides: a failed D-005 follow-up frame is discarded
+      // (the run continues with the parent); any other failure aborts the
+      // run, in which case surface the original host error —
+      // runRotation's catch persists the aborted state.
+      try {
+        const next = rotationStep(state, { type: "actionFailed" });
+        console.error(
+          `[betterbase-sync] Rotation action ${action.type} failed for ${spaceId}; follow-up discarded (D-005) — epoch may remain derivable, rotate again to repair.`,
+          e,
+        );
+        return next;
+      } catch {
+        // The machine aborted the run — surface the original host error
+        // (runRotation's catch persists the aborted state).
+        throw e;
       }
     }
   }
 
   /**
-   * Handle an EpochMismatchError from advanceEpoch.
-   *
-   * If rewrapEpoch is set, another device started but didn't finish — help complete.
-   * If rewrapEpoch is null, another device finished — just adopt the new epoch.
+   * Execute one machine action against the space (audit G3). Keys stay in
+   * the host's per-run cache — the machine only sees epochs and booleans.
+   * Returns the machine state advanced by the host's result.
    */
-  private async handleEpochMismatch(
+  private async executeRotationStep(
     spaceId: string,
-    record: SpaceRecord & SpaceFields,
-    err: EpochMismatchError,
-  ): Promise<void> {
-    const currentKey = this.spaceKeys.get(spaceId);
-    if (!currentKey)
-      throw new Error(
-        `No space key for ${spaceId} during epoch mismatch handling`,
-      );
-    const currentEpoch = this.spaceEpochs.get(spaceId) ?? 1;
-
-    if (err.rewrapEpoch !== null) {
-      // Prior advance isn't complete — help finish it (share-aware)
-      await this.completeInterruptedRewrap(spaceId, err.rewrapEpoch);
-    } else {
-      // Another device completed everything. Adopt the new epoch
-      // (share-first, derivation fallback for legacy chains).
-      const serverEpoch = err.currentEpoch;
-      const serverKey =
-        (await this.resolveEpochKeyOrNull(spaceId, serverEpoch)) ??
-        deriveForward(currentKey, spaceId, currentEpoch, serverEpoch);
-      await this.updateLocalEpochState(spaceId, record, serverKey, serverEpoch);
+    spaceRecord: SpaceRecord & SpaceFields,
+    state: RotationState,
+    action: RotationAction,
+    run: RotationRun,
+  ): Promise<RotationState> {
+    const spaceUCAN = this.spaceUCANs.get(spaceId);
+    const step = (
+      event: RotationEvent = { type: "stepDone" },
+    ): RotationState => {
+      try {
+        return rotationStep(state, event);
+      } catch (e) {
+        // Machine transition errors (bounded removal-retry exhaustion,
+        // overflow) are already decided by the machine — tag them so the
+        // host never replays them as `actionFailed`.
+        throw new MachineTransitionError(e);
+      }
+    };
+    switch (action.type) {
+      case "revokeUcans": {
+        const { cids, memberDID } = run.removal!;
+        // Revoke every UCAN granted to the member, naming the DID so the
+        // server drops their subscriptions and open connections (AUD-024).
+        for (const cid of cids) {
+          await this.membershipClient.revokeUCAN(
+            spaceId,
+            cid,
+            spaceUCAN,
+            memberDID,
+          );
+        }
+        // The revocation committed server-side — later failures in this run
+        // are "revoked but rotation incomplete" (doRemoveMember wraps).
+        run.revoked = true;
+        return step();
+      }
+      case "generateKey": {
+        let key: Uint8Array;
+        if (action.mode.type === "derive") {
+          const base = run.keys.get(action.mode.fromEpoch);
+          if (!base) {
+            throw new Error(
+              `Missing epoch ${action.mode.fromEpoch} key needed to derive epoch ${action.epoch} for ${spaceId}`,
+            );
+          }
+          key = deriveForward(
+            base,
+            spaceId,
+            action.mode.fromEpoch,
+            action.epoch,
+          );
+        } else {
+          key = freshSpaceKey();
+        }
+        run.keys.set(action.epoch, key);
+        return step();
+      }
+      case "resolveShare": {
+        // Share-first; a definitive "no share" (legacy derived-key epoch)
+        // resolves to null and the machine falls back to derivation.
+        const key = await this.resolveEpochKeyOrNull(spaceId, action.epoch);
+        if (key) run.keys.set(action.epoch, key);
+        return step({ type: "shareResult", hasShare: key !== null });
+      }
+      case "advanceEpoch": {
+        try {
+          await advanceEpoch(
+            { ws: this.ws, spaceId, ucan: spaceUCAN },
+            action.epoch,
+            // Only pass the option when it's set — keeps the wire call
+            // identical to the pre-port scheduled-rotation shape.
+            ...(action.setMinEpoch
+              ? [{ setMinEpoch: action.setMinEpoch }]
+              : []),
+          );
+          return step();
+        } catch (e) {
+          if (e instanceof EpochMismatchError) {
+            return step({
+              type: "advanceConflict",
+              serverEpoch: e.currentEpoch,
+              rewrapEpoch: e.rewrapEpoch,
+            });
+          }
+          throw e;
+        }
+      }
+      case "readLog": {
+        const ms = await this.collectMemberState(spaceId);
+        run.contacts = ms.contacts;
+        run.entryPayloads = ms.entryPayloads;
+        return step();
+      }
+      case "distributeShares": {
+        const newKey = run.keys.get(action.epoch);
+        if (!newKey)
+          throw new Error(`Missing epoch key ${action.epoch} for ${spaceId}`);
+        const shares = this.buildEpochKeyShares(newKey, run.contacts);
+        if (shares.length > 0) {
+          await this.ws.epochKeysPut({
+            space: spaceId,
+            ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
+            epoch: action.epoch,
+            keys: shares,
+          });
+        }
+        return step();
+      }
+      case "rewrapDeks": {
+        const fromKey = run.keys.get(action.fromEpoch);
+        const toKey = run.keys.get(action.toEpoch);
+        if (!fromKey || !toKey)
+          throw new Error(
+            `Missing epoch keys for rewrap (${action.fromEpoch}→${action.toEpoch}) in ${spaceId}`,
+          );
+        await rewrapAllDEKs({
+          ws: this.ws,
+          spaceId,
+          ucan: spaceUCAN,
+          currentEpoch: action.fromEpoch,
+          currentKey: fromKey,
+          newEpoch: action.toEpoch,
+          newKey: toKey,
+          freshKey: action.freshKey,
+        });
+        return step();
+      }
+      case "signalComplete": {
+        await this.ws.epochComplete({
+          space: spaceId,
+          ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
+          epoch: action.epoch,
+        });
+        return step();
+      }
+      case "commitLocal": {
+        const newKey = run.keys.get(action.epoch);
+        if (!newKey)
+          throw new Error(`Missing epoch key ${action.epoch} for ${spaceId}`);
+        await this.updateLocalEpochState(
+          spaceId,
+          spaceRecord,
+          newKey,
+          action.epoch,
+        );
+        return step();
+      }
+      case "reencryptLog": {
+        // Re-append the log under the new key so the next rotation (or
+        // another admin's contact collection) can still read it. Entries
+        // keep their original signatures.
+        const newKey = run.keys.get(action.epoch);
+        if (!newKey)
+          throw new Error(`Missing epoch key ${action.epoch} for ${spaceId}`);
+        for (const entryPayload of run.entryPayloads) {
+          await this.appendMembershipEntryWithRetry(
+            spaceId,
+            newKey,
+            entryPayload,
+            spaceUCAN,
+          );
+        }
+        return step();
+      }
+      case "appendRemovalEntries": {
+        const newKey = run.keys.get(action.epoch);
+        if (!newKey)
+          throw new Error(`Missing epoch key ${action.epoch} for ${spaceId}`);
+        const { ucansToRevoke, remainingEntries } = run.removal!;
+        // Append signed revocation entries for each revoked UCAN, then
+        // re-append remaining members' entries encrypted under the new key.
+        for (const ucan of ucansToRevoke) {
+          const revokeEntry = this.signMembershipEntry(
+            "r",
+            spaceId,
+            ucan,
+            action.epoch,
+          );
+          await this.appendMembershipEntryWithRetry(
+            spaceId,
+            newKey,
+            serializeMembershipEntry(revokeEntry),
+            spaceUCAN,
+          );
+        }
+        for (const entryPayload of remainingEntries) {
+          await this.appendMembershipEntryWithRetry(
+            spaceId,
+            newKey,
+            entryPayload,
+            spaceUCAN,
+          );
+        }
+        return step();
+      }
+      case "sendRevocationNotice": {
+        // Best effort — deterministic revocation detection even when the
+        // member is offline.
+        const contact = run.removal?.contact;
+        if (contact)
+          await this.sendRevocationNotice(spaceId, action.epoch, contact);
+        return step();
+      }
+      case "giveUp": {
+        // D-005: the bounded re-rotation attempts all landed on derived
+        // epochs. Escalate to a visible error.
+        console.error(
+          `[betterbase-sync] Epoch for ${spaceId} is still derivable after a deferred re-rotation; giving up this cycle — rotate again to repair (D-005).`,
+        );
+        return step();
+      }
+      case "defer": {
+        // D-005: one bounded deferred pass will follow (machine tracks it).
+        console.warn(
+          `[betterbase-sync] Derived completion for ${spaceId} during an in-flight follow-up rotation; deferring a fresh re-rotation.`,
+        );
+        return step();
+      }
+      case "done":
+        throw new Error(`Rotation run for ${spaceId} already finished`);
     }
   }
 
@@ -1173,112 +1415,25 @@ export class SpaceManager {
     spaceId: string,
     rewrapEpoch: number,
   ): Promise<void> {
-    const currentKey = this.spaceKeys.get(spaceId);
-    if (!currentKey) return;
-    const currentEpoch = this.spaceEpochs.get(spaceId) ?? 1;
-    if (rewrapEpoch <= currentEpoch) return;
-
+    if (!this.spaceKeys.has(spaceId)) return;
     const spaceRecord = await this.findBySpaceId(spaceId);
     if (!spaceRecord) return;
+    const currentEpoch = this.spaceEpochOf(spaceId, spaceRecord);
+    if (rewrapEpoch <= currentEpoch) return;
 
-    const spaceUCAN = this.spaceUCANs.get(spaceId);
-    // Collect the membership-log payloads with the OLD key (needed to
-    // re-encrypt the log under the new key after completion).
-    const { entryPayloads } = spaceUCAN
-      ? await this.collectMemberState(spaceId)
-      : { entryPayloads: [] as string[] };
-
-    // Share-first: a fresh-key rotation's key is only known via the
-    // distributed shares (every admin holds one). Derivation fallback covers
-    // legacy chains created before fresh-key rotation.
-    const share = await this.resolveEpochKeyOrNull(spaceId, rewrapEpoch);
-    const newKey =
-      share ?? deriveForward(currentKey, spaceId, currentEpoch, rewrapEpoch);
-    await rewrapAllDEKs({
-      ws: this.ws,
-      spaceId,
-      ucan: spaceUCAN,
-      currentEpoch,
-      currentKey,
-      newEpoch: rewrapEpoch,
-      newKey,
-      freshKey: true,
-    });
-    await this.ws.epochComplete({
-      space: spaceId,
-      ...(spaceUCAN ? { ucan: spaceUCAN } : {}),
-      epoch: rewrapEpoch,
-    });
-    await this.updateLocalEpochState(spaceId, spaceRecord, newKey, rewrapEpoch);
-
-    // Re-encrypt the membership log under the completed epoch's key so the
-    // next rotation can still read member contacts.
-    if (spaceUCAN && entryPayloads.length > 0) {
-      const newCrypto = new SyncCrypto(this.spaceKeys.get(spaceId) ?? newKey);
-      for (const entryPayload of entryPayloads) {
-        await this.appendMembershipEntryWithRetry(
-          spaceId,
-          newCrypto,
-          entryPayload,
-          spaceUCAN,
-        );
-      }
-    }
-
-    // If the completed epoch had no distributed share (orphaned pre-
-    // distribution advance), its key is derivable by removed members —
-    // immediately schedule a fresh re-rotation for shared spaces (D-005).
-    // Bounded: suppressed while a follow-up is in flight (deferred to one
-    // pass when it finishes) and given up loudly during that deferred pass.
-    if (spaceUCAN && share === null) {
-      if (this.freshFollowupDeferred.has(spaceId)) {
-        console.error(
-          `[betterbase-sync] Epoch for ${spaceId} is still derivable after a deferred re-rotation; giving up this cycle — rotate again to repair (D-005).`,
-        );
-        this.freshFollowupPending.delete(spaceId);
-      } else if (this.freshFollowupActive.has(spaceId)) {
-        console.warn(
-          `[betterbase-sync] Derived completion for ${spaceId} during an in-flight follow-up rotation; deferring a fresh re-rotation.`,
-        );
-        this.freshFollowupPending.add(spaceId);
-      } else {
-        await this.runFreshFollowup(spaceId);
-      }
-    }
-  }
-
-  /**
-   * Run a fresh re-rotation, plus exactly one deferred pass for a
-   * completion suppressed while it was in flight. A suppression during the
-   * deferred pass gives up loudly instead of looping — a persistently
-   * conflicting server must not spin this machinery.
-   */
-  private async runFreshFollowup(spaceId: string): Promise<void> {
-    const runPass = async (): Promise<void> => {
-      this.freshFollowupActive.add(spaceId);
-      try {
-        await this.rotateSpaceKey(spaceId);
-      } catch (err) {
-        console.error(
-          `[betterbase-sync] Fresh re-rotation after derived completion failed for ${spaceId}:`,
-          err,
-        );
-        this.freshFollowupPending.delete(spaceId);
-      } finally {
-        this.freshFollowupActive.delete(spaceId);
-      }
-    };
-
-    await runPass();
-    if (this.freshFollowupPending.delete(spaceId)) {
-      this.freshFollowupDeferred.add(spaceId);
-      try {
-        await runPass();
-      } finally {
-        this.freshFollowupDeferred.delete(spaceId);
-        this.freshFollowupPending.delete(spaceId);
-      }
-    }
+    await this.withRotationLock(spaceId, () =>
+      this.runRotation(
+        spaceId,
+        spaceRecord,
+        "interrupted",
+        { rewrapEpoch },
+        {
+          keys: new Map(),
+          contacts: [],
+          entryPayloads: [],
+        },
+      ),
+    );
   }
 
   /**
@@ -1286,18 +1441,25 @@ export class SpaceManager {
    * Called when pull reveals epoch > local epoch with no pending rewrap.
    */
   async adoptServerEpoch(spaceId: string, serverEpoch: number): Promise<void> {
-    const currentEpoch = this.spaceEpochs.get(spaceId) ?? 1;
-    if (serverEpoch <= currentEpoch) return;
-    const currentKey = this.spaceKeys.get(spaceId);
-    if (!currentKey) return;
+    if (!this.spaceKeys.has(spaceId)) return;
     const spaceRecord = await this.findBySpaceId(spaceId);
     if (!spaceRecord) return;
+    const currentEpoch = this.spaceEpochOf(spaceId, spaceRecord);
+    if (serverEpoch <= currentEpoch) return;
 
-    // Share-first (fresh-key rotations), derivation fallback (legacy chains).
-    const newKey =
-      (await this.resolveEpochKeyOrNull(spaceId, serverEpoch)) ??
-      deriveForward(currentKey, spaceId, currentEpoch, serverEpoch);
-    await this.updateLocalEpochState(spaceId, spaceRecord, newKey, serverEpoch);
+    await this.withRotationLock(spaceId, () =>
+      this.runRotation(
+        spaceId,
+        spaceRecord,
+        "adopt",
+        { serverEpoch },
+        {
+          keys: new Map(),
+          contacts: [],
+          entryPayloads: [],
+        },
+      ),
+    );
   }
 
   /**
@@ -1784,6 +1946,8 @@ export class SpaceManager {
     this.spaceEpochs.delete(spaceId);
     this.spaceEpochAdvancedAt.delete(spaceId);
     this.spaceRoles.delete(spaceId);
+    this.rotationStates.delete(spaceId);
+    this.rotationLocks.delete(spaceId);
   }
 
   private async writeSpaceRecord(

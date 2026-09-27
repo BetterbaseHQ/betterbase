@@ -304,6 +304,21 @@ export interface WasmModule {
     data: unknown,
   ): PullAssemblyState;
   pullAssemblyResult(state: PullAssemblyState | null): PullAssemblyResult;
+  // Epoch key rotation state machine (betterbase-sync-core::rotation —
+  // canonical in Rust, see betterbase-wasm::rotation; vectors in
+  // test-vectors/rotation.json).
+  rotationStart(state: RotationState | null, spec: RotationSpec): RotationState;
+  rotationStep(
+    state: RotationState | null,
+    event: RotationEvent,
+  ): RotationState;
+  rotationAbort(state: RotationState | null): RotationState;
+  shouldRotateSpaceEpoch(
+    nowMs: bigint,
+    advancedAtMs: bigint | null,
+    isAdmin: boolean,
+    intervalMs: bigint,
+  ): boolean;
 }
 
 /** Decoded betterbase-rpc-v1 frame as produced by `decodeRpcFrame`. */
@@ -372,6 +387,106 @@ export interface PullAssemblySpace {
 /** Final pull-assembly result (spaces sorted by id). */
 export interface PullAssemblyResult {
   spaces: PullAssemblySpace[];
+}
+
+// --- Epoch key rotation (audit G3) ---
+
+/** How a rotation run was initiated. */
+export type RotationKind = "scheduled" | "removal" | "interrupted" | "adopt";
+
+/** Input to `rotationStart` (wire field names, camelCase). */
+export interface RotationSpec {
+  kind: RotationKind;
+  currentEpoch: number;
+  shared: boolean;
+  /** Required for `kind = "interrupted"`. */
+  rewrapEpoch?: number;
+  /** Required for `kind = "adopt"`. */
+  serverEpoch?: number;
+}
+
+/**
+ * How the run's target key is materialized. The machine never sees key
+ * bytes — the host generates/derives/resolves them for `generateKey` and
+ * reports whether a share resolved.
+ */
+export type RotationKeyMode =
+  | { type: "fresh" }
+  | { type: "derive"; fromEpoch: number };
+
+/** One I/O step the host must perform (the machine's next move). */
+export type RotationAction =
+  | { type: "revokeUcans" }
+  | { type: "generateKey"; epoch: number; mode: RotationKeyMode }
+  | { type: "resolveShare"; epoch: number }
+  | { type: "advanceEpoch"; epoch: number; setMinEpoch: boolean }
+  | { type: "readLog" }
+  | { type: "distributeShares"; epoch: number }
+  | {
+      type: "rewrapDeks";
+      fromEpoch: number;
+      toEpoch: number;
+      freshKey: boolean;
+    }
+  | { type: "signalComplete"; epoch: number }
+  | { type: "commitLocal"; epoch: number }
+  | { type: "reencryptLog"; epoch: number }
+  | { type: "appendRemovalEntries"; epoch: number }
+  | { type: "sendRevocationNotice"; epoch: number }
+  | { type: "giveUp" }
+  | { type: "defer" }
+  | { type: "done" };
+
+/** The host's result for the pending action. */
+export type RotationEvent =
+  | { type: "stepDone" }
+  | { type: "advanceConflict"; serverEpoch: number; rewrapEpoch: number | null }
+  | { type: "shareResult"; hasShare: boolean }
+  | { type: "actionFailed" };
+
+/** In-flight frame phase (frame internals — opaque to the host). */
+export type RotationPhase =
+  | "revokeUcans"
+  | "generateKey"
+  | "advance"
+  | "resolveShare"
+  | "readLog"
+  | "distributeShares"
+  | "rewrap"
+  | "complete"
+  | "commit"
+  | "appendRemoval"
+  | "sendNotice"
+  | "reencryptLog";
+
+/** One in-flight rotation frame (opaque to the host — round-tripped). */
+export interface RotationFrame {
+  kind: RotationKind;
+  targetEpoch: number;
+  keyMode?: RotationKeyMode;
+  share?: boolean;
+  isFollowup: boolean;
+  /** Failed `advanceEpoch` attempts on removal runs (omitted when 0). */
+  advanceAttempts?: number;
+  afterReadLog?: RotationPhase;
+  phase: RotationPhase;
+}
+
+/**
+ * Rotation machine state (wire field names; opaque token — round-tripped
+ * through wasm verbatim; the host keeps it in memory per space so D-005
+ * follow-up bookkeeping survives across runs within a page session; a page
+ * reload starts clean, which is safe: D-005 is best-effort). The `action`
+ * field is `null` when idle and always present on the wire.
+ */
+export interface RotationState {
+  currentEpoch: number;
+  shared: boolean;
+  followupActive: boolean;
+  followupPending: boolean;
+  followupDeferred: boolean;
+  action: RotationAction | null;
+  stack: RotationFrame[];
 }
 
 // --- Shared types ---

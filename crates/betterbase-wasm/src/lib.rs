@@ -11,4 +11,5 @@ mod error;
 pub mod file_policy;
 pub mod frames;
 pub mod pull;
+pub mod rotation;
 pub mod sync;
