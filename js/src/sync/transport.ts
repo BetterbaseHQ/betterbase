@@ -28,7 +28,8 @@ import type {
 } from "./types.js";
 import { cborEncode, cborDecode } from "./cbor.js";
 import {
-  deriveNextEpochKey,
+  maxEpochDeriveDistance,
+  selectEpochKey,
   DEFAULT_EPOCH_ADVANCE_INTERVAL_MS,
   signEditEntry,
   verifyEditChain,
@@ -871,56 +872,44 @@ export class SyncTransport implements SyncTransportInterface {
   }
 
   /**
-   * Maximum number of epoch steps to derive forward.
-   * Prevents DoS from a malicious server sending a very high epoch number.
-   * 1000 epochs at 30-day intervals covers ~82 years.
-   */
-  private static readonly MAX_EPOCH_ADVANCE = 1000;
-
-  /**
-   * Derive the KEK for a given epoch via forward derivation from the base key.
-   * Used for shared spaces (Uint8Array keys via WASM).
+   * Resolve the KEK for a given epoch from the raw base key only (no
+   * distributed shares — the encrypt path and the no-share decrypt
+   * fallback). Selection is delegated to the canonical Rust ladder
+   * (selectEpochKey): base key on exact-epoch match, else bounded forward
+   * derivation.
    *
-   * Uses a non-destructive cache: the base key is never mutated, so keys for
-   * ANY epoch >= baseEpoch can be derived. This is essential for shared spaces
-   * where records from different members may arrive at different epochs.
+   * Uses a non-destructive cache: the base key is never mutated, so keys
+   * for ANY epoch >= baseEpoch can be derived. This is essential for
+   * shared spaces where records from different members may arrive at
+   * different epochs.
    */
   private getKEKForEpoch(dekEpoch: number): Uint8Array {
     if (!this.baseKek || !this.spaceId || this.baseKek instanceof CryptoKey) {
       throw new Error(`No raw KEK available for epoch ${dekEpoch}`);
     }
 
-    // Fast path: exact match with base epoch
+    // Fast path: exact match with base epoch (no wasm call needed).
     if (dekEpoch === this.baseEpoch) {
       return this.baseKek;
     }
 
-    // Can't derive backward from base
-    if (dekEpoch < this.baseEpoch) {
+    const cached = this.derivedKeyCache.get(dekEpoch);
+    if (cached) return cached;
+
+    const selected = selectEpochKey(
+      this.spaceId,
+      dekEpoch,
+      this.baseKek,
+      this.baseEpoch,
+      null,
+    );
+    if (!selected) {
       throw new Error(
         `Cannot derive KEK for epoch ${dekEpoch} (base: ${this.baseEpoch}). Forward secrecy prevents backward derivation.`,
       );
     }
-
-    // Check cache
-    const cached = this.derivedKeyCache.get(dekEpoch);
-    if (cached) return cached;
-
-    this.validateEpochDistance(dekEpoch);
-
-    // Derive forward from raw bytes
-    let key: Uint8Array = this.baseKek;
-    for (let e = this.baseEpoch + 1; e <= dekEpoch; e++) {
-      const existing = this.derivedKeyCache.get(e);
-      if (existing) {
-        key = existing;
-      } else {
-        key = deriveNextEpochKey(key, this.spaceId, e);
-        this.derivedKeyCache.set(e, key);
-      }
-    }
-
-    return key;
+    this.derivedKeyCache.set(dekEpoch, selected.key);
+    return selected.key;
   }
 
   /**
@@ -947,11 +936,22 @@ export class SyncTransport implements SyncTransportInterface {
       );
     }
 
+    // The WebCrypto HKDF chain can't run in wasm (non-extractable keys),
+    // so the same distance bound the Rust ladder enforces is checked here
+    // before the loop.
+    const maxAdvance = maxEpochDeriveDistance();
+    const distance = dekEpoch - this.baseEpoch;
+    if (distance > maxAdvance) {
+      throw new Error(
+        `Epoch ${dekEpoch} is too far ahead of base epoch ${this.baseEpoch} ` +
+          `(distance: ${distance}, max: ${maxAdvance}). ` +
+          `This may indicate a corrupted or malicious wrapped DEK.`,
+      );
+    }
+
     // Check cache
     const cached = this.derivedKwKeyCache.get(dekEpoch);
     if (cached) return cached;
-
-    this.validateEpochDistance(dekEpoch);
 
     // Derive forward via Web Crypto HKDF
     let currentDeriveKey: CryptoKey = this.baseDeriveKey;
@@ -977,17 +977,6 @@ export class SyncTransport implements SyncTransportInterface {
     }
 
     return currentKwKey;
-  }
-
-  private validateEpochDistance(dekEpoch: number): void {
-    const distance = dekEpoch - this.baseEpoch;
-    if (distance > SyncTransport.MAX_EPOCH_ADVANCE) {
-      throw new Error(
-        `Epoch ${dekEpoch} is too far ahead of base epoch ${this.baseEpoch} ` +
-          `(distance: ${distance}, max: ${SyncTransport.MAX_EPOCH_ADVANCE}). ` +
-          `This may indicate a corrupted or malicious wrapped DEK.`,
-      );
-    }
   }
 
   /**
@@ -1051,16 +1040,27 @@ export class SyncTransport implements SyncTransportInterface {
   }
 
   /**
-   * Resolve the KEK for an epoch, preferring a fresh-rotation share over
-   * derivation (AUD-024). Resolved shares are cached; a transient share
-   * failure never poisons the cache — it rethrows as
-   * TransientKeyResolutionError so the record's decryption visibly fails as
-   * retryable rather than silently succeeding with a wrong derived key.
+   * Resolve the KEK for an epoch, following the canonical Rust ladder
+   * (AUD-024): base key on exact-epoch match, else the distributed share
+   * (which may cover PAST epochs — fresh-key rotations, late joiners),
+   * else bounded forward derivation. Resolved shares are cached; a
+   * transient share failure never poisons the cache — it rethrows as
+   * TransientKeyResolutionError so the record's decryption visibly fails
+   * as retryable rather than silently succeeding with a wrong derived key.
    */
   private async kekForEpoch(dekEpoch: number): Promise<Uint8Array> {
-    if (dekEpoch > this.baseEpoch && this.epochKeyResolver) {
-      const cached = this.derivedKeyCache.get(dekEpoch);
-      if (cached) return cached;
+    if (!this.baseKek || this.baseKek instanceof CryptoKey || !this.spaceId) {
+      throw new Error(`No raw KEK available for epoch ${dekEpoch}`);
+    }
+
+    if (dekEpoch === this.baseEpoch) {
+      return this.baseKek;
+    }
+
+    const cached = this.derivedKeyCache.get(dekEpoch);
+    if (cached) return cached;
+
+    if (this.epochKeyResolver) {
       // The resolver maps a definitive "no share" (legacy epoch) to null;
       // transient failures throw and propagate as retryable.
       const resolved = await this.epochKeyResolver(dekEpoch).catch((err) => {

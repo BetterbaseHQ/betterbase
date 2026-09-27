@@ -41,6 +41,21 @@ export interface WasmModule {
     spaceId: string,
     targetEpoch: number,
   ): Uint8Array;
+  /** Max forward-derivation distance from a base key (DoS bound). */
+  MAX_EPOCH_DERIVE_DISTANCE(): number;
+  /**
+   * Canonical AUD-024 epoch-key selection ladder over pre-resolved inputs:
+   * base exact-match → distributed share → bounded forward derivation.
+   * Returns null when no rung resolves; throws on distance violations and
+   * malformed key lengths.
+   */
+  selectEpochKey(
+    spaceId: string,
+    dekEpoch: number,
+    baseKey: Uint8Array | null,
+    baseEpoch: number,
+    shareKey: Uint8Array | null,
+  ): { key: Uint8Array; source: "base" | "share" | "derived" } | null;
   deriveChannelKey(epochKey: Uint8Array, spaceId: string): Uint8Array;
   buildPresenceAad(spaceId: string): Uint8Array;
   buildEventAad(spaceId: string): Uint8Array;

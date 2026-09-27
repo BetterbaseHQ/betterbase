@@ -7,9 +7,10 @@ use betterbase_crypto::{
     derive_channel_key, derive_epoch_key_from_root, derive_next_epoch_key, encode_did_key,
     encode_did_key_from_jwk, encrypt_v4, export_private_key_jwk, export_public_key_jwk,
     generate_dek, generate_p256_keypair, hkdf_derive, import_private_key_jwk, issue_root_ucan,
-    parse_edit_chain, reconstruct_state, serialize_edit_chain, sign, sign_edit_entry, unwrap_dek,
-    value_diff, verify, verify_edit_chain, verify_edit_entry, wrap_dek, EditDiff, EditEntry,
-    EncryptionContext, UCANPermission, CURRENT_VERSION, SUPPORTED_VERSIONS,
+    parse_edit_chain, reconstruct_state, select_epoch_key_resolved, serialize_edit_chain, sign,
+    sign_edit_entry, unwrap_dek, value_diff, verify, verify_edit_chain, verify_edit_entry,
+    wrap_dek, EditDiff, EditEntry, EncryptionContext, EpochKeySource, UCANPermission,
+    CURRENT_VERSION, MAX_EPOCH_DERIVE_DISTANCE, SUPPORTED_VERSIONS,
 };
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
@@ -127,6 +128,54 @@ pub fn wasm_derive_epoch_key_from_root(
     derive_epoch_key_from_root(root_key, space_id, target_epoch)
         .map(|k| k.to_vec())
         .map_err(to_js_error)
+}
+
+/// Max forward-derivation distance from a base key (DoS bound on
+/// peer-controlled wrapped-DEK epochs).
+#[wasm_bindgen(js_name = "MAX_EPOCH_DERIVE_DISTANCE")]
+pub fn max_epoch_derive_distance() -> u32 {
+    MAX_EPOCH_DERIVE_DISTANCE
+}
+
+/// Canonical AUD-024 epoch-key selection ladder over ALREADY-resolved inputs:
+/// base key on exact-epoch match → distributed share → bounded forward
+/// derivation → null. No I/O: the shell resolves the async share first
+/// (transient failures propagate; a definitive "no share" is `null`).
+///
+/// Returns `{ key: Uint8Array, source: "base" | "share" | "derived" }`, or
+/// `null` when no rung resolves. Throws on distance violations and
+/// malformed key lengths (a corrupt key must never fall through to another
+/// rung).
+#[wasm_bindgen(js_name = "selectEpochKey")]
+pub fn wasm_select_epoch_key(
+    space_id: &str,
+    dek_epoch: u32,
+    base_key: Option<Vec<u8>>,
+    base_epoch: u32,
+    share_key: Option<Vec<u8>>,
+) -> Result<JsValue, JsValue> {
+    let base = base_key.as_ref().map(|k| (k.as_slice(), base_epoch));
+    let share = share_key.as_deref();
+    match select_epoch_key_resolved(space_id, dek_epoch, base, share).map_err(to_js_error)? {
+        Some(resolved) => {
+            let source = match resolved.source {
+                EpochKeySource::Base => "base",
+                EpochKeySource::Share => "share",
+                EpochKeySource::Derived => "derived",
+            };
+            // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
+            let result = js_sys::Object::new();
+            js_sys::Reflect::set(
+                &result,
+                &"key".into(),
+                &js_sys::Uint8Array::from(resolved.key.as_slice()),
+            )
+            .unwrap();
+            js_sys::Reflect::set(&result, &"source".into(), &JsValue::from_str(source)).unwrap();
+            Ok(result.into())
+        }
+        None => Ok(JsValue::NULL),
+    }
 }
 
 // --- Channel key ---

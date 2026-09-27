@@ -24,7 +24,13 @@ export { SyncCrypto } from "./sync-crypto.js";
 export { JsonCrypto } from "./json-crypto.js";
 
 // Epoch key derivation
-export { deriveNextEpochKey, deriveEpochKeyFromRoot } from "./epoch.js";
+export {
+  deriveNextEpochKey,
+  deriveEpochKeyFromRoot,
+  selectEpochKey,
+  maxEpochDeriveDistance,
+} from "./epoch.js";
+export type { EpochKeySource, ResolvedEpochKey } from "./epoch.js";
 
 // DID encoding (used by apps for identity)
 export { encodeDIDKey, encodeDIDKeyFromJwk } from "./ucan.js";

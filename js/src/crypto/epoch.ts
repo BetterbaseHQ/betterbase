@@ -42,3 +42,48 @@ export function deriveEpochKeyFromRoot(
 ): Uint8Array {
   return ensureWasm().deriveEpochKeyFromRoot(rootKey, spaceId, targetEpoch);
 }
+
+/** Max forward-derivation distance from a base key (DoS bound on
+ * peer-controlled wrapped-DEK epochs). Read lazily: wasm must be
+ * initialized before first call (SDK bootstrap does this). */
+export function maxEpochDeriveDistance(): number {
+  return ensureWasm().MAX_EPOCH_DERIVE_DISTANCE();
+}
+
+/** Which rung of the AUD-024 ladder produced a resolved epoch key. */
+export type EpochKeySource = "base" | "share" | "derived";
+
+export interface ResolvedEpochKey {
+  /** The 32-byte key for `dekEpoch`. */
+  key: Uint8Array;
+  /** Which rung of the ladder resolved it (observability + conformance). */
+  source: EpochKeySource;
+}
+
+/**
+ * Canonical AUD-024 epoch-key selection ladder (Rust, conformance-pinned
+ * by `test-vectors/epoch-ladder.json`): base key on exact-epoch match →
+ * distributed share → bounded forward derivation.
+ *
+ * Pure — no I/O. Shells that resolve distributed shares asynchronously
+ * resolve them first: transient share failures PROPAGATE (retryable), a
+ * definitive "no share" is passed as `null` and falls through to
+ * derivation. Returns `null` when no rung resolves. Throws on distance
+ * violations and malformed key lengths (a corrupt key must never silently
+ * fall through to another rung).
+ */
+export function selectEpochKey(
+  spaceId: string,
+  dekEpoch: number,
+  baseKey: Uint8Array | null,
+  baseEpoch: number,
+  shareKey: Uint8Array | null,
+): ResolvedEpochKey | null {
+  return ensureWasm().selectEpochKey(
+    spaceId,
+    dekEpoch,
+    baseKey,
+    baseEpoch,
+    shareKey,
+  );
+}

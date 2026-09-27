@@ -18,7 +18,10 @@ pub use edit_chain::{
     canonical_json, parse_edit_chain, reconstruct_state, serialize_edit_chain, sign_edit_entry,
     value_diff, verify_edit_chain, verify_edit_entry, EditDiff, EditEntry,
 };
-pub use epoch::{derive_epoch_key_from_root, derive_next_epoch_key};
+pub use epoch::{
+    derive_epoch_key_from_root, derive_next_epoch_key, select_epoch_key, select_epoch_key_resolved,
+    EpochKeySource, ResolvedEpochKey, MAX_EPOCH_DERIVE_DISTANCE,
+};
 pub use error::CryptoError;
 pub use hkdf::hkdf_derive;
 pub use signing::{

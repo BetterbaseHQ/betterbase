@@ -10,7 +10,7 @@
  * 5. epoch.complete RPC to clear rewrap_epoch
  */
 
-import { deriveNextEpochKey } from "../crypto/index.js";
+import { deriveNextEpochKey, maxEpochDeriveDistance } from "../crypto/index.js";
 import { unwrapDEK, wrapDEK } from "../crypto/internals.js";
 import {
   webcryptoWrapDEK,
@@ -158,6 +158,17 @@ export async function rewrapAllDEKs(
   // Raw bytes path: use WASM
   const rawNewKey = newKey as Uint8Array;
 
+  // Same distance bound as the CryptoKey path (defense-in-depth on
+  // caller-provided epoch gaps).
+  const distance = newEpoch - currentEpoch;
+  const maxAdvance = maxEpochDeriveDistance();
+  if (distance > maxAdvance) {
+    throw new Error(
+      `Epoch gap too large: ${distance} (max: ${maxAdvance}). ` +
+        `This may indicate corrupted state or a malicious server.`,
+    );
+  }
+
   // Build key cache for unwrapping DEKs. Legacy rotation derives the chain
   // forward; fresh-key rotation (AUD-024) holds exactly the old and new keys.
   const keyCache = new Map<number, Uint8Array>();
@@ -284,9 +295,6 @@ export async function rewrapAllDEKs(
   }
 }
 
-/** Maximum epoch gap for forward derivation (defense-in-depth). */
-const MAX_EPOCH_ADVANCE = 1000;
-
 /** Bounded refetch+retry passes when a rewrap loses a compare-and-set race. */
 const REWRAP_MAX_RETRIES = 3;
 
@@ -314,9 +322,10 @@ async function rewrapAllDEKsCryptoKey(
   const includeFiles = config.includeFiles !== false;
 
   const distance = newEpoch - currentEpoch;
-  if (distance > MAX_EPOCH_ADVANCE) {
+  const maxAdvance = maxEpochDeriveDistance();
+  if (distance > maxAdvance) {
     throw new Error(
-      `Epoch gap too large: ${distance} (max: ${MAX_EPOCH_ADVANCE}). ` +
+      `Epoch gap too large: ${distance} (max: ${maxAdvance}). ` +
         `This may indicate corrupted state or a malicious server.`,
     );
   }

@@ -120,7 +120,112 @@ pub trait EpochShareResolver {
     fn resolve_share(&self, epoch: u32) -> Result<Option<[u8; AES_KEY_LENGTH]>, CryptoError>;
 }
 
-/// Walk the AUD-024 selection ladder for `dek_epoch`.
+/// Validate and copy a base key (a malformed base is a hard error — it
+/// must never silently fall through to another rung).
+fn normalize_base(
+    base: Option<(&[u8], u32)>,
+) -> Result<Option<([u8; AES_KEY_LENGTH], u32)>, CryptoError> {
+    match base {
+        Some((key, epoch)) => {
+            if key.len() != AES_KEY_LENGTH {
+                return Err(CryptoError::InvalidKeyLength {
+                    expected: AES_KEY_LENGTH,
+                    got: key.len(),
+                });
+            }
+            let mut material = [0u8; AES_KEY_LENGTH];
+            material.copy_from_slice(key);
+            Ok(Some((material, epoch)))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Walk the AUD-024 selection ladder for `dek_epoch` using an ALREADY
+/// resolved share — the pure decision rule, shared by every platform.
+///
+/// This is the canonical form: no I/O, no resolver. Shells that resolve
+/// distributed shares asynchronously (network) resolve them first —
+/// propagating transient failures, mapping a definitive "no share" to
+/// `None` — then call this with the result.
+///
+/// Ladder order:
+/// 1. **Base key** on exact-epoch match.
+/// 2. **Distributed per-epoch share** (covers past epochs, which
+///    forward derivation cannot reach — fresh-key rotations / late joins).
+/// 3. **Bounded forward derivation** from the base key ([`MAX_EPOCH_DERIVE_DISTANCE`]).
+/// 4. `Ok(None)` when no rung resolves.
+///
+/// * `space_id` — domain separation for derivation.
+/// * `base` — the currently-held key and its epoch (`None` when the
+///   space's live key state is unavailable — then only shares can resolve).
+/// * `share` — the resolved share for `dek_epoch`, if one exists.
+///
+/// Malformed base or share key lengths are hard errors (a corrupt key
+/// must never silently fall through to a different rung); a distance
+/// violation is a hard error ([`CryptoError::EpochTooFarAhead`]).
+pub fn select_epoch_key_resolved(
+    space_id: &str,
+    dek_epoch: u32,
+    base: Option<(&[u8], u32)>,
+    share: Option<&[u8]>,
+) -> Result<Option<ResolvedEpochKey>, CryptoError> {
+    let base = normalize_base(base)?;
+
+    // 1. Base key on exact-epoch match.
+    if let Some((key, epoch)) = base {
+        if dek_epoch == epoch {
+            return Ok(Some(ResolvedEpochKey {
+                key,
+                source: EpochKeySource::Base,
+            }));
+        }
+    }
+
+    // 2. Distributed share.
+    if let Some(key) = share {
+        if key.len() != AES_KEY_LENGTH {
+            return Err(CryptoError::InvalidKeyLength {
+                expected: AES_KEY_LENGTH,
+                got: key.len(),
+            });
+        }
+        let mut material = [0u8; AES_KEY_LENGTH];
+        material.copy_from_slice(key);
+        return Ok(Some(ResolvedEpochKey {
+            key: material,
+            source: EpochKeySource::Share,
+        }));
+    }
+
+    // 3. Bounded forward derivation — only forward, never backward.
+    if let Some((key, epoch)) = base {
+        if dek_epoch > epoch {
+            let distance = dek_epoch - epoch;
+            if distance > MAX_EPOCH_DERIVE_DISTANCE {
+                return Err(CryptoError::EpochTooFarAhead {
+                    dek_epoch,
+                    base_epoch: epoch,
+                    distance,
+                    max: MAX_EPOCH_DERIVE_DISTANCE,
+                });
+            }
+            let mut current = key;
+            for e in (epoch + 1)..=dek_epoch {
+                current = derive_next_epoch_key(&current, space_id, e)?;
+            }
+            return Ok(Some(ResolvedEpochKey {
+                key: current,
+                source: EpochKeySource::Derived,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Walk the AUD-024 selection ladder for `dek_epoch`, resolving
+/// distributed shares through `resolver`.
 ///
 /// * `space_id` — domain separation for derivation.
 /// * `base` — the currently-held key and its epoch (`None` when the
@@ -136,22 +241,10 @@ pub fn select_epoch_key(
     base: Option<(&[u8], u32)>,
     resolver: &dyn EpochShareResolver,
 ) -> Result<Option<ResolvedEpochKey>, CryptoError> {
-    let base = match base {
-        Some((key, epoch)) => {
-            if key.len() != AES_KEY_LENGTH {
-                return Err(CryptoError::InvalidKeyLength {
-                    expected: AES_KEY_LENGTH,
-                    got: key.len(),
-                });
-            }
-            let mut material = [0u8; AES_KEY_LENGTH];
-            material.copy_from_slice(key);
-            Some((material, epoch))
-        }
-        None => None,
-    };
+    let base = normalize_base(base)?;
 
-    // 1. Base key on exact-epoch match.
+    // Rung 1 is local: on exact-epoch match the ladder never consults the
+    // resolver (epoch-1 invitations have no server-side shares to resolve).
     if let Some((key, epoch)) = base {
         if dek_epoch == epoch {
             return Ok(Some(ResolvedEpochKey {
@@ -161,34 +254,16 @@ pub fn select_epoch_key(
         }
     }
 
-    // 2. Distributed share. Transient failures propagate (retryable);
-    //    definitive absence falls through.
-    if let Some(key) = resolver.resolve_share(dek_epoch)? {
-        return Ok(Some(ResolvedEpochKey {
-            key,
-            source: EpochKeySource::Share,
-        }));
-    }
-
-    // 3. Bounded forward derivation — only forward, never backward.
-    if let Some((key, epoch)) = base {
-        if dek_epoch > epoch {
-            let distance = dek_epoch - epoch;
-            if distance > MAX_EPOCH_DERIVE_DISTANCE {
-                return Err(CryptoError::InvalidEpoch(dek_epoch as i64));
-            }
-            let mut current = key;
-            for e in (epoch + 1)..=dek_epoch {
-                current = derive_next_epoch_key(&current, space_id, e)?;
-            }
-            return Ok(Some(ResolvedEpochKey {
-                key: current,
-                source: EpochKeySource::Derived,
-            }));
-        }
-    }
-
-    Ok(None)
+    // Rung 2 onward: transient share-resolution failures propagate
+    // (retryable); a definitive "no share" falls through to derivation.
+    let share = resolver.resolve_share(dek_epoch)?;
+    let base_ref = base.as_ref().map(|(k, e)| (k.as_slice(), *e));
+    select_epoch_key_resolved(
+        space_id,
+        dek_epoch,
+        base_ref,
+        share.as_ref().map(|s| s.as_slice()),
+    )
 }
 
 #[cfg(test)]
@@ -426,6 +501,63 @@ mod ladder_tests {
     #[test]
     fn malformed_base_key_is_a_hard_error() {
         assert!(select_epoch_key("s", 3, Some((&[0u8; 16], 3)), &EmptyResolver).is_err());
+    }
+
+    #[test]
+    fn resolved_share_wins_over_derivation() {
+        // Same decision as the resolver path, exercised through the pure
+        // entry point that shells call after async share resolution.
+        let key = root();
+        let share = [9u8; 32];
+        let resolved = select_epoch_key_resolved("s", 5, Some((&key, 3)), Some(&share))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.source, EpochKeySource::Share);
+        assert_eq!(resolved.key, share);
+    }
+
+    #[test]
+    fn resolved_share_covers_past_epoch_without_base() {
+        // Late-joiner: no live base key yet, but holds a past-epoch share.
+        let share = [7u8; 32];
+        let resolved = select_epoch_key_resolved("s", 2, None, Some(&share))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.source, EpochKeySource::Share);
+        assert_eq!(resolved.key, share);
+    }
+
+    #[test]
+    fn malformed_share_is_a_hard_error() {
+        // A corrupted share must not silently fall through to derivation —
+        // that would pick the wrong rung for a fresh-rotation epoch.
+        let key = root();
+        assert!(select_epoch_key_resolved("s", 5, Some((&key, 3)), Some(&[0u8; 16])).is_err());
+    }
+
+    #[test]
+    fn resolved_distance_violation_reports_too_far_ahead() {
+        let key = root();
+        let err = select_epoch_key_resolved(
+            "s",
+            3 + MAX_EPOCH_DERIVE_DISTANCE + 1,
+            Some((&key, 3)),
+            None,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("too far ahead"), "message: {msg}");
+        assert!(msg.contains("max: 1000"), "message: {msg}");
+    }
+
+    #[test]
+    fn resolved_unresolvable_returns_none() {
+        let key = root();
+        assert_eq!(
+            select_epoch_key_resolved("s", 2, Some((&key, 5)), None).unwrap(),
+            None
+        );
+        assert_eq!(select_epoch_key_resolved("s", 7, None, None).unwrap(), None);
     }
 
     /// Conformance against the published vectors

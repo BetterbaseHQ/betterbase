@@ -69,13 +69,17 @@ import { rewrapAllDEKs } from "./reencrypt.js";
 import { RPCCallError } from "./rpc-connection.js";
 
 // Crypto stubs: identity unwrap/wrap with a 4-byte big-endian epoch prefix.
-vi.mock("../crypto/index.js", () => ({
-  deriveNextEpochKey: (key: Uint8Array, _space: string, epoch: number) => {
-    const next = new Uint8Array(key);
-    new DataView(next.buffer).setUint32(0, epoch, false);
-    return next;
-  },
-}));
+vi.mock("../crypto/index.js", async () => {
+  const { MAX_EPOCH_DERIVE_DISTANCE } = await import("./epoch-ladder-mock.js");
+  return {
+    deriveNextEpochKey: (key: Uint8Array, _space: string, epoch: number) => {
+      const next = new Uint8Array(key);
+      new DataView(next.buffer).setUint32(0, epoch, false);
+      return next;
+    },
+    maxEpochDeriveDistance: () => MAX_EPOCH_DERIVE_DISTANCE,
+  };
+});
 vi.mock("../crypto/internals.js", () => ({
   unwrapDEK: (wrapped: Uint8Array) => ({ dek: wrapped.slice(4) }),
   wrapDEK: (dek: Uint8Array, _key: Uint8Array, epoch: number) => {

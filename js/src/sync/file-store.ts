@@ -39,7 +39,11 @@
 
 import type { FilesClient } from "./files.js";
 import { FileNotFoundError } from "./files.js";
-import { deriveNextEpochKey, type EncryptionContext } from "../crypto/index.js";
+import {
+  maxEpochDeriveDistance,
+  selectEpochKey,
+  type EncryptionContext,
+} from "../crypto/index.js";
 import {
   generateDEK,
   wrapDEK,
@@ -157,10 +161,6 @@ export interface FileSpaceSyncConfig {
    */
   resolveEpochKey: (epoch: number) => Promise<Uint8Array | null>;
 }
-
-/** Max forward-derivation distance — same bound as SyncTransport (a
- * peer-controlled wrapped-DEK epoch must not drive unbounded HKDF loops). */
-const MAX_EPOCH_DERIVE_DISTANCE = 1000;
 
 /** Per-space runtime: everything needed to upload/download in one space. */
 interface SpaceRuntime {
@@ -301,6 +301,18 @@ export class FileStore {
             `Cannot derive KEK for past epoch ${dekEpoch} (current: ${cachedEpoch})`,
           );
         }
+        // The WebCrypto HKDF chain can't run in wasm (non-extractable
+        // keys), so the same distance bound the Rust ladder enforces is
+        // checked here before the loop.
+        const maxAdvance = maxEpochDeriveDistance();
+        const distance = dekEpoch - cachedEpoch;
+        if (distance > maxAdvance) {
+          throw new Error(
+            `Epoch ${dekEpoch} is too far ahead of base epoch ${cachedEpoch} ` +
+              `(distance: ${distance}, max: ${maxAdvance}). ` +
+              `This may indicate a corrupted or malicious wrapped DEK.`,
+          );
+        }
         if (!cachedDeriveKey) {
           throw new Error(`No derive key available for epoch derivation`);
         }
@@ -325,19 +337,27 @@ export class FileStore {
       let cachedKey: Uint8Array = config.epochKey;
       let cachedEpoch = config.epoch;
       runtime.getKEKForEpoch = (dekEpoch: number): Uint8Array => {
-        if (dekEpoch === cachedEpoch) return cachedKey;
-        if (dekEpoch < cachedEpoch) {
+        // Canonical ladder (Rust): base key on exact-epoch match, or
+        // bounded forward derivation — personal spaces have no distributed
+        // shares, so the share rung is null.
+        const selected = selectEpochKey(
+          config.spaceId,
+          dekEpoch,
+          cachedKey,
+          cachedEpoch,
+          null,
+        );
+        if (!selected) {
           throw new Error(
             `Cannot derive KEK for past epoch ${dekEpoch} (current: ${cachedEpoch})`,
           );
         }
-        let key = cachedKey;
-        for (let e = cachedEpoch + 1; e <= dekEpoch; e++) {
-          key = deriveNextEpochKey(key, config.spaceId, e);
-        }
-        cachedKey = key;
+        // Destructive linear-advance cache: once epoch N+1 is derived, N
+        // cannot be re-derived. Safe because personal file DEKs arrive in
+        // monotonically non-decreasing epoch order.
+        cachedKey = selected.key;
         cachedEpoch = dekEpoch;
-        return key;
+        return selected.key;
       };
     }
     this.spaceRuntimes.set(config.spaceId, runtime);
@@ -1220,47 +1240,38 @@ export class FileStore {
         dek.fill(0);
       }
     } else if (runtime.getUploadKey || runtime.resolveEpochKey) {
-      // Shared-space path, mirroring SyncTransport's key selection: base
-      // key on exact-epoch match; distributed per-epoch shares otherwise
-      // (handles fresh-key rotations, where the current root can't derive
-      // past-epoch keys); forward derivation as the last resort. Transient
-      // share-resolution failures PROPAGATE (retryable) — only a
-      // definitive "no share" falls through, per AUD-024's contract.
-      let kek: Uint8Array | null = null;
+      // Shared-space path: the AUD-024 selection ladder (base key on
+      // exact-epoch match → distributed per-epoch share → bounded forward
+      // derivation) is canonical in Rust (selectEpochKey). The shell only
+      // resolves the async share: transient failures PROPAGATE (retryable),
+      // a definitive "no share" is null and falls through to derivation.
+      // Exact-epoch matches never consult the shares (epoch-1 invitations
+      // have no server-side key shares to resolve).
       const live = runtime.getUploadKey?.();
-      if (live && dekEpoch === live.epoch) {
-        kek = live.epochKey;
-      } else if (runtime.resolveEpochKey) {
+      let share: Uint8Array | null = null;
+      if ((!live || dekEpoch !== live.epoch) && runtime.resolveEpochKey) {
         const cache = runtime.resolvedEpochKeys;
         const cachedKek = cache?.get(dekEpoch);
         if (cachedKek) {
-          kek = cachedKek;
+          share = cachedKek;
         } else {
-          kek = await runtime.resolveEpochKey(dekEpoch);
-          if (kek) cache?.set(dekEpoch, kek);
+          share = await runtime.resolveEpochKey(dekEpoch);
+          if (share) cache?.set(dekEpoch, share);
         }
       }
-      if (!kek && live && dekEpoch > live.epoch) {
-        const distance = dekEpoch - live.epoch;
-        if (distance > MAX_EPOCH_DERIVE_DISTANCE) {
-          throw new Error(
-            `Epoch ${dekEpoch} is too far ahead of base epoch ${live.epoch} ` +
-              `(distance: ${distance}, max: ${MAX_EPOCH_DERIVE_DISTANCE}). ` +
-              `This may indicate a corrupted or malicious wrapped DEK.`,
-          );
-        }
-        let key = live.epochKey;
-        for (let e = live.epoch + 1; e <= dekEpoch; e++) {
-          key = deriveNextEpochKey(key, effectiveSpaceId, e);
-        }
-        kek = key;
-      }
-      if (!kek) {
+      const selected = selectEpochKey(
+        effectiveSpaceId,
+        dekEpoch,
+        live?.epochKey ?? null,
+        live?.epoch ?? 0,
+        share,
+      );
+      if (!selected) {
         throw new Error(
           `FileStore: no epoch key for space ${effectiveSpaceId} epoch ${dekEpoch}`,
         );
       }
-      const { dek } = unwrapDEK(wrappedDEK, kek);
+      const { dek } = unwrapDEK(wrappedDEK, selected.key);
       try {
         decrypted = decryptV4(encrypted, dek, context);
       } finally {

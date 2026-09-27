@@ -12,14 +12,58 @@ import {
   TransientKeyResolutionError,
 } from "./transport.js";
 
+const unwrapState = vi.hoisted(() => ({ keys: [] as Uint8Array[] }));
+
 vi.mock("../crypto/index.js", () => ({
   deriveNextEpochKey: () => new Uint8Array(32).fill(7),
   DEFAULT_EPOCH_ADVANCE_INTERVAL_MS: 60_000,
+  // 1:1 mirror of Rust `select_epoch_key_resolved` (betterbase-crypto
+  // epoch.rs): base on exact-epoch match → share → bounded forward
+  // derivation (distance <= 1000) → null.
+  selectEpochKey: (
+    _spaceId: string,
+    dekEpoch: number,
+    baseKey: Uint8Array | null,
+    baseEpoch: number,
+    shareKey: Uint8Array | null,
+  ): { key: Uint8Array; source: string } | null => {
+    const MAX_EPOCH_DERIVE_DISTANCE = 1000;
+    if (baseKey && baseKey.length !== 32) {
+      throw new Error(
+        `Invalid key length: expected 32 bytes, got ${baseKey.length}`,
+      );
+    }
+    if (baseKey && dekEpoch === baseEpoch) {
+      return { key: baseKey, source: "base" };
+    }
+    if (shareKey) {
+      if (shareKey.length !== 32) {
+        throw new Error(
+          `Invalid key length: expected 32 bytes, got ${shareKey.length}`,
+        );
+      }
+      return { key: shareKey, source: "share" };
+    }
+    if (baseKey && dekEpoch > baseEpoch) {
+      const distance = dekEpoch - baseEpoch;
+      if (distance > MAX_EPOCH_DERIVE_DISTANCE) {
+        throw new Error(
+          `Epoch ${dekEpoch} is too far ahead of base epoch ${baseEpoch} ` +
+            `(distance: ${distance}, max: ${MAX_EPOCH_DERIVE_DISTANCE}). ` +
+            `This may indicate a corrupted or malicious wrapped DEK.`,
+        );
+      }
+      return { key: new Uint8Array(32).fill(7), source: "derived" };
+    }
+    return null;
+  },
+  maxEpochDeriveDistance: () => 1000,
 }));
 vi.mock("../crypto/internals.js", () => ({
   generateDEK: () => new Uint8Array(44),
   wrapDEK: (dek: Uint8Array) => dek,
-  unwrapDEK: () => {
+  unwrapDEK: (_wrapped: Uint8Array, key: Uint8Array) => {
+    unwrapState.keys.push(key);
     throw new Error("unwrap failed (garbage wrapped DEK)");
   },
   encryptV4: (data: Uint8Array) => data,
@@ -117,6 +161,7 @@ describe("SyncTransport.pull failure classification (AUD-024)", () => {
 
   function makeTransport(
     resolveEpochKey: (epoch: number) => Promise<Uint8Array | null>,
+    recordEpoch = 5,
   ) {
     const transport = new SyncTransport({
       push: async () => ({ ok: true, sequence: 1 }),
@@ -130,7 +175,7 @@ describe("SyncTransport.pull failure classification (AUD-024)", () => {
           id: "r1",
           sequence: 7,
           blob: new Uint8Array([9, 9, 9]),
-          wrappedDek: epochPrefixedDek(5),
+          wrappedDek: epochPrefixedDek(recordEpoch),
           deleted: false,
         },
       ],
@@ -164,6 +209,37 @@ describe("SyncTransport.pull failure classification (AUD-024)", () => {
     const failure = result.failures![0]!;
     expect(failure.error).not.toBeInstanceOf(TransientKeyResolutionError);
     expect(failure.retryable).toBe(false);
+  });
+
+  it("resolves a share for a PAST epoch (late joiner) and uses it to unwrap", async () => {
+    // The canonical ladder prefers shares even below the base epoch — a
+    // late joiner whose base is newer than the record's epoch decrypts via
+    // the share, with no backward-derivation error.
+    const share = new Uint8Array(32).fill(0x42);
+    const resolveEpochKey = vi.fn(async (epoch: number) =>
+      epoch === 0 ? share : null,
+    );
+    const transport = makeTransport(resolveEpochKey, 0); // record at epoch 0, base at 1
+
+    const result = await transport.pull("notes", 0);
+
+    expect(resolveEpochKey).toHaveBeenCalledWith(0);
+    // The resolved share — not the base or a derived key — was handed to
+    // unwrapDEK (the mock unwrap then fails on the garbage DEK).
+    expect(unwrapState.keys.at(-1)).toEqual(share);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures![0]!.retryable).toBe(false);
+  });
+
+  it("never consults the resolver on exact-epoch match (no I/O)", async () => {
+    const resolveEpochKey = vi.fn(async () => null);
+    const transport = makeTransport(resolveEpochKey, 1); // record epoch == base epoch
+
+    const result = await transport.pull("notes", 0);
+
+    expect(resolveEpochKey).not.toHaveBeenCalled();
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures![0]!.retryable).toBe(false);
   });
 });
 

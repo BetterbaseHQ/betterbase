@@ -40,20 +40,23 @@ vi.mock("../crypto/internals.js", () => {
   };
 });
 
-vi.mock("../crypto/index.js", () => {
-  return {
-    deriveNextEpochKey: (
-      currentKey: Uint8Array,
-      spaceId: string,
-      nextEpoch: number,
-    ) => {
-      cryptoState.derivedEpochs.push({ spaceId, epoch: nextEpoch });
-      const next = new Uint8Array(32);
-      next.set(currentKey.subarray(0, 31));
-      next[31] = nextEpoch & 0xff;
-      return next;
-    },
+vi.mock("../crypto/index.js", async () => {
+  const { createEpochLadderMock } = await import("./epoch-ladder-mock.js");
+  const deriveNextEpochKey = (
+    currentKey: Uint8Array,
+    spaceId: string,
+    nextEpoch: number,
+  ) => {
+    cryptoState.derivedEpochs.push({ spaceId, epoch: nextEpoch });
+    const next = new Uint8Array(32);
+    next.set(currentKey.subarray(0, 31));
+    next[31] = nextEpoch & 0xff;
+    return next;
   };
+  // 1:1 mirror of Rust `select_epoch_key_resolved` (betterbase-crypto
+  // epoch.rs) — see epoch-ladder-mock.ts. Real wasm is pinned against
+  // test-vectors/epoch-ladder.json in the browser suite.
+  return createEpochLadderMock(deriveNextEpochKey);
 });
 
 vi.mock("../crypto/webcrypto.js", () => {

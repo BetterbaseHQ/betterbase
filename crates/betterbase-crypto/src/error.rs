@@ -26,6 +26,16 @@ pub enum CryptoError {
     #[error("Invalid epoch: must be a non-negative integer, got {0}")]
     InvalidEpochNonNeg(i64),
 
+    #[error(
+        "Epoch {dek_epoch} is too far ahead of base epoch {base_epoch} (distance: {distance}, max: {max}). This may indicate a corrupted or malicious wrapped DEK."
+    )]
+    EpochTooFarAhead {
+        dek_epoch: u32,
+        base_epoch: u32,
+        distance: u32,
+        max: u32,
+    },
+
     #[error("Encryption failed: {0}")]
     EncryptionFailed(String),
 
