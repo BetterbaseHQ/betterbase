@@ -380,6 +380,16 @@ export interface WasmModule {
     event: RotationEvent,
   ): RotationState;
   rotationAbort(state: RotationState | null): RotationState;
+  /** Start the OAuth callback decision machine (see `OAuthCallbackSpec`). */
+  oauthCallbackStart(spec: OAuthCallbackSpec): CallbackMachineState;
+  /**
+   * Consume one host result for the pending callback action; returns the
+   * updated state (terminal when `action.type === "done"`).
+   */
+  oauthCallbackStep(
+    state: CallbackMachineState,
+    event: CallbackEvent,
+  ): CallbackMachineState;
   shouldRotateSpaceEpoch(
     nowMs: bigint,
     advancedAtMs: bigint | null,
@@ -554,6 +564,143 @@ export interface RotationState {
   followupDeferred: boolean;
   action: RotationAction | null;
   stack: RotationFrame[];
+}
+
+// --- OAuth callback decision machine (Rust: betterbase-auth::oauth_callback) ---
+
+/**
+ * Everything the callback machine needs from the redirect + stored OAuth
+ * state. Tokens and keys never enter the machine — the host reports
+ * booleans/metadata back via events.
+ */
+export interface OAuthCallbackSpec {
+  code: string | null;
+  state: string | null;
+  error: string | null;
+  errorDescription: string | null;
+  /** `state` persisted by `startAuth` (CSRF comparison). */
+  storedState: string | null;
+  /** PKCE code verifier persisted by `startAuth` (required). */
+  storedCodeVerifier: string | null;
+  /** Keys-JWK thumbprint persisted by `startAuth` (sync scope only). */
+  storedKeysJwkThumbprint: string | null;
+  redirectUri: string;
+  clientId: string;
+  /** Whether the configured scope includes `sync` (enables the
+   * keys-required gate). */
+  hasSyncScope: boolean;
+}
+
+/**
+ * Form parameters for the token exchange POST (`grant_type=
+ * authorization_code`). The exact parameter set is part of the wire
+ * contract — the host sends them verbatim.
+ */
+export interface CallbackExchangeParams {
+  grantType: string;
+  code: string;
+  redirectUri: string;
+  clientId: string;
+  codeVerifier: string;
+  /** Present only for sync-scope logins. */
+  keysJwkThumbprint: string | null;
+}
+
+/** One I/O step the host must perform for the pending action. */
+export type CallbackAction =
+  | { type: "exchangeCode"; params: CallbackExchangeParams }
+  | { type: "loadEphemeralKey"; transaction: string }
+  | { type: "decryptKeys" }
+  | { type: "registerMailbox" }
+  | { type: "refreshToken" }
+  | { type: "done"; outcome: CallbackOutcome };
+
+/** Error class the host maps to its error types. */
+export type CallbackFailureKind =
+  | "callback"
+  | "csrf"
+  | "oauthToken"
+  | "syncRequiresKey";
+
+/** Terminal outcome of a callback run. */
+export type CallbackOutcome =
+  | { kind: "notACallback" }
+  | {
+      kind: "failed";
+      errorKind: CallbackFailureKind;
+      message: string;
+      /** HTTP status for token-endpoint failures; 0 otherwise. */
+      status: number;
+      /** The host clears the stored OAuth state before throwing when set
+       * (CSRF and the sync gate clear; parameter/token errors do not). */
+      clearOAuthState: boolean;
+    }
+  | {
+      kind: "success";
+      keysImported: boolean;
+      tokenRefreshed: boolean;
+      mailboxRegistrationFailed: boolean;
+      refreshFailed: boolean;
+    };
+
+/** Host-reported result of the token exchange fetch. */
+export interface CallbackTokenExchangeReport {
+  ok: boolean;
+  status: number;
+  /** `error` / `error_description` fields of a JSON error body (if any). */
+  error: string | null;
+  errorDescription: string | null;
+  hasAccessToken: boolean;
+  hasRefreshToken: boolean;
+  hasKeysJwe: boolean;
+}
+
+/** Host-reported results of the JWE key-delivery step. */
+export interface CallbackKeyOutcomes {
+  keysImported: boolean;
+  encryptionKeyError: string | null;
+  mailboxIdPresent: boolean;
+  appKeypairPresent: boolean;
+  appKeypairError: string | null;
+}
+
+/** The host's result for the pending action. */
+export type CallbackEvent =
+  | ({ type: "tokenExchange" } & CallbackTokenExchangeReport)
+  | { type: "ephemeralKey"; present: boolean }
+  | ({ type: "keys" } & CallbackKeyOutcomes)
+  | { type: "mailboxRegistered"; ok: boolean }
+  | { type: "tokenRefreshed"; ok: boolean };
+
+/** Machine phase (drives event validation). */
+export type CallbackPhase =
+  | "awaitingTokenExchange"
+  | "awaitingEphemeralKey"
+  | "awaitingKeyOutcomes"
+  | "awaitingMailboxRegistration"
+  | "awaitingTokenRefresh"
+  | "terminal";
+
+/**
+ * OAuth callback machine state (wire field names; opaque token —
+ * round-tripped through wasm verbatim; the host keeps it for the duration
+ * of the callback, then discards it).
+ */
+export interface CallbackMachineState {
+  phase: CallbackPhase;
+  action: CallbackAction;
+  /** The validated OAuth `state` — the ephemeral key's transaction id. */
+  transaction: string | null;
+  hasSyncScope: boolean;
+  hasRefreshToken: boolean;
+  keysImported: boolean;
+  encryptionKeyError: string | null;
+  mailboxIdPresent: boolean;
+  appKeypairPresent: boolean;
+  appKeypairError: string | null;
+  mailboxRegistrationFailed: boolean;
+  refreshFailed: boolean;
+  tokenRefreshed: boolean;
 }
 
 // --- Shared types ---

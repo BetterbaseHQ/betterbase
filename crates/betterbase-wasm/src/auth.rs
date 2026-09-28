@@ -1,6 +1,7 @@
 //! WASM bindings for betterbase-auth.
 
-use crate::error::{to_js_error, to_js_value};
+use crate::error::{to_js_error, to_js_value, to_js_value_null};
+use betterbase_auth::oauth_callback::{CallbackEvent, CallbackMachine, OAuthCallbackSpec};
 use betterbase_auth::{
     classify_refresh_failure, compute_code_challenge, compute_jwk_thumbprint, decode_jwt_payload,
     decrypt_jwe, derive_mailbox_id, derive_session_keys, encrypt_jwe, extract_app_keypair,
@@ -256,4 +257,33 @@ pub fn wasm_key_raw_import_policy(id: &str) -> Result<JsValue, JsValue> {
 #[wasm_bindgen(js_name = "initialEpoch")]
 pub fn wasm_initial_epoch() -> u64 {
     INITIAL_EPOCH
+}
+
+// --- OAuth callback decision machine (canonical: betterbase-auth::oauth_callback) ---
+
+/// Start the OAuth callback decision machine. `spec` is the redirect
+/// parameters + stored OAuth state (see `OAuthCallbackSpec`); returns the
+/// machine state whose `action` field is the first step for the host (or
+/// the terminal `{ type: "done", outcome }` action).
+///
+/// The host (browser) performs the I/O (URL cleanup, sessionStorage, token
+/// exchange, JWE decryption, mailbox registration, token refresh) and feeds
+/// results back via `oauthCallbackStep`.
+#[wasm_bindgen(js_name = "oauthCallbackStart")]
+pub fn wasm_oauth_callback_start(spec: JsValue) -> Result<JsValue, JsValue> {
+    let spec: OAuthCallbackSpec = serde_wasm_bindgen::from_value(spec).map_err(to_js_error)?;
+    let machine = CallbackMachine::start(spec);
+    to_js_value_null(&machine)
+}
+
+/// Consume one host result for the pending callback action; returns the
+/// updated machine state. The run is finished when the returned state's
+/// `action` is `{ type: "done" }`.
+#[wasm_bindgen(js_name = "oauthCallbackStep")]
+pub fn wasm_oauth_callback_step(state: JsValue, event: JsValue) -> Result<JsValue, JsValue> {
+    let mut machine: CallbackMachine =
+        serde_wasm_bindgen::from_value(state).map_err(to_js_error)?;
+    let event: CallbackEvent = serde_wasm_bindgen::from_value(event).map_err(to_js_error)?;
+    machine.step(&event).map_err(to_js_error)?;
+    to_js_value_null(&machine)
 }

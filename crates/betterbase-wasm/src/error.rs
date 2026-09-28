@@ -17,3 +17,15 @@ pub fn to_js_value(value: &impl Serialize) -> Result<JsValue, JsValue> {
     let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
     value.serialize(&serializer).map_err(to_js_error)
 }
+
+/// Serialize a callback-machine value for JS. Same as `to_js_value` but
+/// with `serialize_missing_as_null(true)`: the committed conformance
+/// vectors are `serde_json` (where `None` is `null`) and the vector
+/// replay compares states strictly, so `Option` fields must cross the
+/// boundary as `null`, not `undefined`.
+pub fn to_js_value_null<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
+    let serializer = serde_wasm_bindgen::Serializer::new()
+        .serialize_maps_as_objects(true)
+        .serialize_missing_as_null(true);
+    value.serialize(&serializer).map_err(to_js_error)
+}

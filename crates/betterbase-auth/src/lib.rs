@@ -6,14 +6,15 @@
 //! - JWE ECDH-ES+A256KW decryption
 //! - JWT payload decoding (RFC 7519, unverified)
 //! - Token refresh policy (retry/backoff/4xx-fatal)
+//! - OAuth callback decision machine (triage/CSRF/exchange/key-delivery gate)
 //! - Client key-store policy (raw key ids, WebCrypto import policy,
 //!   initial epoch)
 //! - Scoped key extraction
 //! - Mailbox ID derivation
 //! - Ephemeral P-256 keypair generation
 //!
-//! OAuth flow orchestration (redirects, token exchange, session management)
-//! stays in TypeScript.
+//! OAuth flow orchestration (redirects, session lifecycle) stays in
+//! TypeScript; the decision machine above owns the wire-contract details.
 
 mod error;
 mod jwe;
@@ -21,6 +22,7 @@ mod jwt;
 mod key_extraction;
 mod key_policy;
 mod mailbox;
+pub mod oauth_callback;
 mod pkce;
 mod refresh;
 mod session_keys;

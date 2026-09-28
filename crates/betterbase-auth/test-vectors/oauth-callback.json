@@ -1,0 +1,1875 @@
+{
+  "cases": [
+    {
+      "actions": [
+        {
+          "outcome": {
+            "kind": "notACallback"
+          },
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "kind": "notACallback"
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": null
+      },
+      "name": "not a callback: no params at all",
+      "start": {
+        "clientId": "client-1",
+        "code": null,
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": null,
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "User denied the request",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "User denied the request",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": null
+      },
+      "name": "authorization error with description (description wins)",
+      "start": {
+        "clientId": "client-1",
+        "code": null,
+        "error": "access_denied",
+        "errorDescription": "User denied the request",
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": null,
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "server_error",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "server_error",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": null
+      },
+      "name": "authorization error without description (code is the message)",
+      "start": {
+        "clientId": "client-1",
+        "code": null,
+        "error": "server_error",
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": null,
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "Missing code or state parameter",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "Missing code or state parameter",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": null
+      },
+      "name": "missing state parameter",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": null,
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "Missing code or state parameter",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "Missing code or state parameter",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": null
+      },
+      "name": "missing code parameter",
+      "start": {
+        "clientId": "client-1",
+        "code": null,
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "outcome": {
+            "clearOAuthState": true,
+            "errorKind": "csrf",
+            "kind": "failed",
+            "message": "Invalid state parameter - possible CSRF attack",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": true,
+            "errorKind": "csrf",
+            "kind": "failed",
+            "message": "Invalid state parameter - possible CSRF attack",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": null
+      },
+      "name": "CSRF: state mismatch clears OAuth state",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "other-state"
+      }
+    },
+    {
+      "actions": [
+        {
+          "outcome": {
+            "clearOAuthState": true,
+            "errorKind": "csrf",
+            "kind": "failed",
+            "message": "Invalid state parameter - possible CSRF attack",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": true,
+            "errorKind": "csrf",
+            "kind": "failed",
+            "message": "Invalid state parameter - possible CSRF attack",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": null
+      },
+      "name": "CSRF: no stored state",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": null
+      }
+    },
+    {
+      "actions": [
+        {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "Missing code verifier - please try again",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "Missing code verifier - please try again",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": null
+      },
+      "name": "missing code verifier",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": null,
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "outcome": {
+            "keysImported": false,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": true,
+          "hasKeysJwe": false,
+          "hasRefreshToken": false,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "keysImported": false,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "minimal login: no keys, no sync scope, no refresh",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": "thumb-1",
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "transaction": "state-1",
+          "type": "loadEphemeralKey"
+        },
+        {
+          "type": "decryptKeys"
+        },
+        {
+          "type": "registerMailbox"
+        },
+        {
+          "type": "refreshToken"
+        },
+        {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": true
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": true,
+          "hasKeysJwe": true,
+          "hasRefreshToken": true,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        },
+        {
+          "present": true,
+          "type": "ephemeralKey"
+        },
+        {
+          "appKeypairError": null,
+          "appKeypairPresent": true,
+          "encryptionKeyError": null,
+          "keysImported": true,
+          "mailboxIdPresent": true,
+          "type": "keys"
+        },
+        {
+          "ok": true,
+          "type": "mailboxRegistered"
+        },
+        {
+          "ok": true,
+          "type": "tokenRefreshed"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": true
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": true,
+        "encryptionKeyError": null,
+        "hasRefreshToken": true,
+        "hasSyncScope": true,
+        "keysImported": true,
+        "mailboxIdPresent": true,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": true,
+        "transaction": "state-1"
+      },
+      "name": "full sync flow: keys, mailbox, refresh adopted",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": true,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": "thumb-1",
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "transaction": "state-1",
+          "type": "loadEphemeralKey"
+        },
+        {
+          "type": "decryptKeys"
+        },
+        {
+          "type": "registerMailbox"
+        },
+        {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": true,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": true,
+          "hasKeysJwe": true,
+          "hasRefreshToken": true,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        },
+        {
+          "present": true,
+          "type": "ephemeralKey"
+        },
+        {
+          "appKeypairError": null,
+          "appKeypairPresent": true,
+          "encryptionKeyError": null,
+          "keysImported": true,
+          "mailboxIdPresent": true,
+          "type": "keys"
+        },
+        {
+          "ok": false,
+          "type": "mailboxRegistered"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": true,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": true,
+        "encryptionKeyError": null,
+        "hasRefreshToken": true,
+        "hasSyncScope": true,
+        "keysImported": true,
+        "mailboxIdPresent": true,
+        "mailboxRegistrationFailed": true,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "mailbox registration failure: swallowed, refresh skipped",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": true,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "transaction": "state-1",
+          "type": "loadEphemeralKey"
+        },
+        {
+          "type": "decryptKeys"
+        },
+        {
+          "type": "registerMailbox"
+        },
+        {
+          "type": "refreshToken"
+        },
+        {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": true,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": true,
+          "hasKeysJwe": true,
+          "hasRefreshToken": true,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        },
+        {
+          "present": true,
+          "type": "ephemeralKey"
+        },
+        {
+          "appKeypairError": null,
+          "appKeypairPresent": true,
+          "encryptionKeyError": null,
+          "keysImported": true,
+          "mailboxIdPresent": true,
+          "type": "keys"
+        },
+        {
+          "ok": true,
+          "type": "mailboxRegistered"
+        },
+        {
+          "ok": false,
+          "type": "tokenRefreshed"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": true,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": true,
+        "encryptionKeyError": null,
+        "hasRefreshToken": true,
+        "hasSyncScope": true,
+        "keysImported": true,
+        "mailboxIdPresent": true,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": true,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "post-mailbox refresh failure: swallowed, original tokens kept",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": true,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "transaction": "state-1",
+          "type": "loadEphemeralKey"
+        },
+        {
+          "type": "decryptKeys"
+        },
+        {
+          "type": "registerMailbox"
+        },
+        {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": true,
+          "hasKeysJwe": true,
+          "hasRefreshToken": false,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        },
+        {
+          "present": true,
+          "type": "ephemeralKey"
+        },
+        {
+          "appKeypairError": null,
+          "appKeypairPresent": true,
+          "encryptionKeyError": null,
+          "keysImported": true,
+          "mailboxIdPresent": true,
+          "type": "keys"
+        },
+        {
+          "ok": true,
+          "type": "mailboxRegistered"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": true,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": true,
+        "keysImported": true,
+        "mailboxIdPresent": true,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "mailbox without refresh token: no refresh step",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": true,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "transaction": "state-1",
+          "type": "loadEphemeralKey"
+        },
+        {
+          "outcome": {
+            "clearOAuthState": true,
+            "errorKind": "syncRequiresKey",
+            "kind": "failed",
+            "message": "Sync requires encryption key but JWE decryption failed. Please log in again. Cause: Missing ephemeral private key for JWE decryption",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": true,
+          "hasKeysJwe": true,
+          "hasRefreshToken": true,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        },
+        {
+          "present": false,
+          "type": "ephemeralKey"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": true,
+            "errorKind": "syncRequiresKey",
+            "kind": "failed",
+            "message": "Sync requires encryption key but JWE decryption failed. Please log in again. Cause: Missing ephemeral private key for JWE decryption",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": "Missing ephemeral private key for JWE decryption",
+        "hasRefreshToken": true,
+        "hasSyncScope": true,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "sync scope without ephemeral key: fatal with cause",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": true,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "transaction": "state-1",
+          "type": "loadEphemeralKey"
+        },
+        {
+          "type": "decryptKeys"
+        },
+        {
+          "outcome": {
+            "clearOAuthState": true,
+            "errorKind": "syncRequiresKey",
+            "kind": "failed",
+            "message": "Sync requires encryption key but JWE decryption failed. Please log in again. Cause: JWE decryption failed: bad encrypted key",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": true,
+          "hasKeysJwe": true,
+          "hasRefreshToken": true,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        },
+        {
+          "present": true,
+          "type": "ephemeralKey"
+        },
+        {
+          "appKeypairError": null,
+          "appKeypairPresent": false,
+          "encryptionKeyError": "JWE decryption failed: bad encrypted key",
+          "keysImported": false,
+          "mailboxIdPresent": false,
+          "type": "keys"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": true,
+            "errorKind": "syncRequiresKey",
+            "kind": "failed",
+            "message": "Sync requires encryption key but JWE decryption failed. Please log in again. Cause: JWE decryption failed: bad encrypted key",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": "JWE decryption failed: bad encrypted key",
+        "hasRefreshToken": true,
+        "hasSyncScope": true,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "sync scope with JWE decryption failure: fatal with cause",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": true,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "outcome": {
+            "clearOAuthState": true,
+            "errorKind": "syncRequiresKey",
+            "kind": "failed",
+            "message": "Sync requires encryption key but JWE decryption failed. Please log in again.",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": true,
+          "hasKeysJwe": false,
+          "hasRefreshToken": true,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": true,
+            "errorKind": "syncRequiresKey",
+            "kind": "failed",
+            "message": "Sync requires encryption key but JWE decryption failed. Please log in again.",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": true,
+        "hasSyncScope": true,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "sync scope without keys_jwe: fatal without cause",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": true,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "transaction": "state-1",
+          "type": "loadEphemeralKey"
+        },
+        {
+          "type": "decryptKeys"
+        },
+        {
+          "outcome": {
+            "keysImported": false,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": true,
+          "hasKeysJwe": true,
+          "hasRefreshToken": false,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        },
+        {
+          "present": true,
+          "type": "ephemeralKey"
+        },
+        {
+          "appKeypairError": null,
+          "appKeypairPresent": false,
+          "encryptionKeyError": "boom",
+          "keysImported": false,
+          "mailboxIdPresent": false,
+          "type": "keys"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "keysImported": false,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": "boom",
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "non-sync scope: key failure is non-fatal, login continues",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "transaction": "state-1",
+          "type": "loadEphemeralKey"
+        },
+        {
+          "type": "decryptKeys"
+        },
+        {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": true,
+          "hasKeysJwe": true,
+          "hasRefreshToken": false,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        },
+        {
+          "present": true,
+          "type": "ephemeralKey"
+        },
+        {
+          "appKeypairError": "Invalid app-keypair: missing required EC fields (crv, x, y, d)",
+          "appKeypairPresent": false,
+          "encryptionKeyError": null,
+          "keysImported": true,
+          "mailboxIdPresent": false,
+          "type": "keys"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        },
+        "appKeypairError": "Invalid app-keypair: missing required EC fields (crv, x, y, d)",
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": true,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "app keypair failure is non-fatal",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "outcome": {
+            "kind": "notACallback"
+          },
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "kind": "notACallback"
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": null
+      },
+      "name": "empty code and state are treated as absent",
+      "start": {
+        "clientId": "client-1",
+        "code": "",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "action": {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "awaitingTokenExchange",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "empty error is absent: falls through to exchange",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": "",
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "Missing code verifier - please try again",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "callback",
+            "kind": "failed",
+            "message": "Missing code verifier - please try again",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": null
+      },
+      "name": "empty stored code verifier is absent",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "transaction": "state-1",
+          "type": "loadEphemeralKey"
+        },
+        {
+          "type": "decryptKeys"
+        },
+        {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": true,
+          "hasKeysJwe": true,
+          "hasRefreshToken": false,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        },
+        {
+          "present": true,
+          "type": "ephemeralKey"
+        },
+        {
+          "appKeypairError": null,
+          "appKeypairPresent": true,
+          "encryptionKeyError": null,
+          "keysImported": true,
+          "mailboxIdPresent": false,
+          "type": "keys"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "keysImported": true,
+            "kind": "success",
+            "mailboxRegistrationFailed": false,
+            "refreshFailed": false,
+            "tokenRefreshed": false
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": true,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": true,
+        "keysImported": true,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "empty keys jwk thumbprint is omitted from params",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": true,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": "",
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "oauthToken",
+            "kind": "failed",
+            "message": "Code has expired",
+            "status": 400
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": "invalid_grant",
+          "errorDescription": "Code has expired",
+          "hasAccessToken": true,
+          "hasKeysJwe": false,
+          "hasRefreshToken": false,
+          "ok": false,
+          "status": 400,
+          "type": "tokenExchange"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "oauthToken",
+            "kind": "failed",
+            "message": "Code has expired",
+            "status": 400
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "exchange HTTP error with description",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "oauthToken",
+            "kind": "failed",
+            "message": "rate_limited",
+            "status": 429
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": "rate_limited",
+          "errorDescription": null,
+          "hasAccessToken": false,
+          "hasKeysJwe": false,
+          "hasRefreshToken": false,
+          "ok": false,
+          "status": 429,
+          "type": "tokenExchange"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "oauthToken",
+            "kind": "failed",
+            "message": "rate_limited",
+            "status": 429
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "exchange HTTP error without description",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "oauthToken",
+            "kind": "failed",
+            "message": "Token exchange failed",
+            "status": 503
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": false,
+          "hasKeysJwe": false,
+          "hasRefreshToken": false,
+          "ok": false,
+          "status": 503,
+          "type": "tokenExchange"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "oauthToken",
+            "kind": "failed",
+            "message": "Token exchange failed",
+            "status": 503
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "exchange HTTP error with no body",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    },
+    {
+      "actions": [
+        {
+          "params": {
+            "clientId": "client-1",
+            "code": "code-1",
+            "codeVerifier": "verifier-1",
+            "grantType": "authorization_code",
+            "keysJwkThumbprint": null,
+            "redirectUri": "https://app/cb"
+          },
+          "type": "exchangeCode"
+        },
+        {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "oauthToken",
+            "kind": "failed",
+            "message": "Invalid token response: missing access_token",
+            "status": 0
+          },
+          "type": "done"
+        }
+      ],
+      "events": [
+        {
+          "error": null,
+          "errorDescription": null,
+          "hasAccessToken": false,
+          "hasKeysJwe": false,
+          "hasRefreshToken": false,
+          "ok": true,
+          "status": 200,
+          "type": "tokenExchange"
+        }
+      ],
+      "finalState": {
+        "action": {
+          "outcome": {
+            "clearOAuthState": false,
+            "errorKind": "oauthToken",
+            "kind": "failed",
+            "message": "Invalid token response: missing access_token",
+            "status": 0
+          },
+          "type": "done"
+        },
+        "appKeypairError": null,
+        "appKeypairPresent": false,
+        "encryptionKeyError": null,
+        "hasRefreshToken": false,
+        "hasSyncScope": false,
+        "keysImported": false,
+        "mailboxIdPresent": false,
+        "mailboxRegistrationFailed": false,
+        "phase": "terminal",
+        "refreshFailed": false,
+        "tokenRefreshed": false,
+        "transaction": "state-1"
+      },
+      "name": "exchange success without access_token: malformed response",
+      "start": {
+        "clientId": "client-1",
+        "code": "code-1",
+        "error": null,
+        "errorDescription": null,
+        "hasSyncScope": false,
+        "redirectUri": "https://app/cb",
+        "state": "state-1",
+        "storedCodeVerifier": "verifier-1",
+        "storedKeysJwkThumbprint": null,
+        "storedState": "state-1"
+      }
+    }
+  ],
+  "description": "OAuth callback decision machine conformance vectors. Canonical: betterbase-auth::oauth_callback::CallbackMachine. Format per case: `start` is the OAuthCallbackSpec, `actions` the full action trace (last = terminal done with outcome), `events` the host events fed between actions, `finalState` the terminal machine state. Credential-free by construction."
+}
