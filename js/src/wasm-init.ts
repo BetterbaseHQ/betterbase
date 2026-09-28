@@ -219,14 +219,27 @@ export interface WasmModule {
     fromEpoch: number,
     toEpoch: number,
   ): Uint8Array;
+  /**
+   * Re-wrap fetched DEKs from the current epoch to the new epoch key
+   * (canonical: betterbase-sync-core::reencrypt::rewrap_deks). Returns the
+   * entries to upload, each carrying the wrapper as observed from the server
+   * as the compare-and-set token (AUD-026). DEKs already at the target epoch
+   * are skipped. `freshKey` (AUD-024): the new key is a fresh secret, not a
+   * forward derivation — the key cache holds exactly the two endpoints.
+   */
   rewrapDEKs(
-    wrappedDeksJson: string,
+    deks: Array<{ id: string; wrapped_dek: Uint8Array }>,
     currentKey: Uint8Array,
     currentEpoch: number,
     newKey: Uint8Array,
     newEpoch: number,
     spaceId: string,
-  ): string;
+    freshKey: boolean,
+  ): Array<{
+    id: string;
+    wrapped_dek: Uint8Array;
+    observed_wrapped_dek: Uint8Array;
+  }>;
   buildMembershipSigningMessage(
     entryType: string,
     spaceId: string,

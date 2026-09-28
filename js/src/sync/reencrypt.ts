@@ -12,16 +12,15 @@
 
 import {
   deriveForward,
-  deriveNextEpochKey,
   maxEpochDeriveDistance,
   peekEpoch,
 } from "../crypto/index.js";
-import { unwrapDEK, wrapDEK } from "../crypto/internals.js";
 import {
   webcryptoWrapDEK,
   webcryptoUnwrapDEK,
   webcryptoDeriveEpochKey,
 } from "../crypto/webcrypto.js";
+import { ensureWasm } from "../wasm-init.js";
 import type { WSClient } from "./ws-client.js";
 import type { WSEpochConflictResult } from "./ws-frames.js";
 import { RPCCallError } from "./rpc-connection.js";
@@ -164,11 +163,15 @@ export async function rewrapAllDEKs(
     );
   }
 
-  // Raw bytes path: use WASM
+  // Raw bytes path: the re-wrap computation is canonical in Rust
+  // (betterbase-sync-core::reencrypt::rewrap_deks) — key-cache construction
+  // (forward chain or the fresh-key two-endpoint cache), unwrap, re-wrap, and
+  // the observed-wrapper CAS token all run in wasm. The host keeps the I/O
+  // loop (fetch → submit → bounded conflict retry).
   const rawNewKey = newKey as Uint8Array;
 
   // Same distance bound as the CryptoKey path (defense-in-depth on
-  // caller-provided epoch gaps).
+  // caller-provided epoch gaps; Rust re-checks inside rewrapDEKs).
   const distance = newEpoch - currentEpoch;
   const maxAdvance = maxEpochDeriveDistance();
   if (distance > maxAdvance) {
@@ -178,61 +181,69 @@ export async function rewrapAllDEKs(
     );
   }
 
-  // Build key cache for unwrapping DEKs. Legacy rotation derives the chain
-  // forward; fresh-key rotation (AUD-024) holds exactly the old and new keys.
-  const keyCache = new Map<number, Uint8Array>();
-  keyCache.set(currentEpoch, currentKey);
-  if (config.freshKey) {
-    keyCache.set(newEpoch, rawNewKey);
-  } else {
-    let derivedKey: Uint8Array = currentKey;
-    for (let e = currentEpoch + 1; e <= newEpoch; e++) {
-      derivedKey = deriveNextEpochKey(derivedKey, spaceId, e);
-      keyCache.set(e, derivedKey);
+  type RewrapEntry = {
+    id: string;
+    wrapped_dek: Uint8Array;
+    observed_wrapped_dek: Uint8Array;
+  };
+  const rewrapBatch = (
+    deks: Array<{ id: string; wrapped_dek: Uint8Array }>,
+  ): RewrapEntry[] =>
+    ensureWasm().rewrapDEKs(
+      // only these fields cross the boundary (getDEKs also returns `seq`)
+      deks.map(({ id, wrapped_dek }) => ({ id, wrapped_dek })),
+      currentKey,
+      currentEpoch,
+      rawNewKey,
+      newEpoch,
+      spaceId,
+      config.freshKey === true,
+    );
+
+  // Re-wrap record DEKs. Each entry carries the wrapper we observed so the
+  // server applies a compare-and-set; a concurrent push replaces a wrapper,
+  // and rewrapping from a stale read would make that record undecryptable
+  // (AUD-026). On conflict the whole pass refetches and retries.
+  let rewrapped: RewrapEntry[] = [];
+  for (let attempt = 0; ; attempt++) {
+    const deks = await ws.getDEKs({
+      space: spaceId,
+      ...(ucan ? { ucan } : {}),
+      since: 0,
+    });
+    rewrapped = rewrapBatch(deks);
+    if (rewrapped.length === 0) break;
+    try {
+      const result = await ws.rewrapDEKs({
+        space: spaceId,
+        ...(ucan ? { ucan } : {}),
+        deks: rewrapped,
+      });
+      if (!result.ok) throw new Error("DEK re-wrapping failed on server");
+      break;
+    } catch (err) {
+      if (!isRetryableRewrapConflict(err) || attempt >= REWRAP_MAX_RETRIES) {
+        throw err;
+      }
     }
   }
 
-  try {
-    // Re-wrap record DEKs. Each entry carries the wrapper we observed so the
-    // server applies a compare-and-set; a concurrent push replaces a wrapper,
-    // and rewrapping from a stale read would make that record undecryptable
-    // (AUD-026). On conflict the whole pass refetches and retries.
-    const rewrapped: Array<{
-      id: string;
-      wrapped_dek: Uint8Array;
-      observed_wrapped_dek: Uint8Array;
-    }> = [];
+  // Re-wrap file DEKs (same compare-and-set discipline)
+  let fileDekCount = 0;
+  if (includeFiles) {
+    let rewrappedFiles: RewrapEntry[] = [];
     for (let attempt = 0; ; attempt++) {
-      const deks = await ws.getDEKs({
-        space: spaceId,
-        ...(ucan ? { ucan } : {}),
-        since: 0,
-      });
-      rewrapped.length = 0;
-      for (const { id, wrapped_dek: wrappedDEK } of deks) {
-        const dekEpoch = peekEpoch(wrappedDEK);
-        if (dekEpoch === newEpoch) continue;
-        const unwrapKey = keyCache.get(dekEpoch);
-        if (!unwrapKey) throw new Error(`No key for DEK epoch ${dekEpoch}`);
-        const { dek } = unwrapDEK(wrappedDEK, unwrapKey);
-        try {
-          rewrapped.push({
-            id,
-            wrapped_dek: wrapDEK(dek, rawNewKey, newEpoch),
-            observed_wrapped_dek: wrappedDEK,
-          });
-        } finally {
-          dek.fill(0);
-        }
-      }
-      if (rewrapped.length === 0) break;
+      const fileDeks = await getFileDEKsIfPermitted(ws, spaceId, ucan);
+      rewrappedFiles = rewrapBatch(fileDeks);
+      if (rewrappedFiles.length === 0) break;
       try {
-        const result = await ws.rewrapDEKs({
+        const result = await ws.rewrapFileDEKs({
           space: spaceId,
           ...(ucan ? { ucan } : {}),
-          deks: rewrapped,
+          deks: rewrappedFiles,
         });
-        if (!result.ok) throw new Error("DEK re-wrapping failed on server");
+        if (!result.ok)
+          throw new Error("File DEK re-wrapping failed on server");
         break;
       } catch (err) {
         if (!isRetryableRewrapConflict(err) || attempt >= REWRAP_MAX_RETRIES) {
@@ -240,68 +251,10 @@ export async function rewrapAllDEKs(
         }
       }
     }
-
-    // Re-wrap file DEKs (same compare-and-set discipline)
-    let fileDekCount = 0;
-    if (includeFiles) {
-      const rewrappedFiles: Array<{
-        id: string;
-        wrapped_dek: Uint8Array;
-        observed_wrapped_dek: Uint8Array;
-      }> = [];
-      for (let attempt = 0; ; attempt++) {
-        const fileDeks = await getFileDEKsIfPermitted(ws, spaceId, ucan);
-        rewrappedFiles.length = 0;
-        for (const { id, wrapped_dek: wrappedDEK } of fileDeks) {
-          const dekEpoch = peekEpoch(wrappedDEK);
-          if (dekEpoch === newEpoch) continue;
-          const unwrapKey = keyCache.get(dekEpoch);
-          if (!unwrapKey)
-            throw new Error(`No key for file DEK epoch ${dekEpoch}`);
-          const { dek } = unwrapDEK(wrappedDEK, unwrapKey);
-          try {
-            rewrappedFiles.push({
-              id,
-              wrapped_dek: wrapDEK(dek, rawNewKey, newEpoch),
-              observed_wrapped_dek: wrappedDEK,
-            });
-          } finally {
-            dek.fill(0);
-          }
-        }
-        if (rewrappedFiles.length === 0) break;
-        try {
-          const result = await ws.rewrapFileDEKs({
-            space: spaceId,
-            ...(ucan ? { ucan } : {}),
-            deks: rewrappedFiles,
-          });
-          if (!result.ok)
-            throw new Error("File DEK re-wrapping failed on server");
-          break;
-        } catch (err) {
-          if (
-            !isRetryableRewrapConflict(err) ||
-            attempt >= REWRAP_MAX_RETRIES
-          ) {
-            throw err;
-          }
-        }
-      }
-      fileDekCount = rewrappedFiles.length;
-    }
-
-    return { dekCount: rewrapped.length, fileDekCount };
-  } finally {
-    // Zero derived intermediate keys only — the caller owns currentKey and,
-    // for fresh-key rotation, newKey as well.
-    for (const [epoch, key] of keyCache) {
-      if (epoch !== currentEpoch && !(config.freshKey && epoch === newEpoch)) {
-        key.fill(0);
-      }
-    }
-    keyCache.clear();
+    fileDekCount = rewrappedFiles.length;
   }
+
+  return { dekCount: rewrapped.length, fileDekCount };
 }
 
 /** Bounded refetch+retry passes when a rewrap loses a compare-and-set race. */

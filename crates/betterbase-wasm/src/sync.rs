@@ -172,25 +172,34 @@ pub fn wasm_derive_forward(
 
 #[wasm_bindgen(js_name = "rewrapDEKs")]
 pub fn wasm_rewrap_deks(
-    wrapped_deks_json: &str,
+    deks: JsValue,
     current_key: &[u8],
     current_epoch: u32,
     new_key: &[u8],
     new_epoch: u32,
     space_id: &str,
-) -> Result<String, JsValue> {
-    let input: Vec<(String, Vec<u8>)> =
-        serde_json::from_str(wrapped_deks_json).map_err(to_js_error)?;
+    fresh_key: bool,
+) -> Result<JsValue, JsValue> {
+    /// One fetched DEK: the record id and its current wrapper as observed
+    /// from the server.
+    #[derive(serde::Deserialize)]
+    struct DekInput {
+        id: String,
+        wrapped_dek: Vec<u8>,
+    }
+    let inputs: Vec<DekInput> = serde_wasm_bindgen::from_value(deks).map_err(to_js_error)?;
+    let pairs: Vec<(String, Vec<u8>)> = inputs.into_iter().map(|d| (d.id, d.wrapped_dek)).collect();
     let result = rewrap_deks(
-        &input,
+        &pairs,
         current_key,
         current_epoch,
         new_key,
         new_epoch,
         space_id,
+        fresh_key,
     )
     .map_err(to_js_error)?;
-    serde_json::to_string(&result).map_err(to_js_error)
+    to_js_value(&result)
 }
 
 // --- Membership ---

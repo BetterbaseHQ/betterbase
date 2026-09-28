@@ -75,7 +75,7 @@ const DEAD_WITH_PLAN = {
  */
 const NAME_COLLISIONS = {
   rewrapDEKs:
-    "live hits are the WSClient.rewrapDEKs RPC method; wasm batch-rewrap twin is pre-AUD-024/026 — G3 made rotation *orchestration* canonical in Rust, but the machine's rewrapDeks action still runs the TS rewrapAllDEKs primitive (CAS + file-DEK leg); the Rust twin is its placeholder",
+    "live hits are the WSClient.rewrapDEKs RPC method; the wasm export of the same name is also live (the canonical re-wrap computation called from reencrypt.ts) — the textual check cannot tell the two apart",
   SUPPORTED_VERSIONS:
     "live hits are the TS-hardcoded Set([4]) in crypto/types.ts; same version-constant drift risk as CURRENT_VERSION",
   // Membership entry-construction twins: the live hits are the same-named

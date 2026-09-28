@@ -71,17 +71,7 @@ import { RPCCallError } from "./rpc-connection.js";
 // Crypto stubs: identity unwrap/wrap with a 4-byte big-endian epoch prefix.
 vi.mock("../crypto/index.js", async () => {
   const { MAX_EPOCH_DERIVE_DISTANCE } = await import("./epoch-ladder-mock.js");
-  const deriveNextEpochKeyMock = (
-    key: Uint8Array,
-    _space: string,
-    epoch: number,
-  ): Uint8Array => {
-    const next = new Uint8Array(key);
-    new DataView(next.buffer).setUint32(0, epoch, false);
-    return next;
-  };
   return {
-    deriveNextEpochKey: deriveNextEpochKeyMock,
     maxEpochDeriveDistance: () => MAX_EPOCH_DERIVE_DISTANCE,
     // 1:1 mirror of Rust `peek_epoch` (betterbase-sync-core/reencrypt.rs):
     // first 4 bytes, big-endian u32; short input throws MissingDek.
@@ -96,10 +86,10 @@ vi.mock("../crypto/index.js", async () => {
       ).getUint32(0, false);
     },
     // 1:1 mirror of Rust `derive_forward` (betterbase-sync-core/reencrypt.rs):
-    // backward throws, same epoch returns a copy, else chains deriveNextEpochKey.
+    // backward throws, same epoch returns a copy, else chains HKDF derives.
     deriveForward: (
       key: Uint8Array,
-      space: string,
+      _space: string,
       fromEpoch: number,
       toEpoch: number,
     ): Uint8Array => {
@@ -109,23 +99,19 @@ vi.mock("../crypto/index.js", async () => {
         );
       }
       if (toEpoch === fromEpoch) return new Uint8Array(key);
-      let current = key;
-      for (let e = fromEpoch + 1; e <= toEpoch; e++) {
-        current = deriveNextEpochKeyMock(current, space, e);
-      }
-      return current;
+      return key; // stub: derivation is flow-only in the mirror
     },
   };
 });
-vi.mock("../crypto/internals.js", () => ({
-  unwrapDEK: (wrapped: Uint8Array) => ({ dek: wrapped.slice(4) }),
-  wrapDEK: (dek: Uint8Array, _key: Uint8Array, epoch: number) => {
-    const out = new Uint8Array(4 + dek.length);
-    new DataView(out.buffer).setUint32(0, epoch, false);
-    out.set(dek, 4);
-    return out;
-  },
-}));
+// The raw-bytes re-wrap computation runs in wasm (betterbase-sync-core);
+// node tests substitute the 1:1 flow mirror so the I/O-loop tests below
+// exercise the same control flow.
+vi.mock("../wasm-init.js", async () => {
+  const { rewrapDEKsMock } = await import("./rewrap-mock.js");
+  return {
+    ensureWasm: () => ({ rewrapDEKs: rewrapDEKsMock }),
+  };
+});
 // Web Crypto stubs for the CryptoKey path: identity unwrap/wrap with the
 // epoch prefix preserved through the (opaque) CryptoKey.
 vi.mock("../crypto/webcrypto.js", () => ({

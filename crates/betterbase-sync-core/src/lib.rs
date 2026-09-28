@@ -31,7 +31,7 @@ pub use pull::{
     apply_chunk, PullAssembly, PullAssemblyError, PullBeginData, PullCommitData, PullEntryMeta,
     SpaceAssembly,
 };
-pub use reencrypt::{derive_forward, peek_epoch, rewrap_deks};
+pub use reencrypt::{derive_forward, peek_epoch, rewrap_deks, RewrapEntry};
 pub use rotation::{
     should_rotate, KeyMode, RotationAction, RotationError, RotationEvent, RotationKind,
     RotationSpec, RotationState,
