@@ -199,7 +199,29 @@ pub fn wasm_rewrap_deks(
         fresh_key,
     )
     .map_err(to_js_error)?;
-    to_js_value(&result)
+
+    // Byte fields cross the boundary as real `Uint8Array`s (the RPC layer
+    // CBOR-encodes them as byte strings; the server expects exactly that
+    // shape). `to_js_value` would render `Vec<u8>` as a plain JS array.
+    let out = js_sys::Array::new();
+    for entry in &result {
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &"id".into(), &JsValue::from_str(&entry.id)).unwrap();
+        js_sys::Reflect::set(
+            &obj,
+            &"wrapped_dek".into(),
+            &js_sys::Uint8Array::from(entry.wrapped_dek.as_slice()),
+        )
+        .unwrap();
+        js_sys::Reflect::set(
+            &obj,
+            &"observed_wrapped_dek".into(),
+            &js_sys::Uint8Array::from(entry.observed_wrapped_dek.as_slice()),
+        )
+        .unwrap();
+        out.push(&obj.into());
+    }
+    Ok(out.into())
 }
 
 // --- Membership ---

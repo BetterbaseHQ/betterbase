@@ -95,6 +95,10 @@ function replay(v: RewrapCase): void {
     const got = entries[i];
     const want = expected[i];
     expect(got?.id).toBe(want?.id);
+    // Byte fields must cross the boundary as real Uint8Arrays (the RPC
+    // layer CBOR-encodes them as byte strings for the server).
+    expect(got?.wrapped_dek).toBeInstanceOf(Uint8Array);
+    expect(got?.observed_wrapped_dek).toBeInstanceOf(Uint8Array);
     // Byte-identical re-wrapped wrapper (deterministic AES-KW).
     expect(toHex(got?.wrapped_dek ?? new Uint8Array(0))).toBe(
       want?.wrapped_dek,
