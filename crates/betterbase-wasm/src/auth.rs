@@ -2,9 +2,11 @@
 
 use crate::error::{to_js_error, to_js_value};
 use betterbase_auth::{
-    compute_code_challenge, compute_jwk_thumbprint, decode_jwt_payload, decrypt_jwe,
-    derive_mailbox_id, derive_session_keys, encrypt_jwe, extract_app_keypair,
-    extract_encryption_key, generate_code_verifier, generate_state, ScopedKeys,
+    classify_refresh_failure, compute_code_challenge, compute_jwk_thumbprint, decode_jwt_payload,
+    decrypt_jwe, derive_mailbox_id, derive_session_keys, encrypt_jwe, extract_app_keypair,
+    extract_encryption_key, generate_code_verifier, generate_state, refresh_backoff_ms,
+    refresh_delay_ms, RefreshFailure, ScopedKeys, REFRESH_BASE_RETRY_MS,
+    REFRESH_DEFAULT_BUFFER_SECONDS, REFRESH_MAX_RETRIES,
 };
 use wasm_bindgen::prelude::*;
 
@@ -150,6 +152,47 @@ fn claims_to_js(claims: &serde_json::Value) -> Result<JsValue, JsValue> {
         })
     }
     rec(claims)
+}
+
+// --- Token refresh policy (canonical: betterbase-auth::refresh) ---
+
+#[wasm_bindgen(js_name = "refreshMaxRetries")]
+pub fn wasm_refresh_max_retries() -> u32 {
+    REFRESH_MAX_RETRIES
+}
+
+#[wasm_bindgen(js_name = "refreshBaseRetryMs")]
+pub fn wasm_refresh_base_retry_ms() -> u64 {
+    REFRESH_BASE_RETRY_MS
+}
+
+#[wasm_bindgen(js_name = "refreshDefaultBufferSeconds")]
+pub fn wasm_refresh_default_buffer_seconds() -> u64 {
+    REFRESH_DEFAULT_BUFFER_SECONDS
+}
+
+/// Delay (ms) until the next scheduled refresh; clamped to 0 when the
+/// refresh moment has passed.
+#[wasm_bindgen(js_name = "refreshDelayMs")]
+pub fn wasm_refresh_delay_ms(expires_at_ms: i64, now_ms: i64, buffer_ms: i64) -> u64 {
+    refresh_delay_ms(expires_at_ms, now_ms, buffer_ms)
+}
+
+/// Backoff (ms) before refresh retry `attempt` (0-based).
+#[wasm_bindgen(js_name = "refreshBackoffMs")]
+pub fn wasm_refresh_backoff_ms(attempt: u32) -> u64 {
+    refresh_backoff_ms(attempt)
+}
+
+/// Classify a failed refresh attempt: "invalid" (4xx — session is dead)
+/// or "transient" (retry with backoff). `status_code` is null for
+/// transport-level failures.
+#[wasm_bindgen(js_name = "classifyRefreshFailure")]
+pub fn wasm_classify_refresh_failure(status_code: Option<u16>) -> String {
+    match classify_refresh_failure(status_code) {
+        RefreshFailure::InvalidToken => "invalid".to_string(),
+        RefreshFailure::Transient => "transient".to_string(),
+    }
 }
 
 // --- Key extraction ---

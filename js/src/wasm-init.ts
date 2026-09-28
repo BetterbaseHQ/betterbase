@@ -128,6 +128,24 @@ export interface WasmModule {
    */
   decodeJwtPayload(token: string): Record<string, unknown>;
   /**
+   * Token refresh policy (canonical: betterbase-auth::refresh; pinned by
+   * crates/betterbase-auth/test-vectors/refresh-policy.json). 64-bit values
+   * cross the boundary as bigint (wasm i64/u64).
+   */
+  refreshMaxRetries(): number;
+  refreshBaseRetryMs(): bigint;
+  refreshDefaultBufferSeconds(): bigint;
+  /** Delay (ms) until the next scheduled refresh; 0 when already due. */
+  refreshDelayMs(expiresAtMs: bigint, nowMs: bigint, bufferMs: bigint): bigint;
+  /** Backoff (ms) before refresh retry `attempt` (0-based). */
+  refreshBackoffMs(attempt: number): bigint;
+  /**
+   * Classify a failed refresh attempt: "invalid" (4xx — session is dead)
+   * or "transient" (retry with backoff). `statusCode` is null for
+   * transport-level failures.
+   */
+  classifyRefreshFailure(statusCode: number | null): "transient" | "invalid";
+  /**
    * Derive the session's purpose-specific keys from the OPAQUE root key
    * (canonical: betterbase-auth::derive_session_keys; pinned by
    * crates/betterbase-auth/test-vectors/session-keys.json).

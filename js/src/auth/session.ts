@@ -10,6 +10,13 @@
  */
 
 import { initWasm } from "../wasm-init.js";
+import {
+  classifyRefreshFailure,
+  refreshBackoffMs,
+  refreshDefaultBufferSeconds,
+  refreshDelayMs,
+  refreshMaxRetries,
+} from "./refresh-policy.js";
 import type { AuthResult, AuthSessionConfig, TokenResponse } from "./types.js";
 import { KeyStore, type ScopedKeyStore } from "./key-store.js";
 import { deriveSessionKeys } from "./crypto.js";
@@ -44,10 +51,7 @@ interface SessionState {
   epochAdvancedAt?: number;
 }
 
-const DEFAULT_BUFFER_SECONDS = 300; // 5 minutes
 const DEFAULT_STORAGE_PREFIX = "betterbase_session_";
-const MAX_RETRIES = 3;
-const BASE_RETRY_MS = 1000;
 
 export class AuthSession {
   private accessToken: string;
@@ -595,8 +599,12 @@ export class AuthSession {
     const generation = this.generation;
     /** True when this session was destroyed/disposed mid-refresh. */
     const abandoned = () => this.disposed || generation !== this.generation;
+    // Refresh policy (retry count, backoff curve, 4xx-fatal rule) is
+    // Rust-canonical — betterbase-auth::refresh, pinned by
+    // test-vectors/refresh-policy.json.
+    const maxRetries = refreshMaxRetries();
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         const response: TokenResponse = await this.config.client.refreshToken(
           this.refreshTokenValue,
@@ -628,7 +636,11 @@ export class AuthSession {
         lastError = err instanceof Error ? err : new Error(String(err));
 
         // Server errors (4xx) are not retriable — token is invalid
-        if (isServerError(lastError)) {
+        if (
+          classifyRefreshFailure(
+            lastError instanceof OAuthTokenError ? lastError.statusCode : null,
+          ) === "invalid"
+        ) {
           this.dead = true;
           this.config.onExpired?.();
           throw new SessionExpiredError(lastError.message, {
@@ -637,8 +649,8 @@ export class AuthSession {
         }
 
         // Network error — wait and retry
-        if (attempt < MAX_RETRIES - 1) {
-          await sleep(BASE_RETRY_MS * Math.pow(2, attempt));
+        if (attempt < maxRetries - 1) {
+          await sleep(refreshBackoffMs(attempt));
           if (abandoned()) {
             throw new TokenRefreshError("session destroyed during refresh");
           }
@@ -722,8 +734,9 @@ export class AuthSession {
     }
 
     const bufferMs =
-      (this.config.refreshBufferSeconds ?? DEFAULT_BUFFER_SECONDS) * 1000;
-    const delay = Math.max(0, this.expiresAt - Date.now() - bufferMs);
+      (this.config.refreshBufferSeconds ?? refreshDefaultBufferSeconds()) *
+      1000;
+    const delay = refreshDelayMs(this.expiresAt, Date.now(), bufferMs);
 
     this.refreshTimer = setTimeout(() => {
       if (!this.disposed) {
@@ -769,14 +782,6 @@ export class AuthSession {
     };
     window.addEventListener("storage", this.storageListener);
   }
-}
-
-/** Check if an error is a server rejection (4xx) rather than a network error. */
-function isServerError(err: Error): boolean {
-  if (err instanceof OAuthTokenError) {
-    return err.statusCode >= 400 && err.statusCode < 500;
-  }
-  return false;
 }
 
 function sleep(ms: number): Promise<void> {

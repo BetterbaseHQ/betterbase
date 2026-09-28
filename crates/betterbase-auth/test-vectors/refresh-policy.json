@@ -1,0 +1,137 @@
+{
+  "backoff": [
+    {
+      "attempt": 0,
+      "expect": 1000
+    },
+    {
+      "attempt": 1,
+      "expect": 2000
+    },
+    {
+      "attempt": 2,
+      "expect": 4000
+    },
+    {
+      "attempt": 3,
+      "expect": 8000
+    },
+    {
+      "attempt": 4,
+      "expect": 16000
+    },
+    {
+      "attempt": 5,
+      "expect": 32000
+    }
+  ],
+  "classification": [
+    {
+      "expect": "transient",
+      "name": "no status (transport failure)",
+      "status": null
+    },
+    {
+      "expect": "transient",
+      "name": "1xx informational",
+      "status": 100
+    },
+    {
+      "expect": "transient",
+      "name": "3xx redirect",
+      "status": 301
+    },
+    {
+      "expect": "transient",
+      "name": "399 just below 4xx",
+      "status": 399
+    },
+    {
+      "expect": "invalid",
+      "name": "400 boundary",
+      "status": 400
+    },
+    {
+      "expect": "invalid",
+      "name": "401 unauthorized",
+      "status": 401
+    },
+    {
+      "expect": "invalid",
+      "name": "403 forbidden",
+      "status": 403
+    },
+    {
+      "expect": "invalid",
+      "name": "429 rate-limited (v1 quirk: fatal)",
+      "status": 429
+    },
+    {
+      "expect": "invalid",
+      "name": "499 just below 5xx",
+      "status": 499
+    },
+    {
+      "expect": "transient",
+      "name": "500 boundary",
+      "status": 500
+    },
+    {
+      "expect": "transient",
+      "name": "503 unavailable",
+      "status": 503
+    }
+  ],
+  "constants": {
+    "baseRetryMs": 1000,
+    "defaultBufferSeconds": 300,
+    "maxRetries": 3
+  },
+  "delay": [
+    {
+      "bufferMs": 300000,
+      "expect": 3300000,
+      "expiresAt": 1790480400000,
+      "name": "default 5-minute buffer on a 1-hour token",
+      "now": 1790476800000
+    },
+    {
+      "bufferMs": 300000,
+      "expect": 0,
+      "expiresAt": 1790477100000,
+      "name": "exactly at the buffer boundary -> 0",
+      "now": 1790476800000
+    },
+    {
+      "bufferMs": 300000,
+      "expect": 0,
+      "expiresAt": 1790476860000,
+      "name": "already inside the buffer -> 0",
+      "now": 1790476800000
+    },
+    {
+      "bufferMs": 300000,
+      "expect": 0,
+      "expiresAt": 1790476790000,
+      "name": "already expired -> 0",
+      "now": 1790476800000
+    },
+    {
+      "bufferMs": 120000,
+      "expect": 480000,
+      "expiresAt": 1790477400000,
+      "name": "custom 2-minute buffer on a 10-minute token",
+      "now": 1790476800000
+    },
+    {
+      "bufferMs": 300000,
+      "expect": 3300500,
+      "expiresAt": 1790480400500,
+      "name": "sub-second (millisecond) precision",
+      "now": 1790476800000
+    }
+  ],
+  "description": "Token refresh policy conformance vectors (betterbase-auth::refresh). Frozen v1 client behavior: retry count, exponential backoff curve, schedule lead time, and 4xx-fatal classification (429 included — deliberate v1 quirk).",
+  "now": 1790476800000,
+  "version": 1
+}
