@@ -1,0 +1,79 @@
+{
+  "description": "Client key-store policy: raw key ids, their WebCrypto import policy, and id parsing (scoped suffixes). Canonical: betterbase-auth::key_policy.",
+  "initialEpoch": 1,
+  "parse": [
+    {
+      "expect": "encryption-key",
+      "id": "encryption-key"
+    },
+    {
+      "expect": "epoch-key",
+      "id": "epoch-key"
+    },
+    {
+      "expect": "epoch-derive-key",
+      "id": "epoch-derive-key"
+    },
+    {
+      "expect": "encryption-key",
+      "id": "session-a::encryption-key"
+    },
+    {
+      "expect": "epoch-key",
+      "id": "some-scope::epoch-key"
+    },
+    {
+      "expect": "epoch-derive-key",
+      "id": "deep::nested::epoch-derive-key"
+    },
+    {
+      "expect": null,
+      "id": "app-private-key"
+    },
+    {
+      "expect": null,
+      "id": "ephemeral-oauth-key"
+    },
+    {
+      "expect": null,
+      "id": "ephemeral-oauth-key::tx-1"
+    },
+    {
+      "expect": null,
+      "id": "unknown-key"
+    },
+    {
+      "expect": null,
+      "id": ""
+    }
+  ],
+  "rawKeys": [
+    {
+      "algorithm": "AES-GCM",
+      "extractable": false,
+      "id": "encryption-key",
+      "usages": [
+        "encrypt",
+        "decrypt"
+      ]
+    },
+    {
+      "algorithm": "AES-KW",
+      "extractable": false,
+      "id": "epoch-key",
+      "usages": [
+        "wrapKey",
+        "unwrapKey"
+      ]
+    },
+    {
+      "algorithm": "HKDF",
+      "extractable": false,
+      "id": "epoch-derive-key",
+      "usages": [
+        "deriveBits",
+        "deriveKey"
+      ]
+    }
+  ]
+}

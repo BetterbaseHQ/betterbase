@@ -9,7 +9,7 @@
  * Crypto operations use WASM for algorithms and Web Crypto for key protection.
  */
 
-import { initWasm } from "../wasm-init.js";
+import { initWasm, initialEpoch } from "../wasm-init.js";
 import {
   classifyRefreshFailure,
   refreshBackoffMs,
@@ -20,7 +20,6 @@ import {
 import type { AuthResult, AuthSessionConfig, TokenResponse } from "./types.js";
 import { KeyStore, type ScopedKeyStore } from "./key-store.js";
 import { deriveSessionKeys } from "./crypto.js";
-import { INITIAL_EPOCH } from "../sync/types.js";
 import {
   SessionExpiredError,
   TokenRefreshError,
@@ -190,7 +189,7 @@ export class AuthSession {
       handle: authResult.handle,
       // Persist the initial label so every session — fresh or restored —
       // reports the same epoch. The provider default is only a fallback.
-      epoch: INITIAL_EPOCH,
+      epoch: initialEpoch(),
     };
 
     const session = new AuthSession(config, state);

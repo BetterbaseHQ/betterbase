@@ -70,11 +70,11 @@ export interface SyncCryptoInterface {
  * Epoch label of the key delivered at login, and the epoch every space
  * starts at (personal and shared alike).
  *
- * Must equal the server's initial epoch for a new space (betterbase-sync
- * creates spaces at epoch 1). If the client ever labels a key lower, the
- * pull-time epoch sync (ws-transport) advances the session forward, and any
- * DEKs wrapped below the advanced epoch become permanently undecryptable —
- * backward derivation is forbidden by forward secrecy.
+ * Rust-canonical: `betterbase-auth::key_policy::INITIAL_EPOCH` (frozen —
+ * must equal the server's initial epoch for a new space, and changing it
+ * orphans DEKs wrapped below the advanced epoch: backward derivation is
+ * forbidden by forward secrecy). `initialEpoch()` reads it from wasm; this
+ * mirror is the sync module's API surface.
  */
 export const INITIAL_EPOCH = 1;
 

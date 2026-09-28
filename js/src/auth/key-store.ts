@@ -18,6 +18,7 @@ import {
   importEpochKwKey,
   importEpochDeriveKey,
 } from "../crypto/webcrypto.js";
+import { ensureWasm } from "../wasm-init.js";
 
 const DB_NAME = "betterbase-key-store";
 const DB_VERSION = 2;
@@ -225,24 +226,33 @@ export class KeyStore {
   }
 
   /**
-   * Import raw bytes as the appropriate CryptoKey type based on KeyId.
+   * Import raw bytes as the appropriate CryptoKey type.
+   *
+   * The KeyId → (algorithm, usages) policy is Rust-canonical
+   * (betterbase-auth::key_policy; pinned by
+   * test-vectors/key-policy.json) — only the WebCrypto import calls
+   * themselves are browser-specific here.
    */
   private async importRawToCryptoKey(
     id: KeyId | (string & {}),
     raw: Uint8Array,
   ): Promise<CryptoKey> {
-    // Scoped ids (`scope::encryption-key`) resolve by their base name so
-    // legacy raw-byte values upgrade to CryptoKeys in every scope.
-    const base = String(id).split("::").pop() ?? String(id);
-    switch (base) {
-      case "encryption-key":
+    // Scoped ids (`scope::encryption-key`) resolve by their base name
+    // inside the Rust policy (scopes are storage prefixes, not key kinds).
+    // wasm `Option<JsValue>` surfaces as null/undefined.
+    const policy = ensureWasm().keyRawImportPolicy(String(id));
+    if (policy == null) {
+      throw new Error(`Cannot import "${id}" as CryptoKey`);
+    }
+    switch (policy.algorithm) {
+      case "AES-GCM":
         return importEncryptionCryptoKey(raw);
-      case "epoch-key":
+      case "AES-KW":
         return importEpochKwKey(raw);
-      case "epoch-derive-key":
+      case "HKDF":
         return importEpochDeriveKey(raw);
       default:
-        throw new Error(`Cannot import "${id}" as CryptoKey`);
+        throw new Error(`Unknown key policy "${policy.algorithm}" for "${id}"`);
     }
   }
 

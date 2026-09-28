@@ -19,12 +19,16 @@ const { __keyPresence: KEY_PRESENCE } =
 
 vi.mock("../wasm-init.js", () => ({
   initWasm: vi.fn(),
+  // Module-level wrapper (session.ts calls initialEpoch() directly at
+  // session creation) — not just the ensureWasm() surface.
+  initialEpoch: () => 1,
   // Mirrors the canonical Rust refresh policy (betterbase-auth::refresh;
   // pinned by test-vectors/refresh-policy.json) — node tests cannot load
   // wasm. 64-bit values cross the wasm boundary as BigInt, so the mock
   // matches the real signature (refresh-policy.ts does the Number() unwrap).
   ensureWasm: () => ({
     decodeJwtPayload: () => ({}),
+    initialEpoch: () => 1n,
     refreshMaxRetries: () => 3,
     refreshBaseRetryMs: () => 1000n,
     refreshDefaultBufferSeconds: () => 300n,

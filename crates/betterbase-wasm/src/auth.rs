@@ -5,7 +5,7 @@ use betterbase_auth::{
     classify_refresh_failure, compute_code_challenge, compute_jwk_thumbprint, decode_jwt_payload,
     decrypt_jwe, derive_mailbox_id, derive_session_keys, encrypt_jwe, extract_app_keypair,
     extract_encryption_key, generate_code_verifier, generate_state, refresh_backoff_ms,
-    refresh_delay_ms, RefreshFailure, ScopedKeys, REFRESH_BASE_RETRY_MS,
+    refresh_delay_ms, RawKeyId, RefreshFailure, ScopedKeys, INITIAL_EPOCH, REFRESH_BASE_RETRY_MS,
     REFRESH_DEFAULT_BUFFER_SECONDS, REFRESH_MAX_RETRIES,
 };
 use wasm_bindgen::prelude::*;
@@ -225,4 +225,35 @@ pub fn wasm_extract_app_keypair(scoped_keys_json: &str) -> Result<JsValue, JsVal
         Some(keypair) => to_js_value(&keypair),
         None => Ok(JsValue::NULL),
     }
+}
+
+// --- Key-store policy (canonical: betterbase-auth::key_policy) ---
+
+/// The raw-key import policy for a key-store id, or `null` when the id is
+/// not a raw key (JWK ids like `app-private-key`, ephemeral OAuth keys,
+/// unknown ids). Scoped ids (`scope::base`) resolve by their base name.
+///
+/// Returns `{ algorithm, extractable, usages }` — the WebCrypto importKey
+/// parameters (the import call itself stays in the browser).
+#[wasm_bindgen(js_name = "keyRawImportPolicy")]
+pub fn wasm_key_raw_import_policy(id: &str) -> Result<JsValue, JsValue> {
+    let Some(key) = RawKeyId::parse(id) else {
+        return Ok(JsValue::NULL);
+    };
+    let obj = js_sys::Object::new();
+    js_sys::Reflect::set(&obj, &"algorithm".into(), &key.webcrypto_algorithm().into()).unwrap();
+    js_sys::Reflect::set(&obj, &"extractable".into(), &key.extractable().into()).unwrap();
+    let usages = js_sys::Array::new();
+    for usage in key.webcrypto_usages() {
+        usages.push(&JsValue::from_str(usage));
+    }
+    js_sys::Reflect::set(&obj, &"usages".into(), &usages).unwrap();
+    Ok(obj.into())
+}
+
+/// First epoch of the forward-derivation chain (frozen: 1 — new spaces
+/// must start here or existing spaces' keys become undecryptable).
+#[wasm_bindgen(js_name = "initialEpoch")]
+pub fn wasm_initial_epoch() -> u64 {
+    INITIAL_EPOCH
 }

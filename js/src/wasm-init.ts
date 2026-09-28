@@ -128,6 +128,21 @@ export interface WasmModule {
    */
   decodeJwtPayload(token: string): Record<string, unknown>;
   /**
+   * First epoch of the forward-derivation chain (canonical:
+   * betterbase-auth::key_policy::INITIAL_EPOCH; frozen — existing spaces'
+   * keys become undecryptable if this changes).
+   */
+  initialEpoch(): bigint;
+  /**
+   * Raw-key import policy for a key-store id, or null for non-raw keys
+   * (JWK ids, ephemeral OAuth keys, unknown ids; scoped `scope::base` ids
+   * resolve by base name). Canonical: betterbase-auth::key_policy; pinned
+   * by crates/betterbase-auth/test-vectors/key-policy.json.
+   */
+  keyRawImportPolicy(
+    id: string,
+  ): { algorithm: string; extractable: boolean; usages: string[] } | null;
+  /**
    * Token refresh policy (canonical: betterbase-auth::refresh; pinned by
    * crates/betterbase-auth/test-vectors/refresh-policy.json). 64-bit values
    * cross the boundary as bigint (wasm i64/u64).
@@ -671,6 +686,14 @@ export function ensureWasm(): WasmModule {
     );
   }
   return wasmModule;
+}
+
+/**
+ * First epoch of the forward-derivation chain (Rust-canonical:
+ * betterbase-auth::key_policy::INITIAL_EPOCH) as a plain number.
+ */
+export function initialEpoch(): number {
+  return Number(ensureWasm().initialEpoch());
 }
 
 /**

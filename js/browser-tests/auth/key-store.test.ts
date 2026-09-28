@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { initWasm } from "../../src/wasm-init.js";
 import { KeyStore } from "../../src/auth/key-store.js";
+import rawVectors from "../../../crates/betterbase-auth/test-vectors/key-policy.json?raw";
 
 describe("KeyStore CryptoKey storage (browser)", () => {
   let keyStore: KeyStore;
@@ -136,6 +137,36 @@ describe("KeyStore CryptoKey storage (browser)", () => {
       await expect(keyStore.getCryptoKey("app-private-key")).rejects.toThrow(
         'Cannot import "app-private-key"',
       );
+    });
+
+    it("migrates with the Rust-canonical import policy (vector-pinned)", async () => {
+      // End-to-end pin: the importKey arguments the browser actually uses
+      // must equal the committed key-policy vectors — the wasm policy is
+      // authoritative all the way to WebCrypto.
+      const vectors = JSON.parse(rawVectors) as {
+        rawKeys: {
+          id: string;
+          algorithm: string;
+          extractable: boolean;
+          usages: string[];
+        }[];
+      };
+      for (const entry of vectors.rawKeys) {
+        await keyStore.storeValue(entry.id, randomKey().slice());
+        const spy = vi.spyOn(crypto.subtle, "importKey");
+        const key = await keyStore.getCryptoKey(entry.id);
+        expect(key, entry.id).toBeInstanceOf(CryptoKey);
+        const call = spy.mock.calls.find(
+          (c) => (c[2] as { name?: string }).name === entry.algorithm,
+        );
+        expect(
+          call,
+          `importKey(${entry.algorithm}) for ${entry.id}`,
+        ).toBeDefined();
+        expect(call![3], `${entry.id} extractable`).toBe(entry.extractable);
+        expect(call![4], `${entry.id} usages`).toEqual(entry.usages);
+        spy.mockRestore();
+      }
     });
   });
 

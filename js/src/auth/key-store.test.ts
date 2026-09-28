@@ -6,9 +6,82 @@
  */
 import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import rawVectors from "../../../crates/betterbase-auth/test-vectors/key-policy.json";
 
 const { KeyStore } = await import("./key-store.js");
+
+vi.mock("../wasm-init.js", () => ({
+  initWasm: vi.fn(),
+  // Mirrors the canonical Rust key policy (betterbase-auth::key_policy;
+  // pinned by test-vectors/key-policy.json) — node tests cannot load wasm.
+  ensureWasm: () => ({
+    keyRawImportPolicy: (id: string) => {
+      const base = id.split("::").pop() ?? id;
+      switch (base) {
+        case "encryption-key":
+          return {
+            algorithm: "AES-GCM",
+            extractable: false,
+            usages: ["encrypt", "decrypt"],
+          };
+        case "epoch-key":
+          return {
+            algorithm: "AES-KW",
+            extractable: false,
+            usages: ["wrapKey", "unwrapKey"],
+          };
+        case "epoch-derive-key":
+          return {
+            algorithm: "HKDF",
+            extractable: false,
+            usages: ["deriveBits", "deriveKey"],
+          };
+        default:
+          return null;
+      }
+    },
+  }),
+}));
+
+// Tripwire: the hand-maintained mock above must stay in lockstep with the
+// committed conformance vectors (the browser test replays the same file
+// through real wasm).
+describe("key-policy wasm mock fidelity", () => {
+  it("mock reproduces the committed vectors", async () => {
+    const { ensureWasm } = vi.mocked(await import("../wasm-init.js"));
+    const wasm = ensureWasm();
+    const v = rawVectors as {
+      rawKeys: {
+        id: string;
+        algorithm: string;
+        extractable: boolean;
+        usages: string[];
+      }[];
+      parse: { id: string; expect: string | null }[];
+    };
+    for (const entry of v.rawKeys) {
+      expect(wasm.keyRawImportPolicy(entry.id)).toEqual({
+        algorithm: entry.algorithm,
+        extractable: entry.extractable,
+        usages: entry.usages,
+      });
+    }
+    for (const c of v.parse) {
+      const got = wasm.keyRawImportPolicy(c.id);
+      if (c.expect === null) {
+        expect(got, c.id).toBeNull();
+      } else {
+        const want = v.rawKeys.find((k) => k.id === c.expect)!;
+        expect(got, c.id).toEqual({
+          algorithm: want.algorithm,
+          extractable: want.extractable,
+          usages: want.usages,
+        });
+      }
+    }
+  });
+});
 
 // Reset the singleton and the in-memory IDB between tests: the legacy
 // adoption claim is global by design, so tests must not share a database.
