@@ -26,6 +26,7 @@ pub mod oauth_callback;
 mod pkce;
 mod refresh;
 mod session_keys;
+pub mod spaceid;
 mod thumbprint;
 mod types;
 

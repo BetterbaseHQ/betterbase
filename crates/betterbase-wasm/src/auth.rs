@@ -70,6 +70,21 @@ pub fn wasm_derive_mailbox_id(
     derive_mailbox_id(encryption_key, issuer, user_id).map_err(to_js_error)
 }
 
+// --- Personal space ID ---
+
+/// Compute the deterministic personal space ID (canonical:
+/// `betterbase-auth::spaceid::personal_space_id` — the same UUID5 formula the
+/// accounts server uses; frozen wire contract pinned by
+/// `test-vectors/spaceid.json`).
+#[wasm_bindgen(js_name = "personalSpaceId")]
+pub fn wasm_personal_space_id(
+    issuer: &str,
+    user_id: &str,
+    client_id: &str,
+) -> Result<String, JsValue> {
+    betterbase_auth::spaceid::personal_space_id(issuer, user_id, client_id).map_err(to_js_error)
+}
+
 // --- Session key separation ---
 
 /// Derive the session's purpose-specific keys from the OPAQUE root key

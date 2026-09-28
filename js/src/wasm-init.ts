@@ -193,6 +193,7 @@ export interface WasmModule {
     issuer: string,
     userId: string,
   ): string;
+  personalSpaceId(issuer: string, userId: string, clientId: string): string;
   extractEncryptionKey(
     scopedKeysJson: string,
   ): { key: Uint8Array; keyId: string } | null;

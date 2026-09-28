@@ -1,0 +1,64 @@
+{
+  "cases": [
+    {
+      "clientId": "11111111-1111-1111-1111-111111111111",
+      "expected": "da29e793-3f05-51c3-9f72-63cc953f9c05",
+      "issuer": "https://accounts.betterbase.dev",
+      "userId": "user-1"
+    },
+    {
+      "clientId": "web",
+      "expected": "8ae742e1-0549-5ca9-970c-2c141390560f",
+      "issuer": "http://localhost:5377",
+      "userId": "user-2f9a3c"
+    },
+    {
+      "clientId": "client-abc",
+      "expected": "91aea6a5-3055-5776-9d48-fadcaaf82a17",
+      "issuer": "https://accounts.example.com",
+      "userId": "user-123"
+    },
+    {
+      "clientId": "cléïent",
+      "expected": "00316164-f18f-5958-a04f-7e837f655c1f",
+      "issuer": "https://accounts.example.com",
+      "userId": "usér-ünïcode"
+    },
+    {
+      "clientId": "",
+      "expected": "d2549155-ea85-58c6-9e20-8ac56f7adb54",
+      "issuer": "",
+      "userId": ""
+    },
+    {
+      "clientId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "expected": "1bd2d3ae-202e-5aac-8811-c89a735076ea",
+      "issuer": "https://issuer.example.com",
+      "userId": "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"
+    }
+  ],
+  "description": "Personal space ID (UUID5) conformance vectors. Canonical: betterbase-auth::spaceid::personal_space_id. Format per case: issuer/userId/clientId with the expected lowercase hyphenated UUID; `errors` cases carry the exact error message. Matches the accounts server (betterbase-sync/crates/core/src/spaceid.rs).",
+  "errors": [
+    {
+      "clientId": "d",
+      "error": "personalSpaceId: issuer must not contain NUL bytes (U+0000)",
+      "issuer": "a\u0000b",
+      "name": "nul-in-issuer",
+      "userId": "c"
+    },
+    {
+      "clientId": "d",
+      "error": "personalSpaceId: userId must not contain NUL bytes (U+0000)",
+      "issuer": "a",
+      "name": "nul-in-userId",
+      "userId": "b\u0000c"
+    },
+    {
+      "clientId": "c\u0000d",
+      "error": "personalSpaceId: clientId must not contain NUL bytes (U+0000)",
+      "issuer": "a",
+      "name": "nul-in-clientId",
+      "userId": "b"
+    }
+  ]
+}
