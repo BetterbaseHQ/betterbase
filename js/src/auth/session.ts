@@ -12,7 +12,7 @@
 import { initWasm } from "../wasm-init.js";
 import type { AuthResult, AuthSessionConfig, TokenResponse } from "./types.js";
 import { KeyStore, type ScopedKeyStore } from "./key-store.js";
-import { hkdfDerive } from "./crypto.js";
+import { deriveSessionKeys } from "./crypto.js";
 import { INITIAL_EPOCH } from "../sync/types.js";
 import {
   SessionExpiredError,
@@ -20,11 +20,6 @@ import {
   OAuthTokenError,
 } from "./errors.js";
 import { decodeJwtClaim } from "./jwt.js";
-
-/** HKDF info for deriving the AES-GCM encryption key from the OPAQUE export key. */
-const ENCRYPT_INFO = "betterbase:encrypt:v1";
-/** HKDF info for deriving the epoch root key (AES-KW) from the OPAQUE export key. */
-const EPOCH_ROOT_INFO = "betterbase:epoch-root:v1";
 
 /** Persisted session state in localStorage */
 interface SessionState {
@@ -143,18 +138,25 @@ export class AuthSession {
       hasEncryptionKey = true;
       hasEpochKey = true;
     } else if (authResult.encryptionKey) {
-      // Legacy path: derive and import from raw bytes
-      const encKey = hkdfDerive(authResult.encryptionKey, ENCRYPT_INFO);
-      const epochKey = hkdfDerive(authResult.encryptionKey, EPOCH_ROOT_INFO);
+      // Legacy path: derive and import from raw bytes. The root is zeroed in
+      // a finally around the derivation itself: deriveSessionKeys can throw
+      // on a malformed root, and the raw key must not survive that path
+      // (AUD-012 hygiene).
+      const root = authResult.encryptionKey;
+      let derived: ReturnType<typeof deriveSessionKeys>;
       try {
-        await keyStore.importEncryptionKey(encKey);
+        derived = deriveSessionKeys(root);
+      } finally {
+        root.fill(0); // zero even when derivation rejects a malformed root
+      }
+      try {
+        await keyStore.importEncryptionKey(derived.encryptionKey);
         hasEncryptionKey = true;
-        await keyStore.importEpochKey(epochKey);
+        await keyStore.importEpochKey(derived.epochRootKey);
         hasEpochKey = true;
       } finally {
-        encKey.fill(0);
-        epochKey.fill(0);
-        authResult.encryptionKey.fill(0);
+        derived.encryptionKey.fill(0);
+        derived.epochRootKey.fill(0);
       }
     }
 

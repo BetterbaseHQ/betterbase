@@ -5,7 +5,7 @@
  */
 
 export {
-  hkdfDerive,
+  deriveSessionKeys,
   deriveMailboxId,
   encryptJwe,
   decryptJwe,

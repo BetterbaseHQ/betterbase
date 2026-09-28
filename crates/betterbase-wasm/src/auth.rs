@@ -2,9 +2,9 @@
 
 use crate::error::{to_js_error, to_js_value};
 use betterbase_auth::{
-    compute_code_challenge, compute_jwk_thumbprint, decrypt_jwe, derive_mailbox_id, encrypt_jwe,
-    extract_app_keypair, extract_encryption_key, generate_code_verifier, generate_state,
-    ScopedKeys,
+    compute_code_challenge, compute_jwk_thumbprint, decrypt_jwe, derive_mailbox_id,
+    derive_session_keys, encrypt_jwe, extract_app_keypair, extract_encryption_key,
+    generate_code_verifier, generate_state, ScopedKeys,
 };
 use wasm_bindgen::prelude::*;
 
@@ -65,6 +65,33 @@ pub fn wasm_derive_mailbox_id(
     user_id: &str,
 ) -> Result<String, JsValue> {
     derive_mailbox_id(encryption_key, issuer, user_id).map_err(to_js_error)
+}
+
+// --- Session key separation ---
+
+/// Derive the session's purpose-specific keys from the OPAQUE root key
+/// (canonical: betterbase-auth::derive_session_keys). The frozen salt/info
+/// constants live in Rust; the mapping is pinned by
+/// `test-vectors/session-keys.json`.
+#[wasm_bindgen(js_name = "deriveSessionKeys")]
+pub fn wasm_derive_session_keys(root: &[u8]) -> Result<JsValue, JsValue> {
+    let keys = derive_session_keys(root).map_err(to_js_error)?;
+    // Byte fields cross the boundary as real Uint8Arrays — `to_js_value` would
+    // render them as plain JS arrays.
+    let obj = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &obj,
+        &"encryptionKey".into(),
+        &js_sys::Uint8Array::from(keys.encryption_key.as_slice()),
+    )
+    .unwrap();
+    js_sys::Reflect::set(
+        &obj,
+        &"epochRootKey".into(),
+        &js_sys::Uint8Array::from(keys.epoch_root_key.as_slice()),
+    )
+    .unwrap();
+    Ok(obj.into())
 }
 
 // --- Key extraction ---

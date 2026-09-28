@@ -145,17 +145,19 @@ export function deriveMailboxId(
 }
 
 /**
- * Derive a 256-bit key from input keying material via HKDF-SHA256.
+ * Derive the session's purpose-specific keys from the OPAQUE root key
+ * (canonical: betterbase-auth::derive_session_keys). The frozen salt/info
+ * constants live in Rust and are pinned by
+ * `crates/betterbase-auth/test-vectors/session-keys.json`.
  *
- * Used for key separation: deriving distinct purpose-specific keys
- * from a single root key (e.g., OPAQUE export key → encryption key + epoch key).
- *
- * @param ikm - Input keying material (32 bytes)
- * @param info - Context string for domain separation
- * @returns Derived 32-byte key
+ * @param root - 32-byte OPAQUE export key
+ * @returns The two purpose-specific keys (32 bytes each)
  */
-export function hkdfDerive(ikm: Uint8Array, info: string): Uint8Array {
-  return ensureWasm().hkdfDerive(ikm, "betterbase:key-separation:v1", info);
+export function deriveSessionKeys(root: Uint8Array): {
+  encryptionKey: Uint8Array;
+  epochRootKey: Uint8Array;
+} {
+  return ensureWasm().deriveSessionKeys(root);
 }
 
 /**

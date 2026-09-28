@@ -17,7 +17,7 @@ import {
   extractEncryptionKey,
   extractAppKeypair,
   deriveMailboxId,
-  hkdfDerive,
+  deriveSessionKeys,
 } from "./crypto.js";
 import { CallbackError, CSRFError, OAuthTokenError } from "./errors.js";
 import { decodeJwtClaim } from "./jwt.js";
@@ -269,12 +269,10 @@ export class OAuthClient {
           const extracted = extractEncryptionKey(scopedKeys);
           if (extracted) {
             result.keyId = extracted.keyId;
-            // Derive purpose-specific keys, import to KeyStore, and zero immediately
-            const encKey = hkdfDerive(extracted.key, "betterbase:encrypt:v1");
-            const epochKey = hkdfDerive(
-              extracted.key,
-              "betterbase:epoch-root:v1",
-            );
+            // Derive purpose-specific keys (Rust-canonical), import to
+            // KeyStore, and zero immediately
+            const { encryptionKey: encKey, epochRootKey: epochKey } =
+              deriveSessionKeys(extracted.key);
             try {
               // Derive mailbox ID while raw key bytes are still available
               if (issuer && userId) {

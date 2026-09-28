@@ -121,7 +121,15 @@ export interface WasmModule {
     upToIndex: number,
   ): Record<string, unknown>;
   canonicalJSON(value: unknown): string;
-  hkdfDerive(ikm: Uint8Array, salt: string, info: string): Uint8Array;
+  /**
+   * Derive the session's purpose-specific keys from the OPAQUE root key
+   * (canonical: betterbase-auth::derive_session_keys; pinned by
+   * crates/betterbase-auth/test-vectors/session-keys.json).
+   */
+  deriveSessionKeys(root: Uint8Array): {
+    encryptionKey: Uint8Array;
+    epochRootKey: Uint8Array;
+  };
   sha256(data: Uint8Array): Uint8Array;
   encryptWithAad(
     key: Uint8Array,

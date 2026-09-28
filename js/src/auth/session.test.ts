@@ -16,7 +16,12 @@ const { __keyPresence: KEY_PRESENCE } =
   };
 
 vi.mock("../wasm-init.js", () => ({ initWasm: vi.fn() }));
-vi.mock("./crypto.js", () => ({ hkdfDerive: () => new Uint8Array(32) }));
+vi.mock("./crypto.js", () => ({
+  deriveSessionKeys: () => ({
+    encryptionKey: new Uint8Array(32),
+    epochRootKey: new Uint8Array(32),
+  }),
+}));
 vi.mock("./key-store.js", () => {
   const clearAllCalls: string[] = [];
   // Tests flip entries to true to make the corresponding key "present"

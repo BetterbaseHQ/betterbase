@@ -1,0 +1,55 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "encryption_key": "496019b01590947e6ae75c97b7f1bbf7be1878120f1dba265d34ed1b589afd2e",
+        "epoch_root_key": "24e089ae36fdc3812fe54c28b701fe1cdaf850689a9d8207f6ce3ced5124a60c"
+      },
+      "name": "root A (0x42 repeated)",
+      "root": "4242424242424242424242424242424242424242424242424242424242424242"
+    },
+    {
+      "expect": {
+        "encryption_key": "d0b4421611fbb8282aa21f6afc7f0b8d78012bc4999ac7f952c8ebb8ab6b3d31",
+        "epoch_root_key": "77df02a38ef801cb8740df80f99e66e6834cc5575da13946218c905febcc4b22"
+      },
+      "name": "root B (0x00..0x1f sequential)",
+      "root": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    },
+    {
+      "expect": {
+        "encryption_key": "7ba168fc4dc233d7e184ce4c3f66b2c75668ab9bde70e9e3d892bb849364ee58",
+        "epoch_root_key": "d4c40e3fafee96c70366beef29b83eaab3c356786e2947cbf95381895fe5a412"
+      },
+      "name": "root C (all zeros)",
+      "root": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "expect": {
+        "encryption_key": "78d8e2c9d2bfc272ba10a5b5f9339eaa366ad549f3c25de28c0714e545079972",
+        "epoch_root_key": "eb0c4635fa877a22734edf016032f6fee24a9025964f20acb936dba6672de5ee"
+      },
+      "name": "root D (high entropy fixed)",
+      "root": "7f3a9c1e5b8d2046f0e6a3c719bd4f82d5e01c6a478b93fd2e7c50a1b6d48f3e"
+    }
+  ],
+  "description": "Session key-separation conformance vectors (betterbase-auth::derive_session_keys). HKDF-SHA256(ikm=root, salt=betterbase:key-separation:v1, info=betterbase:encrypt:v1 or betterbase:epoch-root:v1) -> 32-byte key each. Frozen v1 protocol constants — changing them orphans every derived key.",
+  "errors": [
+    {
+      "expect": "Invalid key length: expected 32, got 0",
+      "name": "empty root",
+      "root": ""
+    },
+    {
+      "expect": "Invalid key length: expected 32, got 16",
+      "name": "short root (16 bytes)",
+      "root": "00000000000000000000000000000000"
+    },
+    {
+      "expect": "Invalid key length: expected 32, got 33",
+      "name": "long root (33 bytes)",
+      "root": "000000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "version": 1
+}

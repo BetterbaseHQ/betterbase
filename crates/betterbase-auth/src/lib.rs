@@ -16,6 +16,7 @@ mod jwe;
 mod key_extraction;
 mod mailbox;
 mod pkce;
+mod session_keys;
 mod thumbprint;
 mod types;
 
@@ -24,5 +25,8 @@ pub use jwe::{decrypt_jwe, encrypt_jwe};
 pub use key_extraction::{extract_app_keypair, extract_encryption_key, EncryptionKeyResult};
 pub use mailbox::derive_mailbox_id;
 pub use pkce::{compute_code_challenge, generate_code_verifier, generate_state};
+pub use session_keys::{
+    derive_session_keys, SessionKeys, ENCRYPT_INFO, EPOCH_ROOT_INFO, KEY_SEPARATION_SALT,
+};
 pub use thumbprint::compute_jwk_thumbprint;
 pub use types::{AppKeypairJwk, EcPublicJwk, ScopedKeyEntry, ScopedKeys};

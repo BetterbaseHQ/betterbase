@@ -6,11 +6,11 @@ use betterbase_crypto::{
     build_presence_aad, canonical_json, compress_p256_public_key, decrypt_v4, delegate_ucan,
     derive_channel_key, derive_epoch_key_from_root, derive_next_epoch_key, encode_did_key,
     encode_did_key_from_jwk, encrypt_v4, export_private_key_jwk, export_public_key_jwk,
-    generate_dek, generate_p256_keypair, hkdf_derive, import_private_key_jwk, issue_root_ucan,
-    parse_edit_chain, reconstruct_state, select_epoch_key_resolved, serialize_edit_chain, sign,
-    sign_edit_entry, unwrap_dek, value_diff, verify, verify_edit_chain, verify_edit_entry,
-    wrap_dek, EditDiff, EditEntry, EncryptionContext, EpochKeySource, UCANPermission,
-    CURRENT_VERSION, MAX_EPOCH_DERIVE_DISTANCE, SUPPORTED_VERSIONS,
+    generate_dek, generate_p256_keypair, import_private_key_jwk, issue_root_ucan, parse_edit_chain,
+    reconstruct_state, select_epoch_key_resolved, serialize_edit_chain, sign, sign_edit_entry,
+    unwrap_dek, value_diff, verify, verify_edit_chain, verify_edit_entry, wrap_dek, EditDiff,
+    EditEntry, EncryptionContext, EpochKeySource, UCANPermission, CURRENT_VERSION,
+    MAX_EPOCH_DERIVE_DISTANCE, SUPPORTED_VERSIONS,
 };
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
@@ -397,17 +397,6 @@ pub fn wasm_reconstruct_state(entries: JsValue, up_to_index: usize) -> Result<Js
 pub fn wasm_canonical_json(value: JsValue) -> Result<String, JsValue> {
     let val: Value = serde_wasm_bindgen::from_value(value).map_err(to_js_error)?;
     canonical_json(&val).map_err(to_js_error)
-}
-
-// --- HKDF ---
-
-#[wasm_bindgen(js_name = "hkdfDerive")]
-pub fn wasm_hkdf_derive(ikm: &[u8], salt: &str, info: &str) -> Result<Vec<u8>, JsValue> {
-    // Note: zeroizing before returning to JS is not meaningful at the WASM boundary —
-    // the returned Vec is copied into linear memory for the JS host regardless.
-    hkdf_derive(ikm, salt.as_bytes(), info.as_bytes())
-        .map(|k| k.to_vec())
-        .map_err(to_js_error)
 }
 
 // --- SHA-256 ---
