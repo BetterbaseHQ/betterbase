@@ -2,6 +2,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AuthError {
+    #[error("Malformed JWT: {0}")]
+    MalformedJwt(String),
+
     #[error("JWE format error: {0}")]
     JweFormat(String),
 

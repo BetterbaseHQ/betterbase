@@ -122,6 +122,12 @@ export interface WasmModule {
   ): Record<string, unknown>;
   canonicalJSON(value: unknown): string;
   /**
+   * Decode the payload segment of a JWT without verification (canonical:
+   * betterbase-auth::decode_jwt_payload; pinned by
+   * crates/betterbase-auth/test-vectors/jwt-payload.json).
+   */
+  decodeJwtPayload(token: string): Record<string, unknown>;
+  /**
    * Derive the session's purpose-specific keys from the OPAQUE root key
    * (canonical: betterbase-auth::derive_session_keys; pinned by
    * crates/betterbase-auth/test-vectors/session-keys.json).
