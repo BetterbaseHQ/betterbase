@@ -240,6 +240,13 @@ export interface WasmModule {
     wrapped_dek: Uint8Array;
     observed_wrapped_dek: Uint8Array;
   }>;
+  /**
+   * Classify a push rejection: (rejection source, server error code) ->
+   * client disposition ("transient" | "permanent" | "conflict" | "capacity").
+   * Canonical table: betterbase-sync-core::push_policy, pinned by
+   * test-vectors/push-rejection.json (frozen server contract).
+   */
+  classifyPushRejectionCode(source: "rpc" | "server", code: string): string;
   buildMembershipSigningMessage(
     entryType: string,
     spaceId: string,

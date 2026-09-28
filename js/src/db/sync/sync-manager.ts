@@ -589,14 +589,23 @@ function maxSequence(records: RemoteRecord[]): number {
 }
 
 /**
- * Classify a transport push failure. Server rejections (PushRejectedError
- * from betterbase/sync) carry a protocol error code; conflicts reconcile
- * via pull, capacity/rate limits retry later, and authorization failures
- * are permanent until access is re-granted. RPC-level errors (invalid
- * params, unknown method) are structural failures that retrying cannot
- * fix — permanent as well.
+ * Classify a transport push failure.
+ *
+ * The (source, code) -> disposition table below is a **frozen server
+ * contract**; its canonical Rust implementation is
+ * `betterbase-sync-core::push_policy::classify_push_rejection`, pinned by
+ * `crates/betterbase-sync-core/test-vectors/push-rejection.json` (Rust unit
+ * tests, this node suite, and the browser suite all replay the same file).
+ * The shape detection (which error object form we got) is client glue —
+ * see docs/sync-push-policy.md for the freeze and flip triggers.
+ *
+ * Server rejections (PushRejectedError from betterbase/sync) carry a
+ * protocol error code; conflicts reconcile via pull, capacity/rate limits
+ * retry later, and authorization failures are permanent until access is
+ * re-granted. RPC-level errors (invalid params, unknown method) are
+ * structural failures that retrying cannot fix — permanent as well.
  */
-function classifyPushRejection(e: unknown): SyncErrorKind {
+export function classifyPushRejection(e: unknown): SyncErrorKind {
   const err = e as { rejected?: boolean; code?: string; name?: string };
   if (err?.name === "RPCCallError" && typeof err.code === "string") {
     switch (err.code) {

@@ -2,10 +2,11 @@
 
 use crate::error::{to_js_error, to_js_value};
 use betterbase_sync_core::{
-    build_membership_signing_message, decode_envelope, decrypt_membership_payload, decrypt_record,
-    derive_forward, encode_envelope, encrypt_membership_payload, encrypt_record,
-    fold_membership_log, pad_to_bucket, parse_membership_entry, peek_epoch, rewrap_deks,
-    serialize_membership_entry, unpad, verify_membership_entry, BlobEnvelope, MembershipEntryType,
+    build_membership_signing_message, classify_push_rejection, decode_envelope,
+    decrypt_membership_payload, decrypt_record, derive_forward, encode_envelope,
+    encrypt_membership_payload, encrypt_record, fold_membership_log, pad_to_bucket,
+    parse_membership_entry, peek_epoch, rewrap_deks, serialize_membership_entry, unpad,
+    verify_membership_entry, BlobEnvelope, MembershipEntryType, PushRejectionKind, RejectionSource,
     DEFAULT_PADDING_BUCKETS,
 };
 use wasm_bindgen::prelude::*;
@@ -222,6 +223,33 @@ pub fn wasm_rewrap_deks(
         out.push(&obj.into());
     }
     Ok(out.into())
+}
+
+// --- Push policy ---
+
+/// Classify a push rejection: (rejection source, server error code) -> client
+/// disposition (`"transient" | "permanent" | "conflict" | "capacity"`).
+///
+/// Canonical table: `betterbase-sync-core::push_policy`, pinned by
+/// `test-vectors/push-rejection.json` (Rust + node + browser suites).
+#[wasm_bindgen(js_name = "classifyPushRejectionCode")]
+pub fn wasm_classify_push_rejection_code(source: &str, code: &str) -> Result<JsValue, JsValue> {
+    let src = match source {
+        "rpc" => RejectionSource::Rpc,
+        "server" => RejectionSource::Server,
+        other => {
+            return Err(to_js_error(format!(
+                "unknown rejection source: {other} (expected \"rpc\" or \"server\")"
+            )))
+        }
+    };
+    let kind = classify_push_rejection(src, code);
+    Ok(JsValue::from_str(match kind {
+        PushRejectionKind::Transient => "transient",
+        PushRejectionKind::Permanent => "permanent",
+        PushRejectionKind::Conflict => "conflict",
+        PushRejectionKind::Capacity => "capacity",
+    }))
 }
 
 // --- Membership ---

@@ -10,4 +10,3 @@ pub mod query;
 pub mod reactive;
 pub mod schema;
 pub mod storage;
-pub mod sync;

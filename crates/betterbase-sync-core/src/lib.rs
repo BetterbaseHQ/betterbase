@@ -6,6 +6,7 @@ pub mod frames;
 pub mod membership;
 pub mod padding;
 pub mod pull;
+pub mod push_policy;
 pub mod reencrypt;
 pub mod rotation;
 pub mod transport;
@@ -31,6 +32,7 @@ pub use pull::{
     apply_chunk, PullAssembly, PullAssemblyError, PullBeginData, PullCommitData, PullEntryMeta,
     SpaceAssembly,
 };
+pub use push_policy::{classify_push_rejection, PushRejectionKind, RejectionSource};
 pub use reencrypt::{derive_forward, peek_epoch, rewrap_deks, RewrapEntry};
 pub use rotation::{
     should_rotate, KeyMode, RotationAction, RotationError, RotationEvent, RotationKind,

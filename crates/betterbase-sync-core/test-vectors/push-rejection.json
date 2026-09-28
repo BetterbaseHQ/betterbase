@@ -1,0 +1,33 @@
+{
+  "$comment": "Push-rejection classification conformance vectors (betterbase-sync-core::push_policy::classify_push_rejection). Frozen server contract: (rejection source, error code) -> client disposition. The disposition drives quarantine accounting (only 'permanent' counts), conflict reconciliation (pull then re-push once), and batch-capacity backoff. Run by the Rust unit tests (push_policy), the browser tests (real wasm classifyPushRejectionCode), and the node tests (TS mirror in js/src/db/sync/sync-manager.ts). Matching is case-sensitive and exact; unknown codes must classify as 'transient' — an unrecognized code must never quarantine a record. Changes to this table are a protocol change: server + every SDK.",
+  "cases": [
+    { "name": "rpc invalid_params -> permanent", "source": "rpc", "code": "invalid_params", "expect": "permanent" },
+    { "name": "rpc bad_request -> permanent", "source": "rpc", "code": "bad_request", "expect": "permanent" },
+    { "name": "rpc method_not_found -> permanent", "source": "rpc", "code": "method_not_found", "expect": "permanent" },
+    { "name": "rpc unknown code -> transient", "source": "rpc", "code": "unknown_code", "expect": "transient" },
+    { "name": "server conflict -> conflict", "source": "server", "code": "conflict", "expect": "conflict" },
+    { "name": "server payload_too_large -> capacity", "source": "server", "code": "payload_too_large", "expect": "capacity" },
+    { "name": "server rate_limited -> transient", "source": "server", "code": "rate_limited", "expect": "transient" },
+    { "name": "server internal -> transient", "source": "server", "code": "internal", "expect": "transient" },
+    { "name": "server epoch_stale -> transient", "source": "server", "code": "epoch_stale", "expect": "transient" },
+    { "name": "server forbidden -> permanent", "source": "server", "code": "forbidden", "expect": "permanent" },
+    { "name": "server not_found -> permanent", "source": "server", "code": "not_found", "expect": "permanent" },
+    { "name": "server bad_request -> permanent", "source": "server", "code": "bad_request", "expect": "permanent" },
+    { "name": "server unknown code -> transient", "source": "server", "code": "unknown_code", "expect": "transient" },
+    { "name": "cross-bucket: conflict from rpc source is transient (source matters)", "source": "rpc", "code": "conflict", "expect": "transient" },
+    { "name": "cross-bucket: invalid_params from server source is transient", "source": "server", "code": "invalid_params", "expect": "transient" },
+    { "name": "cross-bucket: method_not_found from server source is transient", "source": "server", "code": "method_not_found", "expect": "transient" },
+    { "name": "cross-bucket: payload_too_large from rpc source is transient", "source": "rpc", "code": "payload_too_large", "expect": "transient" },
+    { "name": "cross-bucket: forbidden from rpc source is transient", "source": "rpc", "code": "forbidden", "expect": "transient" },
+    { "name": "cross-bucket: not_found from rpc source is transient", "source": "rpc", "code": "not_found", "expect": "transient" },
+    { "name": "cross-bucket: rate_limited from rpc source is transient", "source": "rpc", "code": "rate_limited", "expect": "transient" },
+    { "name": "cross-bucket: internal from rpc source is transient", "source": "rpc", "code": "internal", "expect": "transient" },
+    { "name": "cross-bucket: epoch_stale from rpc source is transient", "source": "rpc", "code": "epoch_stale", "expect": "transient" },
+    { "name": "case-sensitive: server 'Conflict' (capitalized) is unknown -> transient", "source": "server", "code": "Conflict", "expect": "transient" },
+    { "name": "case-sensitive: server 'PAYLOAD_TOO_LARGE' is unknown -> transient", "source": "server", "code": "PAYLOAD_TOO_LARGE", "expect": "transient" },
+    { "name": "case-sensitive: rpc 'INVALID_PARAMS' is unknown -> transient", "source": "rpc", "code": "INVALID_PARAMS", "expect": "transient" },
+    { "name": "empty code, rpc -> transient", "source": "rpc", "code": "", "expect": "transient" },
+    { "name": "empty code, server -> transient", "source": "server", "code": "", "expect": "transient" },
+    { "name": "future code shape (epoch_mismatch) -> transient until classified", "source": "server", "code": "epoch_mismatch", "expect": "transient" }
+  ]
+}
