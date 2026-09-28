@@ -2,9 +2,9 @@
 
 use crate::error::{to_js_error, to_js_value};
 use betterbase_auth::{
-    compute_code_challenge, compute_jwk_thumbprint, decrypt_jwe, derive_mailbox_id,
-    derive_session_keys, encrypt_jwe, extract_app_keypair, extract_encryption_key,
-    generate_code_verifier, generate_state, ScopedKeys,
+    compute_code_challenge, compute_jwk_thumbprint, decode_jwt_payload, decrypt_jwe,
+    derive_mailbox_id, derive_session_keys, encrypt_jwe, extract_app_keypair,
+    extract_encryption_key, generate_code_verifier, generate_state, ScopedKeys,
 };
 use wasm_bindgen::prelude::*;
 
@@ -92,6 +92,64 @@ pub fn wasm_derive_session_keys(root: &[u8]) -> Result<JsValue, JsValue> {
     )
     .unwrap();
     Ok(obj.into())
+}
+
+// --- JWT payload decode ---
+
+/// Decode the payload segment of a JWT without verification (canonical:
+/// betterbase-auth::decode_jwt_payload; pinned by
+/// `test-vectors/jwt-payload.json`). Returns a plain JS object.
+#[wasm_bindgen(js_name = "decodeJwtPayload")]
+pub fn wasm_decode_jwt_payload(token: &str) -> Result<JsValue, JsValue> {
+    let claims = decode_jwt_payload(token).map_err(to_js_error)?;
+    claims_to_js(&claims)
+}
+
+/// Convert a decoded JWT payload to a plain JS value.
+///
+/// Unlike `to_js_value` (whose `serialize_none` maps JSON `null` to JS
+/// `undefined`), this preserves JSON `null` as JS `null` — the boundary must
+/// be faithful to the payload. Integer precision beyond 2^53 is not
+/// preserved (f64), matching serde-wasm-bindgen; a pathological case for JWT
+/// claims.
+fn claims_to_js(claims: &serde_json::Value) -> Result<JsValue, JsValue> {
+    use serde_json::Value;
+    fn rec(v: &Value) -> Result<JsValue, JsValue> {
+        Ok(match v {
+            Value::Null => JsValue::NULL,
+            Value::Bool(b) => JsValue::from_bool(*b),
+            Value::Number(n) => {
+                debug_assert!(
+                    n.as_f64().is_some(),
+                    "default serde_json always parses numbers as i64/u64/f64"
+                );
+                JsValue::from_f64(n.as_f64().unwrap_or(0.0))
+            }
+            Value::String(s) => JsValue::from_str(s),
+            Value::Array(items) => {
+                let arr = js_sys::Array::new();
+                for item in items {
+                    arr.push(&rec(item)?);
+                }
+                arr.into()
+            }
+            Value::Object(map) => {
+                // Null prototype: Reflect::set then creates own data
+                // properties (JSON.parse semantics). A normal object would
+                // route a "__proto__" claim through Object.prototype's
+                // accessor — a prototype injection from an unverified payload.
+                let obj = js_sys::Object::create(&JsValue::NULL.unchecked_into::<js_sys::Object>());
+                for (key, value) in map {
+                    // On a null-prototype object Reflect::set cannot fail
+                    // (no prototype setters, no sealed object) — surface it
+                    // verbatim if that ever changes.
+                    js_sys::Reflect::set(&obj, &JsValue::from_str(key), &rec(value)?)?;
+                }
+                obj.into()
+            }
+        })
+    }
+    rec(claims)
 }
 
 // --- Key extraction ---
