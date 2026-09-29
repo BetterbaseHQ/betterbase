@@ -106,3 +106,10 @@ export function buildBoardCollection() {
 }
 
 export type BoardCollection = ReturnType<typeof buildBoardCollection>;
+
+/** Boundary-conversion fixture for adoption of hydrated records. */
+export function buildAttachmentsCollection() {
+  return collection("attachments")
+    .v(1, { when: t.date(), bytes: t.bytes() })
+    .build();
+}

@@ -1,3 +1,4 @@
+pub mod adoption;
 pub mod error;
 pub mod types;
 

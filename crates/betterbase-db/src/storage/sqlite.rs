@@ -721,6 +721,9 @@ impl StorageBackend for SqliteBackend {
                     let _ = guard
                         .borrow()
                         .execute(&format!("ROLLBACK TO SAVEPOINT {sp_name}"), []);
+                    let _ = guard
+                        .borrow()
+                        .execute(&format!("RELEASE SAVEPOINT {sp_name}"), []);
                     Err(storage_err(rusqlite::Error::SqliteFailure(
                         rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
                         Some("RELEASE SAVEPOINT failed".to_string()),
@@ -731,6 +734,11 @@ impl StorageBackend for SqliteBackend {
                 let _ = guard
                     .borrow()
                     .execute(&format!("ROLLBACK TO SAVEPOINT {sp_name}"), []);
+                // ROLLBACK TO leaves the savepoint active. Release it so a
+                // later successful transaction can actually commit to disk.
+                let _ = guard
+                    .borrow()
+                    .execute(&format!("RELEASE SAVEPOINT {sp_name}"), []);
                 Err(e)
             }
         }

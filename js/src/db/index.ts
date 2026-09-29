@@ -99,7 +99,7 @@ export type {
   ComputedOptions,
   CollectionBuildOptions,
 } from "./collection.js";
-export type { CollectionParentEdge } from "./types.js";
+export type { AdoptRecordsResult, CollectionParentEdge } from "./types.js";
 
 // OPFS database
 export { Database } from "./opfs/OpfsDb.js";

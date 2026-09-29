@@ -100,6 +100,15 @@ keys instead of a reset callback (functions cannot cross the worker). Both host
 adapters filter before pagination and enrich from persisted/snapshot metadata.
 See `docs/reviews/db-middleware-ownership.md` for the contract and migration.
 
+### Record adoption ownership
+
+Rust `Adapter::adopt_records` owns target lookup, schema migration, timestamp
+selection, array union, conflict disposition, and writes within one transaction
+per collection. Browser `mergeDatabaseRecords` retains source reads and async
+application seed filtering. Account markers, file transfer, sync readiness, and
+source retirement remain application responsibilities. See
+`docs/reviews/record-adoption-ownership.md` for the contract and limits.
+
 ### WASM boundary
 
 `betterbase-wasm` and `betterbase-db-wasm` use `#[wasm_bindgen]` with `serde-wasm-bindgen` for complex types and `Uint8Array` for binary data.

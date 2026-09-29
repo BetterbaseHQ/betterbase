@@ -376,6 +376,16 @@ impl WasmDb {
     // Bulk operations
     // ========================================================================
 
+    /// Adopt source records against one atomic target snapshot.
+    #[wasm_bindgen(js_name = "adoptRecords")]
+    pub fn adopt_records(&self, collection: &str, records: JsValue) -> Result<JsValue, JsValue> {
+        let def = self.get_def(collection)?;
+        let records: Vec<Value> = serde_wasm_bindgen::from_value(records)
+            .map_err(|e| JsValue::from_str(&format!("Invalid adoption records: {e}")))?;
+        let result = self.adapter.adopt_records(&def, records).into_js()?;
+        crate::conversions::to_js(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     /// Bulk insert records.
     #[wasm_bindgen(js_name = "bulkPut")]
     pub fn bulk_put(

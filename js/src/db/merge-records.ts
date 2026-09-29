@@ -6,15 +6,13 @@
  * survive connecting), all records of the given collections are copied
  * from the source database into the target database.
  *
- * Idempotent by construction: records keep their original ids, so a
- * repeated merge re-puts the same identities and the CRDT layer merges
- * instead of duplicating. Space stamps (`_spaceId`) are dropped — the
+ * Records keep their original ids; repeated adoption updates those identities
+ * instead of creating duplicate records. Space stamps (`_spaceId`) are dropped — the
  * target's spaces middleware re-stamps unstamped records to its default
  * (personal) space on read and at push time.
  */
 
 import type { CollectionDefHandle, Database } from "./index.js";
-import { dbErrorCode, DbErrorCode } from "./db-errors.js";
 
 export interface MergeDatabaseRecordsOptions {
   /** Database to read records from (e.g. the anonymous/local namespace). */
@@ -51,277 +49,54 @@ export interface MergeDatabaseRecordsResult {
   skippedTombstoned: number;
   /**
    * Records tolerated past a conflict: a unique-index collision in the
-   * bulk write (the target already holds the data under another
-   * identity) or a record deleted mid-merge by a concurrent sync.
+   * write (the target already holds the data under another identity).
    */
   skippedConflict: number;
 }
 
 /**
- * Copy records of `collections` from `source` to `target`, keeping ids
- * and dropping space stamps. Returns per-disposition counts (all zero
- * when the source has no records).
+ * Adopt source records into the target, preserving identities and respecting
+ * target tombstones. Rust owns timestamp selection, array union, and conflict
+ * disposition within one target transaction per collection. TS owns source
+ * access and the optional application seed predicate.
  *
- * Record disposition:
- * - Excluded by `skipRecord` → skipped before any target read: a
- *   declared-pristine seed never merges, whatever the target holds.
- * - Unknown id in the target → written (the point of the merge).
- * - Alive in the target → field-merged and written: scalar fields keep
- *   the target's value (the account's own edits win), array fields are
- *   unioned (embedded items — e.g. todos, cards — from the anonymous
- *   session are never dropped), and fields missing on the target are
- *   copied. A bare re-put of the source record is not enough: the
- *   store's conflict resolution is timestamp-driven per field, so an
- *   older anonymous record re-put against a newer account record loses
- *   wholesale — including its embedded arrays.
- * - Tombstoned in the target → skipped: the user deleted it on another
- *   device, and adoption must not resurrect it (put onto a tombstone is
- *   rejected by the store anyway).
- *
- * Throws when a bulk write reports per-record errors other than
- * unique-index collisions (those are skipped with a warning — the target
- * already holds the data under another identity). Callers run this
- * during a scope switch where a silent partial merge would hide data.
+ * A fatal error rolls back that collection; earlier collections may already
+ * have committed. Source retirement is the caller's responsibility and must
+ * wait for successful adoption and sync. Repeating adoption preserves IDs.
  */
 export async function mergeDatabaseRecords(
   options: MergeDatabaseRecordsOptions,
 ): Promise<MergeDatabaseRecordsResult> {
   const { source, target, collections, skipRecord } = options;
-  let merged = 0;
-  let skipped = 0;
-  let skippedTombstoned = 0;
-  let skippedConflict = 0;
+  const total: MergeDatabaseRecordsResult = {
+    merged: 0,
+    skipped: 0,
+    skippedTombstoned: 0,
+    skippedConflict: 0,
+  };
   for (const def of collections) {
     const records = await source.getAll(def);
-    if (records.length === 0) continue;
-
-    // Pristine-seed filter first: when every record is excluded (the
-    // poisoned-first-visit case) the target is never even read.
     const candidates: Record<string, unknown>[] = [];
     for (const record of records) {
       if (
         skipRecord &&
         (await skipRecord(def, record as Record<string, unknown>))
       ) {
-        skipped++;
-        continue;
+        total.skipped++;
+      } else {
+        candidates.push(record as Record<string, unknown>);
       }
-      candidates.push(record as Record<string, unknown>);
     }
     if (candidates.length === 0) continue;
-
-    // One read for each disposition: alive ids re-write (CRDT update),
-    // tombstoned ids skip. Tombstones = present with includeDeleted but
-    // absent from the alive read — cheaper than a per-record get.
-    const aliveById = new Map(
-      (await target.getAll(def)).map((r) => [
-        (r as Record<string, unknown>).id as string,
-        r as Record<string, unknown>,
-      ]),
-    );
-    const knownIds = new Set<string>(
-      (await target.getAll(def, { includeDeleted: true })).map(
-        (r) => (r as Record<string, unknown>).id as string,
-      ),
-    );
-
-    const writes: Record<string, unknown>[] = [];
-    const patches: { id: string; fields: Record<string, unknown> }[] = [];
-    for (const record of candidates) {
-      const {
-        _spaceId: _s,
-        createdAt: _c,
-        updatedAt: _u,
-        ...rest
-      } = record as Record<string, unknown> & {
-        _spaceId?: unknown;
-        createdAt?: unknown;
-        updatedAt?: unknown;
-      };
-      const id = rest["id"] as string;
-      const existing = aliveById.get(id);
-      if (existing) {
-        // Alive in the target: field-merge onto it (see function docs).
-        const { fields } = mergeRecordFields(
-          existing,
-          record as Record<string, unknown>,
-          rest,
-        );
-        patches.push({ id, fields });
-      } else if (!knownIds.has(id)) {
-        // Unknown to the target: write.
-        writes.push(rest);
-      } else {
-        // Tombstoned in the target — respect the deletion.
-        skippedTombstoned++;
-      }
-    }
-
-    if (writes.length > 0) {
-      const result = await target.bulkPut(
-        def,
-        writes as Parameters<Database["bulkPut"]>[1],
-      );
-      if (result.errors.length > 0) {
-        // A unique-index collision (identical distinct fields under a
-        // different record id — e.g. two "default" records seeded
-        // independently) means the target already holds this data under
-        // another identity: skip those records rather than fail the whole
-        // adoption. Classified on the engine's stable error code, never on
-        // the message — any other per-record failure (or one missing a
-        // code) is a real error. The merge is idempotent, so callers can
-        // safely retry.
-        const fatal = result.errors.filter(
-          (e) => dbErrorCode(e) !== DbErrorCode.UniqueConstraint,
-        );
-        if (fatal.length > 0) {
-          throw new Error(
-            `mergeDatabaseRecords: bulkPut failed for ${def.name}: ${JSON.stringify(fatal[0])}`,
-          );
-        }
-        console.warn(
-          `[betterbase-db] mergeDatabaseRecords: skipped ${result.errors.length} record(s) with unique-field collisions in ${def.name}`,
-        );
-        merged += writes.length - result.errors.length;
-        skippedConflict += result.errors.length;
-      } else {
-        merged += writes.length;
-      }
-    }
-
-    // Alive records merge via base-anchored patches: the store diffs array
-    // and text fields against the supplied base, so the union view applies
-    // as pure additions instead of racing the field-level conflict
-    // resolution (a full-value put without a base can silently lose to the
-    // existing record's newer field states). Each patch is one
-    // getWithBase + patch round-trip — batching needs engine work (a
-    // base-aware patch_many) and is recorded as follow-up.
-    for (const { id, fields } of patches) {
-      const { base } = await target.getWithBase(def, id);
-      try {
-        await target.patch(def, { id, ...fields } as never, {
-          base: base ?? undefined,
-        });
-        merged++;
-      } catch (e) {
-        // Same tolerance as the bulkPut path: a record deleted while the
-        // merge was in flight (e.g. a remote tombstone landing via a
-        // concurrent sync) or a unique-field collision means "skip this
-        // record", not "fail the adoption" — the merge is idempotent and
-        // a thrown error here blocks the login path. Classified on the
-        // engine's stable error code; deleted/not-found is the tombstone
-        // disposition, unique is a conflict, and anything without a
-        // recognized code fails loudly (a reworded/new engine error must
-        // not be silently skipped).
-        const code = dbErrorCode(e);
-        const msg = String((e as Error)?.message ?? e);
-        if (
-          code === DbErrorCode.Deleted ||
-          code === DbErrorCode.NotFound ||
-          code === DbErrorCode.UniqueConstraint
-        ) {
-          console.warn(
-            `[betterbase-db] mergeDatabaseRecords: skipped ${def.name}/${id}: ${msg}`,
-          );
-          if (code === DbErrorCode.UniqueConstraint) {
-            skippedConflict++;
-          } else {
-            skippedTombstoned++;
-          }
-          continue;
-        }
-        throw new Error(
-          `mergeDatabaseRecords: patch failed for ${def.name}/${id}: ${msg}`,
-        );
-      }
-    }
-  }
-  return { merged, skipped, skippedTombstoned, skippedConflict };
-}
-
-/** Fields the merge never rewrites (identity + engine-managed). */
-const SKIPPED_FIELDS = new Set(["id", "createdAt", "updatedAt", "_spaceId"]);
-
-/**
- * Merge a source (anonymous) record onto the alive target (account)
- * record field by field. Scalars take whichever side was written later
- * (record-level `updatedAt` approximates per-field LWW — the store's own
- * resolution would drop the older side's embedded arrays wholesale);
- * arrays always union so embedded items are never lost; fields that are
- * absent (or null) on the winning side copy from the other.
- * `createdAt`/`updatedAt` stay absent so the store autofills them — the
- * merged view must land as a fresh edit.
- *
- * Approximations (deliberate, adoption-scoped):
- * - Nested plain objects take the winner's whole value — per-key merge at
- *   depth 2+ would need schema awareness.
- * - Element-level deletions are not detected: an item removed from an
- *   embedded array on the target while the source still holds it is
- *   re-added by the union (the inverse trade-off of the record-level
- *   tombstone rule, which is respected).
- * - A field whose shape drifted between the two records (array on one
- *   side, scalar on the other) keeps the winner's value and warns —
- *   shapes are compared at runtime, not against the schema.
- */
-function mergeRecordFields(
-  target: Record<string, unknown>,
-  sourceRecord: Record<string, unknown>,
-  source: Record<string, unknown>,
-): { fields: Record<string, unknown> } {
-  // Ties (same-millisecond writes) go to the source: its side is being
-  // retired right after the merge, so its last edit deserves to win.
-  // (updatedAt may arrive as a Date or an ISO string depending on the
-  // deserialization path — locale-stringifying a Date drops milliseconds
-  // and would collapse distinct writes into a tie.)
-  const ts = (v: unknown): number =>
-    v instanceof Date ? v.getTime() : Date.parse(String(v ?? ""));
-  const sourceNewer = ts(sourceRecord.updatedAt) >= ts(target.updatedAt);
-  const winner = sourceNewer ? source : target;
-  const loser = sourceNewer ? target : source;
-
-  const fields: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(winner)) {
-    if (SKIPPED_FIELDS.has(key)) continue;
-    fields[key] = value;
-  }
-  for (const [key, value] of Object.entries(loser)) {
-    if (SKIPPED_FIELDS.has(key)) continue;
-    const current = fields[key];
-    if (current === null || current === undefined) {
-      fields[key] = value;
-    } else if (Array.isArray(current) && Array.isArray(value)) {
-      fields[key] = unionArrays(current, value);
-    } else if (Array.isArray(current) !== Array.isArray(value)) {
-      // Shape drift between the two records: keep the winner's value but
-      // say so — silently dropping a side's array is the data-loss class
-      // this merge exists to prevent.
+    const result = await target.adoptRecords(def, candidates);
+    total.merged += result.mergedIds.length;
+    total.skippedTombstoned += result.skippedTombstoned;
+    total.skippedConflict += result.skippedConflict;
+    for (const warning of result.warnings) {
       console.warn(
-        `[betterbase-db] mergeDatabaseRecords: field ${key} has conflicting shapes (array vs non-array); keeping the newer record's value`,
+        `[betterbase-db] mergeDatabaseRecords: ${def.name}/${warning.id}${warning.field ? `.${warning.field}` : ""}: ${warning.message}`,
       );
     }
   }
-  return { fields };
-}
-
-/**
- * Union two arrays without duplicating elements. Objects with an `id`
- * dedupe by identity — on conflict the FIRST argument's version wins, and
- * callers pass the overall merge winner's array first, so element
- * conflicts resolve consistently with the scalar policy (whichever
- * record was written later). Anything else dedupes by value.
- */
-function unionArrays(winnerArr: unknown[], loserArr: unknown[]): unknown[] {
-  const keyOf = (el: unknown): string => {
-    if (el !== null && typeof el === "object" && "id" in el) {
-      return `id:${String((el as { id: unknown }).id)}`;
-    }
-    return `v:${JSON.stringify(el) ?? String(el)}`;
-  };
-  const out = new Map<string, unknown>();
-  for (const el of winnerArr) out.set(keyOf(el), el);
-  for (const el of loserArr) {
-    const key = keyOf(el);
-    if (!out.has(key)) out.set(key, el);
-  }
-  return [...out.values()];
+  return total;
 }

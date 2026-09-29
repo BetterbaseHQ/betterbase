@@ -247,6 +247,24 @@ pub struct ReactiveAdapter<B: StorageBackend> {
 }
 
 impl<B: StorageBackend> ReactiveAdapter<B> {
+    /// Atomic target-side adoption, followed by normal reactive notifications.
+    pub fn adopt_records(
+        &self,
+        def: &CollectionDef,
+        records: Vec<Value>,
+    ) -> Result<crate::adoption::AdoptRecordsResult> {
+        let result = self.inner.lock().adopt_records(def, records)?;
+        if !result.merged_ids.is_empty() {
+            self.emit_event(ChangeEvent::Bulk {
+                collection: def.name.clone(),
+                ids: result.merged_ids.clone(),
+            });
+            self.mark_dirty_collection(&def.name, &result.merged_ids);
+            self.flush();
+        }
+        Ok(result)
+    }
+
     /// Create a new `ReactiveAdapter` wrapping `adapter`.
     ///
     /// `initialize()` must still be called before any reads or writes.

@@ -1,3 +1,5 @@
+import type { AdoptRecordsResult } from "./types.js";
+
 /**
  * WASM module singleton — lazy-loaded, idempotent initialization.
  *
@@ -17,6 +19,7 @@ export interface WasmModule {
 /** @internal */
 export interface WasmDbInstance {
   initialize(defs: unknown[]): void;
+  adoptRecords(collection: string, records: unknown[]): AdoptRecordsResult;
   close(): void;
   releaseAccessHandles(): Promise<void>;
   deleteDatabase(): Promise<void>;

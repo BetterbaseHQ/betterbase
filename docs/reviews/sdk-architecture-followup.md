@@ -12,8 +12,8 @@ Next architecture slices (separate from the existing-helper consolidation above)
 
 - [ ] Extract the portable push retry/bisection/quarantine decisions into a Rust state machine when taking on the full coordinator port; preserve the six invariants in `docs/sync-push-policy.md`.
 - [x] Resolve middleware ownership and remove the unused WASM callback bridge; see [middleware ownership](db-middleware-ownership.md).
-- [ ] Resolve DB record adoption policy ownership (`merge-records.ts`); separate from middleware callbacks.
-- [ ] Generate shared serde DTO types across the complete WASM surface; structural function checks alone cannot verify `JsValue` fields.
+- [x] Resolve DB record adoption policy ownership; see [record adoption ownership](record-adoption-ownership.md).
+- [ ] Deferred at user request: generate shared serde DTO types across the complete WASM surface; structural function checks alone cannot verify `JsValue` fields.
 
 No v1 wire contracts may change. Browser I/O, React, resource lifetimes, and
 non-extractable CryptoKey custody remain platform responsibilities.

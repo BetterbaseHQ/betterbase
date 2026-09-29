@@ -10,6 +10,7 @@ import {
   buildDocsCollection,
   buildNotesCollection,
   buildBoardCollection,
+  buildAttachmentsCollection,
 } from "./opfs-helpers.js";
 
 const users = buildUsersCollection();
@@ -17,4 +18,4 @@ const docs = buildDocsCollection();
 const notes = buildNotesCollection();
 const boards = buildBoardCollection();
 
-initWorker([users, docs, notes, boards]);
+initWorker([users, docs, notes, boards, buildAttachmentsCollection()]);

@@ -1,0 +1,235 @@
+[
+  {
+    "name": "newer source wins scalars and element conflicts",
+    "target": {
+      "updatedAt": "2026-01-01T00:00:00.000Z",
+      "title": "old",
+      "items": [
+        {
+          "id": "a",
+          "v": 1
+        },
+        {
+          "id": "b",
+          "v": 2
+        }
+      ]
+    },
+    "source": {
+      "updatedAt": "2026-01-02T00:00:00.000Z",
+      "title": "new",
+      "items": [
+        {
+          "id": "a",
+          "v": 3
+        },
+        {
+          "id": "c",
+          "v": 4
+        }
+      ]
+    },
+    "fields": {
+      "title": "new",
+      "items": [
+        {
+          "id": "a",
+          "v": 3
+        },
+        {
+          "id": "c",
+          "v": 4
+        },
+        {
+          "id": "b",
+          "v": 2
+        }
+      ]
+    },
+    "warnings": []
+  },
+  {
+    "name": "newer target keeps scalar and unions missing values",
+    "target": {
+      "updatedAt": "2026-01-02T00:00:00.000Z",
+      "title": "account",
+      "tags": [
+        "a",
+        "b"
+      ]
+    },
+    "source": {
+      "updatedAt": "2026-01-01T00:00:00.000Z",
+      "title": "local",
+      "tags": [
+        "a",
+        "c"
+      ],
+      "note": "keep"
+    },
+    "fields": {
+      "title": "account",
+      "tags": [
+        "a",
+        "b",
+        "c"
+      ],
+      "note": "keep"
+    },
+    "warnings": []
+  },
+  {
+    "name": "millisecond ties favor source and strip managed fields",
+    "target": {
+      "id": "n",
+      "updatedAt": "2026-01-01T00:00:00.123Z",
+      "title": "target"
+    },
+    "source": {
+      "id": "n",
+      "createdAt": "old",
+      "updatedAt": "2026-01-01T00:00:00.123Z",
+      "_spaceId": "anonymous",
+      "title": "source"
+    },
+    "fields": {
+      "title": "source"
+    },
+    "warnings": []
+  },
+  {
+    "name": "millisecond comparison does not collapse distinct writes",
+    "target": {
+      "updatedAt": "2026-01-01T00:00:00.124Z",
+      "title": "target"
+    },
+    "source": {
+      "updatedAt": "2026-01-01T00:00:00.123Z",
+      "title": "source"
+    },
+    "fields": {
+      "title": "target"
+    },
+    "warnings": []
+  },
+  {
+    "name": "missing timestamps favor target",
+    "target": {
+      "title": "target",
+      "nested": {
+        "a": 1
+      },
+      "note": null
+    },
+    "source": {
+      "title": "source",
+      "nested": {
+        "b": 2
+      },
+      "note": "fill"
+    },
+    "fields": {
+      "title": "target",
+      "nested": {
+        "a": 1
+      },
+      "note": "fill"
+    },
+    "warnings": []
+  },
+  {
+    "name": "shape mismatch keeps winner with diagnostic",
+    "target": {
+      "items": "scalar"
+    },
+    "source": {
+      "items": [
+        1,
+        2
+      ]
+    },
+    "fields": {
+      "items": "scalar"
+    },
+    "warnings": [
+      "items"
+    ]
+  },
+  {
+    "name": "structurally equal JSON elements dedupe regardless of key order",
+    "target": {
+      "items": [
+        {
+          "a": 1,
+          "b": 2
+        },
+        1
+      ]
+    },
+    "source": {
+      "items": [
+        {
+          "b": 2,
+          "a": 1
+        },
+        1.0,
+        2
+      ]
+    },
+    "fields": {
+      "items": [
+        {
+          "a": 1,
+          "b": 2
+        },
+        1,
+        2
+      ]
+    },
+    "warnings": []
+  },
+  {
+    "name": "loser duplicate ids do not replace winner",
+    "target": {
+      "items": [
+        {
+          "id": "a",
+          "v": 1
+        },
+        {
+          "id": "a",
+          "v": 2
+        }
+      ]
+    },
+    "source": {
+      "items": [
+        {
+          "id": "a",
+          "v": 3
+        },
+        {
+          "id": "b",
+          "v": 4
+        },
+        {
+          "id": "b",
+          "v": 5
+        }
+      ]
+    },
+    "fields": {
+      "items": [
+        {
+          "id": "a",
+          "v": 2
+        },
+        {
+          "id": "b",
+          "v": 4
+        }
+      ]
+    },
+    "warnings": []
+  }
+]

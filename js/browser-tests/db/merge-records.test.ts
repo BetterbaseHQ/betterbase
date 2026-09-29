@@ -16,6 +16,7 @@ import {
   buildUsersCollection,
   buildDocsCollection,
   buildBoardCollection,
+  buildAttachmentsCollection,
 } from "./opfs-helpers.js";
 import type { Database } from "../../src/db/index.js";
 
@@ -548,5 +549,108 @@ describe("mergeDatabaseRecords", () => {
     });
     expect(await target.db.getAll(boards)).toHaveLength(0);
     expect(await target.db.getAll(users)).toHaveLength(1);
+  });
+  it("merges a target edit queued during seed filtering without host target scans", async () => {
+    const boards = buildBoardCollection();
+    const source = await openFreshOpfsDb([boards]);
+    const target = await openFreshOpfsDb([boards]);
+    openDbs.push(source.db, target.db);
+    await source.db.put(boards, {
+      id: "shared-id",
+      title: "local",
+      cards: [{ id: "local", text: "keep local", done: false }],
+    });
+    await target.db.put(boards, {
+      id: "shared-id",
+      title: "account",
+      cards: [],
+    });
+    const getAll = vi.spyOn(target.db, "getAll");
+    const getWithBase = vi.spyOn(target.db, "getWithBase");
+    const patch = target.db.patch.bind(target.db);
+    let edited = false;
+    await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [boards],
+      skipRecord: async () => {
+        await patch(boards, {
+          id: "shared-id",
+          title: "peer edit",
+          cards: [{ id: "peer", text: "keep peer", done: false }],
+        });
+        edited = true;
+        return false;
+      },
+    });
+    expect(edited).toBe(true);
+    expect(getAll).not.toHaveBeenCalled();
+    expect(getWithBase).not.toHaveBeenCalled();
+    const record = await target.db.get(boards, "shared-id");
+    expect(record?.title).toBe("peer edit");
+    expect(record?.cards.map((card) => card.id).sort()).toEqual([
+      "local",
+      "peer",
+    ]);
+  });
+
+  it("rolls back a fatal collection error and preserves its stable error code", async () => {
+    const boards = buildBoardCollection();
+    const target = await openFreshOpfsDb([boards]);
+    openDbs.push(target.db);
+    await expect(
+      target.db.adoptRecords(boards, [
+        { id: "valid", title: "good", cards: [] },
+        { id: "invalid", title: 42, cards: [] },
+      ]),
+    ).rejects.toMatchObject({ code: "schema" });
+    expect(await target.db.getAll(boards)).toEqual([]);
+  });
+
+  it("preserves date and byte fields across adoption serialization", async () => {
+    const attachments = buildAttachmentsCollection();
+    const source = await openFreshOpfsDb([attachments]);
+    const target = await openFreshOpfsDb([attachments]);
+    openDbs.push(source.db, target.db);
+    const when = new Date("2026-01-01T00:00:00.123Z");
+    const bytes = new Uint8Array([0, 1, 128, 255]);
+    await source.db.put(attachments, { id: "a", when, bytes });
+    await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [attachments],
+    });
+    const record = await target.db.get(attachments, "a");
+    expect(record?.when).toEqual(when);
+    expect(record?.bytes).toEqual(bytes);
+    await mergeDatabaseRecords({
+      source: source.db,
+      target: target.db,
+      collections: [attachments],
+    });
+    expect((await target.db.get(attachments, "a"))?.bytes).toEqual(bytes);
+  });
+
+  it("notifies an existing target observer after adoption commits", async () => {
+    const boards = buildBoardCollection();
+    const source = await openFreshOpfsDb([boards]);
+    const target = await openFreshOpfsDb([boards]);
+    openDbs.push(source.db, target.db);
+    await source.db.put(boards, { id: "a", title: "adopted", cards: [] });
+    const callback = vi.fn();
+    const stop = target.db.observe(boards, "a", callback);
+    try {
+      await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+      await mergeDatabaseRecords({
+        source: source.db,
+        target: target.db,
+        collections: [boards],
+      });
+      await vi.waitFor(() =>
+        expect(callback.mock.lastCall?.[0]?.title).toBe("adopted"),
+      );
+    } finally {
+      stop();
+    }
   });
 });

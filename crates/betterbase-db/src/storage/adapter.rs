@@ -256,6 +256,126 @@ impl<B: StorageBackend> Adapter<B> {
         Ok(())
     }
 
+    /// Adopt one collection atomically against its current target state.
+    /// Unique collisions are tolerated; all other failures roll back the batch.
+    pub fn adopt_records(
+        &self,
+        def: &CollectionDef,
+        records: Vec<Value>,
+    ) -> Result<crate::adoption::AdoptRecordsResult> {
+        use crate::adoption::{AdoptRecordsResult, AdoptionWarning};
+
+        self.check_initialized()?;
+        self.backend.transaction(|backend| {
+            let mut result = AdoptRecordsResult::default();
+            for source in records {
+                let source = source.as_object().ok_or_else(|| {
+                    crate::error::SchemaError::Serialization(
+                        "Adoption record must be an object".into(),
+                    )
+                })?;
+                let id = source
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| {
+                        crate::error::SchemaError::Serialization(
+                            "Adoption record must have a non-empty string id".into(),
+                        )
+                    })?;
+                let write = self.adopt_record_impl(backend, def, id, source);
+                match write {
+                    Ok(None) => result.skipped_tombstoned += 1,
+                    Ok(Some(warnings)) => {
+                        result.merged_ids.push(id.to_string());
+                        for field in warnings {
+                            result.warnings.push(AdoptionWarning {
+                                id: id.to_string(),
+                                field: Some(field),
+                                message: "conflicting array/scalar shapes; keeping the selected record's value".into(),
+                            });
+                        }
+                    }
+                    Err(LessDbError::Storage(error))
+                        if matches!(*error, StorageError::UniqueConstraint { .. }) =>
+                    {
+                        result.skipped_conflict += 1;
+                        result.warnings.push(AdoptionWarning {
+                            id: id.to_string(),
+                            field: None,
+                            message: error.to_string(),
+                        });
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(result)
+        })
+    }
+
+    /// None denotes a target tombstone; successful writes return shape warnings.
+    fn adopt_record_impl(
+        &self,
+        backend: &B,
+        def: &CollectionDef,
+        id: &str,
+        source: &serde_json::Map<String, Value>,
+    ) -> Result<Option<Vec<String>>> {
+        use crate::adoption::{merge_fields, source_fields};
+
+        let existing = backend.get_raw(&def.name, id)?;
+        if existing.as_ref().is_some_and(|record| record.deleted) {
+            return Ok(None);
+        }
+        if let Some(existing) = existing {
+            // Migrate before choosing fields/base, inside the same transaction.
+            let migrated = migrate_and_deserialize(def, &existing)?;
+            let mut current = SerializedRecord {
+                data: migrated.data,
+                crdt: migrated.crdt,
+                version: migrated.version,
+                ..existing
+            };
+            if migrated.was_migrated {
+                current.computed = crate::storage::record_manager::compute_index_values(
+                    &current.data,
+                    &def.indexes,
+                );
+            }
+            let (fields, warnings) = merge_fields(&current.data, source);
+            let prepared = prepare_patch(
+                def,
+                &current,
+                Value::Object(fields),
+                self.get_or_create_session_id_on(backend)?,
+                &PatchOptions {
+                    id: id.to_string(),
+                    base: Some(current.crdt.clone()),
+                    ..Default::default()
+                },
+            )?;
+            if migrated.was_migrated || prepared.has_changes {
+                // Validate before persisting either the migration or adoption.
+                // A tolerated collision leaves the original record untouched,
+                // including on backends without nested transactions.
+                self.check_unique_constraints_on(
+                    backend,
+                    def,
+                    &prepared.record.data,
+                    prepared.record.computed.as_ref(),
+                    Some(id),
+                )?;
+                backend.put_raw(&prepared.record)?;
+            }
+            Ok(Some(warnings))
+        } else {
+            let mut fields = source_fields(source);
+            fields.insert("id".into(), Value::String(id.to_string()));
+            self.put_impl(backend, def, &Value::Object(fields), &PutOptions::default())?;
+            Ok(Some(Vec::new()))
+        }
+    }
+
     fn put_impl(
         &self,
         backend: &B,

@@ -125,6 +125,10 @@ export class OpfsWorkerHost {
       case "getAll":
         return this.wasm.getAll(args[0] as string, args[1] ?? null);
 
+      // Atomic target-side adoption
+      case "adoptRecords":
+        return this.wasm.adoptRecords(args[0] as string, args[1] as unknown[]);
+
       // Bulk
       case "bulkPut":
         return this.wasm.bulkPut(

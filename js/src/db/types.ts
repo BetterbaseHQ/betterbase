@@ -575,3 +575,11 @@ export type CollectionDef<
   _TRead = unknown,
   _TWrite = unknown,
 > = CollectionDefHandle<TName, TSchema>;
+
+/** Target-side adoption result. Dispositions are decided inside Rust. */
+export interface AdoptRecordsResult {
+  mergedIds: string[];
+  skippedTombstoned: number;
+  skippedConflict: number;
+  warnings: { id: string; field: string | null; message: string }[];
+}

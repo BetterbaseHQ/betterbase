@@ -7,6 +7,7 @@
  */
 
 import type {
+  AdoptRecordsResult,
   SchemaShape,
   CollectionDefHandle,
   CollectionRead,
@@ -353,6 +354,28 @@ export class Database {
   // ========================================================================
   // Bulk operations
   // ========================================================================
+
+  /** Adopt JSON-compatible source records atomically within this collection.
+   * Source timestamps select scalar winners; source metadata is not imported.
+   * Fatal errors roll back the collection; unique collisions are counted skips.
+   */
+  async adoptRecords(
+    def: CollectionDefHandle,
+    records: Record<string, unknown>[],
+  ): Promise<AdoptRecordsResult> {
+    const result = (await this.rpc.call("adoptRecords", [
+      def.name,
+      records.map((record) => serializeForRust(record)),
+    ])) as AdoptRecordsResult;
+    if (result.mergedIds.length > 0) {
+      this.emitAndBroadcast({
+        type: "bulk",
+        collection: def.name,
+        ids: result.mergedIds,
+      });
+    }
+    return result;
+  }
 
   async bulkPut<S extends SchemaShape>(
     def: CollectionDefHandle<string, S>,
