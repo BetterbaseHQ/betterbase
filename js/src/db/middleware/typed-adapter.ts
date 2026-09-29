@@ -58,6 +58,11 @@ export class TypedAdapter<
     inner: Database,
     middleware: Middleware<TExtra, TWriteOpts, TQueryOpts>,
   ) {
+    if ("shouldResetSyncState" in middleware) {
+      throw new Error(
+        "shouldResetSyncState cannot run across the DB worker; use resetSyncStateOn metadata fields instead",
+      );
+    }
     this.inner = inner;
     this.middleware = middleware;
   }
@@ -127,8 +132,15 @@ export class TypedAdapter<
   ): Promise<number> {
     const metaFilter = this.resolveQueryFilter(queryOptions);
     if (metaFilter) {
-      const result = await this.query(def, query, queryOptions);
-      return result.total ?? result.records.length;
+      const { limit: _limit, offset: _offset, ...unpagedQuery } = query ?? {};
+      const result = await this.inner.query(def, unpagedQuery);
+      return result.records.filter((record) =>
+        metaFilter(
+          (record as Record<string | symbol, unknown>)[META_KEY] as
+            | Record<string, unknown>
+            | undefined,
+        ),
+      ).length;
     }
     return this.inner.count(def, query);
   }
@@ -144,7 +156,7 @@ export class TypedAdapter<
   ): Promise<CollectionRead<S> & TExtra> {
     const putOpts = this.resolveWriteOptions(options);
     const record = await this.inner.put(def, data, putOpts);
-    return this.enrichData(record, putOpts.meta);
+    return this.enrichRecord(record);
   }
 
   async patch<S extends SchemaShape>(
@@ -154,7 +166,7 @@ export class TypedAdapter<
   ): Promise<CollectionRead<S> & TExtra> {
     const patchOpts = this.resolvePatchOptions(options);
     const record = await this.inner.patch(def, data, patchOpts);
-    return this.enrichData(record, patchOpts.meta);
+    return this.enrichRecord(record);
   }
 
   /** Opaque CRDT snapshot for base-aware patching — see Database.snapshotBase. */
@@ -198,7 +210,7 @@ export class TypedAdapter<
     const putOpts = this.resolveWriteOptions(options);
     const result = await this.inner.bulkPut(def, records, putOpts);
     return {
-      records: result.records.map((r) => this.enrichData(r, putOpts.meta)),
+      records: result.records.map((r) => this.enrichRecord(r)),
       errors: result.errors,
     };
   }
@@ -248,9 +260,17 @@ export class TypedAdapter<
     queryOptions?: TQueryOpts,
     options?: ObserveOptions,
   ): () => void {
+    let metaFilter: ReturnType<typeof this.resolveQueryFilter>;
+    try {
+      metaFilter = this.resolveQueryFilter(queryOptions);
+    } catch (error) {
+      reportObserveError(error, options?.onError);
+      return () => {};
+    }
+    const { limit, offset, ...unpagedQuery } = query;
     return this.inner.observeQuery(
       def,
-      query,
+      metaFilter ? unpagedQuery : query,
       (result) => {
         const deliver = (
           records: CollectionRead<S>[],
@@ -261,7 +281,6 @@ export class TypedAdapter<
             total: total ?? records.length,
           });
         try {
-          const metaFilter = this.resolveQueryFilter(queryOptions);
           if (metaFilter) {
             const filtered = result.records.filter((r) => {
               const meta = (r as Record<string | symbol, unknown>)[META_KEY] as
@@ -269,7 +288,12 @@ export class TypedAdapter<
                 | undefined;
               return metaFilter(meta);
             });
-            deliver(filtered, filtered.length);
+            const start = offset ?? 0;
+            const page =
+              limit === undefined
+                ? filtered.slice(start)
+                : filtered.slice(start, start + limit);
+            deliver(page, filtered.length);
           } else {
             deliver(result.records, result.total);
           }
@@ -336,16 +360,13 @@ export class TypedAdapter<
     return this.middleware.onRead(record, meta ?? {}) as T & TExtra;
   }
 
-  private enrichData<T>(record: T, meta: Record<string, unknown>): T & TExtra {
-    if (!this.middleware.onRead) return record as T & TExtra;
-    return this.middleware.onRead(record, meta) as T & TExtra;
-  }
-
   private resolveDeleteOptions(options?: TWriteOpts): DeleteOptions {
     const meta = this.resolveWriteMetadata(options);
-    // Spread the original options: engine-level fields (sessionId) must
-    // survive the middleware pass-through, with resolved meta overriding.
-    return { ...(options as DeleteOptions | undefined), meta };
+    const caller = options as DeleteOptions | undefined;
+    return {
+      ...caller,
+      meta: Object.keys(meta).length > 0 ? meta : (caller?.meta ?? {}),
+    };
   }
 
   private resolveWriteOptions(
@@ -361,6 +382,9 @@ export class TypedAdapter<
       | undefined;
     return {
       ...(options as PutOptions | undefined),
+      ...(this.middleware.resetSyncStateOn
+        ? { resetSyncStateOn: this.middleware.resetSyncStateOn }
+        : {}),
       meta: Object.keys(meta).length > 0 ? meta : (callerMeta ?? {}),
     };
   }

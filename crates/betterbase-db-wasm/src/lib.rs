@@ -13,6 +13,5 @@ pub mod conversions;
 pub mod diagnostics;
 pub mod error;
 pub mod file_store;
-pub mod middleware;
 pub mod wasm_sqlite;
 pub mod wasm_sqlite_backend;

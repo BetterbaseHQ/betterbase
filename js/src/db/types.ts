@@ -199,7 +199,13 @@ export interface QueryResult<T> {
 // CRUD option types
 // ============================================================================
 
-export interface PutOptions {
+/** Declarative rule evaluated against merged metadata inside the write. */
+export interface SyncResetOptions {
+  /** Reset when any listed top-level metadata key is newly present or changes. */
+  resetSyncStateOn?: readonly string[];
+}
+
+export interface PutOptions extends SyncResetOptions {
   id?: string;
   sessionId?: number;
   skipUniqueCheck?: boolean;
@@ -211,7 +217,7 @@ export interface GetOptions {
   migrate?: boolean;
 }
 
-export interface PatchOptions {
+export interface PatchOptions extends SyncResetOptions {
   id: string;
   sessionId?: number;
   skipUniqueCheck?: boolean;

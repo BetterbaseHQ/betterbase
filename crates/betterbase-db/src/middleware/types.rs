@@ -22,8 +22,9 @@ pub trait Middleware: Send + Sync {
     /// Process write options and return metadata to persist on the record.
     /// Called with the user-supplied write options (as a JSON value).
     ///
-    /// Return `None` to store no metadata; return `Some(obj)` to shallow-merge
-    /// the object onto the record's existing metadata.
+    /// Return `None` or an empty object to preserve base write-option metadata;
+    /// otherwise the returned metadata overrides the base options. The storage
+    /// engine shallow-merges this metadata onto the record's existing metadata.
     ///
     /// Default: returns `None` (no metadata).
     fn on_write(&self, _options: &Value) -> Option<Value> {
@@ -35,6 +36,8 @@ pub trait Middleware: Send + Sync {
     /// and returns `true` to include the record.
     ///
     /// Return `None` for no filtering.
+    /// Resolved once per query or subscription. The returned predicate runs
+    /// against snapshot metadata before pagination.
     ///
     /// Default: returns `None` (no filter).
     fn on_query(&self, _options: &Value) -> Option<Box<MetaFilterFn>> {

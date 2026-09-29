@@ -485,3 +485,73 @@ describe("TypedAdapter observe error plumbing", () => {
     expect(cb).not.toHaveBeenCalled();
   });
 });
+
+describe("middleware ownership regressions", () => {
+  it("rejects the former no-op reset hook with migration guidance", () => {
+    const middleware = {
+      onWrite: () => ({}),
+      shouldResetSyncState: () => true,
+    };
+    expect(() => new TypedAdapter(makeDb(), middleware)).toThrow(
+      /use resetSyncStateOn/,
+    );
+  });
+  it("count resolves the filter once and does not invoke read enrichment", async () => {
+    const db = makeDb();
+    db.query = vi.fn().mockResolvedValue({
+      records: [
+        withMeta({ id: "a" }, { spaceId: "s" }),
+        withMeta({ id: "b" }, {}),
+      ],
+      total: 2,
+    });
+    const mw = spacesMiddleware("personal");
+    const onQuery = vi.spyOn(mw, "onQuery");
+    const onRead = vi.spyOn(mw, "onRead");
+    const adapter = new TypedAdapter<Extra, SpaceOpts, SpaceOpts>(db, mw);
+    expect(
+      await adapter.count(def, { offset: 100, limit: 1 }, { space: "s" }),
+    ).toBe(1);
+    expect(onQuery).toHaveBeenCalledTimes(1);
+    expect(onRead).not.toHaveBeenCalled();
+    expect(db.query).toHaveBeenCalledWith(def, {});
+  });
+
+  it("reports query-hook setup failures without creating a subscription", () => {
+    const db = makeDb();
+    const error = new Error("bad query options");
+    const adapter = new TypedAdapter(db, {
+      onQuery() {
+        throw error;
+      },
+    });
+    const onError = vi.fn();
+    const callback = vi.fn();
+    const stop = adapter.observeQuery(def, {}, callback, {}, { onError });
+    expect(onError).toHaveBeenCalledWith(error);
+    expect(db.observeQuery).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+    expect(() => stop()).not.toThrow();
+  });
+
+  it("reports predicate failures without delivering partial results", () => {
+    const db = makeDb();
+    let deliver: (r: QueryResult<unknown>) => void;
+    db.observeQuery = vi.fn().mockImplementation((_d, _q, cb) => {
+      deliver = cb;
+      return () => {};
+    });
+    const error = new Error("predicate failed");
+    const adapter = new TypedAdapter(db, {
+      onQuery: () => () => {
+        throw error;
+      },
+    });
+    const onError = vi.fn();
+    const callback = vi.fn();
+    adapter.observeQuery(def, { limit: 1 }, callback, {}, { onError });
+    deliver!({ records: [{ id: "n" }], total: 1 });
+    expect(onError).toHaveBeenCalledWith(error);
+    expect(callback).not.toHaveBeenCalled();
+  });
+});

@@ -90,6 +90,16 @@ Key functions by crate:
 - **betterbase-sync-core**: `encode_envelope()`, `decode_envelope()`, `encrypt_record()`, `decrypt_record()`, `pad_to_bucket()`, `unpad()`, `peek_epoch()`, `derive_forward()`, `rewrap_deks()`, `encrypt_membership_payload()`, `fold_membership_log()` (verified membership-log fold — all three space-manager member-state folds), `encode_request_frame()` / `decode_frame()` (rpc-v1), `apply_chunk()` (pull assembly)
 - **betterbase-db**: Collection definitions, schema validation, CRDT merge (json-joy Rust port), query engine
 
+### DB middleware ownership
+
+Browser `TypedAdapter` runs application callbacks on the caller thread and delegates
+storage to `Database -> worker -> WasmDb`. Native Rust has a separate native
+callback adapter; `WasmTypedDb` was removed. Rust owns metadata merging, CRDTs,
+and atomic sync resets. Browser middleware declares `resetSyncStateOn` metadata
+keys instead of a reset callback (functions cannot cross the worker). Both host
+adapters filter before pagination and enrich from persisted/snapshot metadata.
+See `docs/reviews/db-middleware-ownership.md` for the contract and migration.
+
 ### WASM boundary
 
 `betterbase-wasm` and `betterbase-db-wasm` use `#[wasm_bindgen]` with `serde-wasm-bindgen` for complex types and `Uint8Array` for binary data.

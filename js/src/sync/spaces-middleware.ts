@@ -149,11 +149,7 @@ export function createSpacesMiddleware(
         targetSpaceId;
     },
 
-    shouldResetSyncState(oldMeta, newMeta) {
-      const newSpaceId = newMeta.spaceId;
-      const oldSpaceId = oldMeta?.spaceId;
-      return newSpaceId !== undefined && newSpaceId !== oldSpaceId;
-    },
+    resetSyncStateOn: ["spaceId"],
   };
 }
 

@@ -29,8 +29,8 @@ use crate::reactive::adapter::ObservedRecord;
 
 /// Wraps a [`ReactiveAdapter`] with middleware hooks.
 ///
-/// The inner `ReactiveAdapter` is shared via `Arc` so that observe callbacks
-/// can perform secondary lookups to retrieve metadata for enrichment.
+/// A native callback host over the shared Rust storage engine. Observations
+/// enrich the metadata snapshot delivered by the inner `ReactiveAdapter`.
 ///
 /// The `ReactiveAdapter` must be initialized before wrapping in `TypedAdapter`.
 pub struct TypedAdapter<B: StorageBackend + 'static> {
@@ -104,7 +104,10 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
         write_opts: Option<&Value>,
         base: Option<&PutOptions>,
     ) -> PutOptions {
-        let meta = self.resolve_write_metadata(write_opts);
+        let meta = self
+            .resolve_write_metadata(write_opts)
+            .filter(|m| m.as_object().is_none_or(|obj| !obj.is_empty()))
+            .or_else(|| base.and_then(|b| b.meta.clone()));
         let mw = Arc::clone(&self.middleware);
         PutOptions {
             id: base.and_then(|b| b.id.clone()),
@@ -124,7 +127,10 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
         write_opts: Option<&Value>,
         base: Option<&PatchOptions>,
     ) -> PatchOptions {
-        let meta = self.resolve_write_metadata(write_opts);
+        let meta = self
+            .resolve_write_metadata(write_opts)
+            .filter(|m| m.as_object().is_none_or(|obj| !obj.is_empty()))
+            .or_else(|| base.and_then(|b| b.meta.clone()));
         let mw = Arc::clone(&self.middleware);
         PatchOptions {
             id: id.to_string(),
@@ -145,7 +151,10 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
         write_opts: Option<&Value>,
         base: Option<&DeleteOptions>,
     ) -> DeleteOptions {
-        let meta = self.resolve_write_metadata(write_opts);
+        let meta = self
+            .resolve_write_metadata(write_opts)
+            .filter(|m| m.as_object().is_none_or(|obj| !obj.is_empty()))
+            .or_else(|| base.and_then(|b| b.meta.clone()));
         DeleteOptions {
             id: id.to_string(),
             session_id: base.and_then(|b| b.session_id),
@@ -209,42 +218,20 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
         let default_query = Query::default();
         let q = query.unwrap_or(&default_query);
 
-        let result = self.inner.query(def, q)?;
-
         let meta_filter = self.resolve_query_filter(query_opts);
-        if let Some(filter) = meta_filter {
-            // Filter by meta predicate, then enrich
-            let mut filtered_records = Vec::new();
-            for sr in &result.records {
-                if !filter(sr.meta.as_ref()) {
-                    continue;
-                }
-                let empty = Value::Object(Default::default());
-                let meta = sr.meta.as_ref().unwrap_or(&empty);
-                filtered_records.push(self.enrich_data(sr.data.clone(), meta));
-            }
-            let total = filtered_records.len();
-            Ok(MiddlewareQueryResult {
-                records: filtered_records,
-                total,
-            })
-        } else {
-            // No meta filter — enrich each record using meta from query result
-            let enriched: Vec<Value> = result
-                .records
-                .iter()
-                .map(|sr| {
-                    let empty = Value::Object(Default::default());
-                    let meta = sr.meta.as_ref().unwrap_or(&empty);
-                    self.enrich_data(sr.data.clone(), meta)
-                })
-                .collect();
-            let total = result.total.unwrap_or(0);
-            Ok(MiddlewareQueryResult {
-                records: enriched,
-                total,
-            })
+        let mut fetch_query = q.clone();
+        if meta_filter.is_some() {
+            fetch_query.limit = None;
+            fetch_query.offset = None;
         }
+        let result = self.inner.query(def, &fetch_query)?;
+        Ok(enrich_query_result(
+            &*self.middleware,
+            result.records.into_iter().map(|r| (r.data, r.meta)),
+            result.total.unwrap_or(0),
+            meta_filter.as_deref(),
+            q,
+        ))
     }
 
     /// Count records, optionally filtered by `on_query`.
@@ -254,14 +241,19 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
         query: Option<&Query>,
         query_opts: Option<&Value>,
     ) -> Result<usize> {
-        let meta_filter = self.resolve_query_filter(query_opts);
-        if meta_filter.is_some() {
-            // Must load records to apply meta filter
-            let result = self.query(def, query, query_opts)?;
-            Ok(result.total)
-        } else {
-            self.inner.count(def, query)
-        }
+        let Some(filter) = self.resolve_query_filter(query_opts) else {
+            return self.inner.count(def, query);
+        };
+        let mut query = query.cloned().unwrap_or_default();
+        query.limit = None;
+        query.offset = None;
+        Ok(self
+            .inner
+            .query(def, &query)?
+            .records
+            .iter()
+            .filter(|record| filter(record.meta.as_ref()))
+            .count())
     }
 
     // -----------------------------------------------------------------------
@@ -502,59 +494,29 @@ impl<B: StorageBackend + 'static> TypedAdapter<B> {
         on_error: Option<Arc<dyn Fn(LessDbError) + Send + Sync>>,
         query_opts: Option<Value>,
     ) -> Unsubscribe {
-        let inner_clone = Arc::clone(&self.inner);
         let mw = Arc::clone(&self.middleware);
-        let def_clone = Arc::clone(&def);
-        let query_clone = query.clone();
-        let qopts = query_opts.clone();
-        let on_error_clone = on_error.clone();
-
-        let wrapped = Arc::new(move |_result: crate::reactive::ReactiveQueryResult| {
-            // Re-query through the middleware to get enriched + filtered results
-            let q = &query_clone;
-            let query_result = inner_clone.query(&def_clone, q);
-
-            match query_result {
-                Ok(result) => {
-                    // Apply meta filter if provided
-                    let meta_filter = qopts.as_ref().and_then(|opts| mw.on_query(opts));
-
-                    let mut enriched_records = Vec::new();
-                    for sr in &result.records {
-                        if let Ok(Some(stored)) =
-                            inner_clone.get(&def_clone, &sr.id, &GetOptions::default())
-                        {
-                            if let Some(ref filter) = meta_filter {
-                                if !filter(stored.meta.as_ref()) {
-                                    continue;
-                                }
-                            }
-                            let empty = Value::Object(Default::default());
-                            let meta = stored.meta.as_ref().unwrap_or(&empty);
-                            enriched_records.push(mw.on_read(stored.data, meta));
-                        }
-                    }
-
-                    let total = enriched_records.len();
-                    callback(MiddlewareQueryResult {
-                        records: enriched_records,
-                        total,
-                    });
-                }
-                Err(e) => {
-                    if let Some(ref on_err) = on_error_clone {
-                        on_err(e);
-                    } else {
-                        callback(MiddlewareQueryResult {
-                            records: Vec::new(),
-                            total: 0,
-                        });
-                    }
-                }
-            }
-        });
-
-        self.inner.observe_query(def, query, wrapped, on_error)
+        let meta_filter = self.resolve_query_filter(query_opts.as_ref());
+        let mut fetch_query = query.clone();
+        if meta_filter.is_some() {
+            fetch_query.limit = None;
+            fetch_query.offset = None;
+        }
+        self.inner.observe_query(
+            def,
+            fetch_query,
+            Arc::new(move |result| {
+                // Use the delivered atomic snapshot, including its metadata;
+                // re-reading each row can mix states from different writes.
+                callback(enrich_query_result(
+                    &*mw,
+                    result.records.into_iter().map(|r| (r.data, r.meta)),
+                    result.total,
+                    meta_filter.as_deref(),
+                    &query,
+                ));
+            }),
+            on_error,
+        )
     }
 }
 
@@ -588,6 +550,39 @@ pub struct MiddlewarePatchManyResult {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+fn enrich_query_result(
+    middleware: &dyn Middleware,
+    records: impl Iterator<Item = (Value, Option<Value>)>,
+    total: usize,
+    filter: Option<&super::types::MetaFilterFn>,
+    query: &Query,
+) -> MiddlewareQueryResult {
+    let mut records: Vec<_> = records
+        .filter(|(_, meta)| filter.is_none_or(|f| f(meta.as_ref())))
+        .collect();
+    let total = if filter.is_some() {
+        records.len()
+    } else {
+        total
+    };
+    if filter.is_some() {
+        records = records
+            .into_iter()
+            .skip(query.offset.unwrap_or(0))
+            .take(query.limit.unwrap_or(usize::MAX))
+            .collect();
+    }
+    MiddlewareQueryResult {
+        records: records
+            .into_iter()
+            .map(|(data, meta)| {
+                middleware.on_read(data, &meta.unwrap_or_else(|| serde_json::json!({})))
+            })
+            .collect(),
+        total,
+    }
+}
 
 fn record_errors_to_values(errors: &[crate::types::RecordError]) -> Vec<Value> {
     errors

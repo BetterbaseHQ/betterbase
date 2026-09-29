@@ -25,11 +25,14 @@ export interface Middleware<
     meta: Record<string, unknown>,
   ): TExtra & Record<string, unknown>;
   onWrite?(options: TWriteOpts): Record<string, unknown>;
+  /** Resolve once per query or subscription. The returned predicate runs on
+   * each metadata snapshot, before pagination; recreate a subscription to
+   * change its query options. */
   onQuery?(
     options: TQueryOpts,
   ): ((meta?: Record<string, unknown>) => boolean) | undefined;
-  shouldResetSyncState?(
-    oldMeta: Record<string, unknown> | undefined,
-    newMeta: Record<string, unknown>,
-  ): boolean;
+  /** Top-level metadata keys whose new or changed values reset the record's
+   * sync sequence and patch log. Evaluated atomically by Rust after merging
+   * metadata, including for bulk writes. Application callbacks stay in TS. */
+  resetSyncStateOn?: readonly string[];
 }

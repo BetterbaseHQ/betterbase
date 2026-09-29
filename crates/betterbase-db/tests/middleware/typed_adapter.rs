@@ -1799,3 +1799,168 @@ fn observe_with_base_delivers_none_after_delete() {
     let log = observed.lock().unwrap();
     assert!(log.iter().any(|e| e.is_none()), "deletion delivers None");
 }
+
+#[test]
+fn metadata_filter_precedes_pagination_for_query_count_and_observe() {
+    use betterbase_db::query::types::{Query, SortInput};
+    let def = todos_def();
+    let typed = make_typed(&def);
+    for (title, space) in [
+        ("a", "other"),
+        ("b", "shared"),
+        ("c", "shared"),
+        ("d", "shared"),
+    ] {
+        typed
+            .put(
+                &def,
+                json!({"title": title, "done": false}),
+                Some(&json!({"space": space})),
+                Some(&PutOptions {
+                    id: Some(title.into()),
+                    ..put_opts()
+                }),
+            )
+            .unwrap();
+    }
+    let query = Query {
+        sort: Some(SortInput::Field("title".into())),
+        offset: Some(1),
+        limit: Some(1),
+        ..Default::default()
+    };
+    let opts = json!({"space": "shared"});
+    let result = typed.query(&def, Some(&query), Some(&opts)).unwrap();
+    assert_eq!(result.records[0]["title"], "c");
+    assert_eq!(result.total, 3);
+    assert_eq!(typed.count(&def, Some(&query), Some(&opts)).unwrap(), 3);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let stop = typed.observe_query(
+        Arc::new(todos_def()),
+        query,
+        Arc::new(move |r| sink.lock().unwrap().push(r)),
+        None,
+        Some(opts),
+    );
+    typed.flush();
+    assert_eq!(
+        seen.lock().unwrap().last().unwrap().records[0]["title"],
+        "c"
+    );
+    assert_eq!(seen.lock().unwrap().last().unwrap().total, 3);
+    typed
+        .patch(
+            &def,
+            json!({"id": "b"}),
+            Some(&json!({"space": "other"})),
+            None,
+        )
+        .unwrap();
+    typed.flush();
+    assert_eq!(
+        seen.lock().unwrap().last().unwrap().records[0]["title"],
+        "d"
+    );
+    assert_eq!(seen.lock().unwrap().last().unwrap().total, 2);
+    stop();
+    let delivered = seen.lock().unwrap().len();
+    typed
+        .patch(&def, json!({"id": "c", "title": "z"}), None, None)
+        .unwrap();
+    typed.flush();
+    assert_eq!(seen.lock().unwrap().len(), delivered);
+}
+
+#[test]
+fn unfiltered_observation_retains_total_before_pagination() {
+    use betterbase_db::query::types::Query;
+    let def = todos_def();
+    let typed = make_typed(&def);
+    for title in ["a", "b", "c"] {
+        typed
+            .put(
+                &def,
+                json!({"title": title, "done": false}),
+                None,
+                Some(&put_opts()),
+            )
+            .unwrap();
+    }
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let stop = typed.observe_query(
+        Arc::new(todos_def()),
+        Query {
+            limit: Some(1),
+            ..Default::default()
+        },
+        Arc::new(move |r| sink.lock().unwrap().push(r)),
+        None,
+        None,
+    );
+    typed.flush();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.last().unwrap().records.len(), 1);
+    assert_eq!(seen.last().unwrap().total, 3);
+    stop();
+}
+
+#[test]
+fn empty_middleware_resolution_preserves_caller_metadata() {
+    let def = todos_def();
+    let typed = make_typed(&def);
+    let opts = PutOptions {
+        id: Some("n".into()),
+        meta: Some(json!({"spaceId": "shared", "tag": "original"})),
+        ..put_opts()
+    };
+    let record = typed
+        .put(
+            &def,
+            json!({"title": "a", "done": false}),
+            Some(&json!({})),
+            Some(&opts),
+        )
+        .unwrap();
+    assert_eq!(record["_spaceId"], "shared");
+    let record = typed
+        .patch(
+            &def,
+            json!({"id": "n", "title": "b"}),
+            Some(&json!({})),
+            Some(&betterbase_db::types::PatchOptions {
+                meta: Some(json!({"tag": "patched"})),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    assert_eq!(record["_spaceId"], "shared");
+    typed
+        .delete(
+            &def,
+            "n",
+            Some(&json!({})),
+            Some(&betterbase_db::types::DeleteOptions {
+                meta: Some(json!({"tag": "deleted"})),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    let tombstone = typed
+        .inner()
+        .get(
+            &def,
+            "n",
+            &GetOptions {
+                include_deleted: true,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tombstone.meta,
+        Some(json!({"spaceId": "shared", "tag": "deleted"}))
+    );
+}

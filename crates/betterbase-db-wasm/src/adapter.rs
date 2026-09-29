@@ -842,6 +842,24 @@ fn change_event_to_value(event: &betterbase_db::reactive::event::ChangeEvent) ->
     Value::Object(obj)
 }
 
+// Only data crosses the worker boundary. The predicate runs in Rust inside
+// the same write that merges metadata, avoiding a read-before-write race.
+fn parse_sync_reset_rule(
+    options: &Value,
+) -> Result<Option<Arc<betterbase_db::types::ShouldResetSyncStateFn>>, JsValue> {
+    // serde-wasm-bindgen represents an explicit JS undefined as JSON null.
+    // Optional write options treat either form like an omitted property.
+    let Some(value) = options.get("resetSyncStateOn").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let fields: Vec<String> = serde_json::from_value(value.clone()).map_err(|_| {
+        JsValue::from_str("resetSyncStateOn must be an array of metadata field names")
+    })?;
+    Ok(Some(betterbase_db::middleware::reset_on_metadata_change(
+        fields,
+    )))
+}
+
 fn parse_put_options(js: JsValue) -> Result<PutOptions, JsValue> {
     if js.is_null() || js.is_undefined() {
         return Ok(PutOptions::default());
@@ -858,7 +876,7 @@ fn parse_put_options(js: JsValue) -> Result<PutOptions, JsValue> {
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         meta: val.get("meta").cloned(),
-        should_reset_sync_state: None,
+        should_reset_sync_state: parse_sync_reset_rule(&val)?,
     })
 }
 
@@ -921,7 +939,7 @@ fn parse_patch_options(js: JsValue) -> Result<PatchOptions, JsValue> {
             .unwrap_or(false),
         meta: val.get("meta").cloned(),
         base,
-        should_reset_sync_state: None,
+        should_reset_sync_state: parse_sync_reset_rule(&val)?,
     })
 }
 

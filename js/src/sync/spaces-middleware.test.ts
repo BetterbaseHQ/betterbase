@@ -178,23 +178,10 @@ describe("createSpacesMiddleware onWrite", () => {
   });
 });
 
-describe("createSpacesMiddleware shouldResetSyncState", () => {
-  const mw = createSpacesMiddleware("personal-1");
-  const shouldReset = mw.shouldResetSyncState!;
-
-  it("resets when the record gains a (new) space", () => {
-    expect(shouldReset(undefined, { spaceId: "s" })).toBe(true);
-    expect(shouldReset({ spaceId: "a" }, { spaceId: "s" })).toBe(true);
-  });
-
-  it("does not reset when the space is unchanged", () => {
-    expect(shouldReset({ spaceId: "s" }, { spaceId: "s" })).toBe(false);
-  });
-
-  it("does not reset when the new state has no space (covers unset)", () => {
-    expect(shouldReset({ spaceId: "s" }, {})).toBe(false);
-    expect(shouldReset(undefined, {})).toBe(false);
-  });
+it("declares atomic sync reset on space changes", () => {
+  expect(createSpacesMiddleware("personal-1").resetSyncStateOn).toEqual([
+    "spaceId",
+  ]);
 });
 
 describe("reconstructState", () => {
