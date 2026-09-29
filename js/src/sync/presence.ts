@@ -10,6 +10,12 @@
  * - Cleanup on disconnect
  */
 
+import {
+  encodeReplayWrapper,
+  isReplayStale,
+  parseReplayWrapper,
+  presenceReplayMaxAgeMs,
+} from "./replay.js";
 import type { WSClient } from "./ws-client.js";
 
 /** A peer's presence entry. */
@@ -48,12 +54,11 @@ const HEARTBEAT_MIN = 25_000;
 const HEARTBEAT_MAX = 35_000;
 
 /**
- * Max age for replay mitigation. 2 minutes is generous to account for:
- * - Clock skew between clients (up to tens of seconds)
- * - Connection latency and message queuing delays
- * - Heartbeat jitter (max 35s between sends)
+ * Replay mitigation lives in the canonical replay module
+ * (`replay.ts`, Rust-canonical): presence payloads are `{d, t}` wrappers
+ * accepted only inside the presence replay window (120 s, inclusive;
+ * future timestamps are fresh — clock skew).
  */
-const PRESENCE_MAX_AGE = 120_000;
 
 /** Random interval in [HEARTBEAT_MIN, HEARTBEAT_MAX] to prevent traffic analysis. */
 function randomHeartbeatInterval(): number {
@@ -215,7 +220,7 @@ export class PresenceManager {
 
   /** Wrap data with timestamp for replay mitigation, encode, then encrypt. */
   private sendPresence(spaceId: string, data: unknown): void {
-    const encoded = this.config.encode({ d: data, t: Date.now() });
+    const encoded = encodeReplayWrapper(this.config.encode(data), Date.now());
     this.config.encrypt(spaceId, encoded).then(
       (encrypted) => {
         if (!encrypted) return; // Key not available yet — heartbeat will retry
@@ -239,13 +244,10 @@ export class PresenceManager {
     if (!plaintext) return undefined;
 
     try {
-      const wrapper = this.config.decode(plaintext) as {
-        d: unknown;
-        t: number;
-      };
-      if (!wrapper.t || Date.now() - wrapper.t > PRESENCE_MAX_AGE)
+      const wrapper = parseReplayWrapper(plaintext);
+      if (isReplayStale(Date.now(), wrapper.t, presenceReplayMaxAgeMs()))
         return undefined;
-      return wrapper.d;
+      return this.config.decode(wrapper.d);
     } catch {
       return undefined; // Malformed payload
     }

@@ -8,6 +8,7 @@ repository.workspace = true
 description = "BlobEnvelope CBOR encoding, padding, and transport encrypt/decrypt pipeline"
 
 [dependencies]
+base64ct = { version = "1", features = ["alloc"] }
 betterbase-crypto = { path = "../betterbase-crypto" }
 ciborium = "0.2"
 getrandom = { version = "0.4", features = ["wasm_js"] }

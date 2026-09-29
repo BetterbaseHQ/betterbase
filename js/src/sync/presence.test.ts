@@ -7,12 +7,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PresenceManager } from "./presence.js";
+import { decode as cborDecode, encode as cborEncode } from "cborg";
 import type { WSClient } from "./ws-client.js";
 
-const encode = (data: unknown) =>
-  new TextEncoder().encode(JSON.stringify(data));
-const decode = (bytes: Uint8Array) =>
-  JSON.parse(new TextDecoder().decode(bytes));
+// The `{d, t}` wrapper codec is Rust-canonical CBOR; the injected codec
+// only handles the payload (`d`), matching production (sync-engine wires
+// cborg).
+const encode = (data: unknown) => cborEncode(data);
+const decode = (bytes: Uint8Array) => cborDecode(bytes);
 
 function makeManager() {
   const ws = {

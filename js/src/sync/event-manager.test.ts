@@ -7,14 +7,10 @@
  * these behaviors are the entire correctness surface.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { decode, encode } from "cborg";
 import type { EventManagerConfig } from "./event-manager.js";
 import { EventManager } from "./event-manager.js";
 import type { WSClient } from "./ws-client.js";
-
-const encode = (data: unknown) =>
-  new TextEncoder().encode(JSON.stringify(data));
-const decode = (bytes: Uint8Array) =>
-  JSON.parse(new TextDecoder().decode(bytes));
 
 function makeManager(
   opts: {

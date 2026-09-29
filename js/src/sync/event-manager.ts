@@ -10,6 +10,12 @@
  * payload. The server only sees opaque bytes and a space ID.
  */
 
+import {
+  encodeReplayWrapper,
+  eventReplayMaxAgeMs,
+  isReplayStale,
+  parseReplayWrapper,
+} from "./replay.js";
 import type { WSClient } from "./ws-client.js";
 
 /** Callback for space events: receives the decoded payload and the sender's peer pseudonym. */
@@ -39,9 +45,9 @@ export interface EventManagerConfig {
  * Max age for event replay mitigation (ms). Events are one-shot, so a
  * tighter window than presence (which uses 2 min). 60s accounts for
  * clock skew between clients and connection latency. A captured-and-replayed
- * event older than this is silently dropped.
+ * event older than this is silently dropped. The window and the `{d, t}`
+ * wrapper are Rust-canonical (`replay.ts`).
  */
-const EVENT_MAX_AGE = 60_000;
 
 export class EventManager {
   private config: EventManagerConfig;
@@ -81,10 +87,10 @@ export class EventManager {
    */
   sendEvent(spaceId: string, name: string, data: unknown): void {
     // Wrap with timestamp: { d: { name, payload }, t: now }
-    const encoded = this.config.encode({
-      d: { name, payload: data },
-      t: Date.now(),
-    });
+    const encoded = encodeReplayWrapper(
+      this.config.encode({ name, payload: data }),
+      Date.now(),
+    );
     this.config.encrypt(spaceId, encoded).then(
       (encrypted) => {
         if (!encrypted) {
@@ -117,13 +123,13 @@ export class EventManager {
     if (!plaintext) return; // Decryption failed (stale key)
 
     try {
-      const wrapper = this.config.decode(plaintext) as {
-        d: { name: string; payload: unknown };
-        t: number;
-      };
-      if (!wrapper.t || Date.now() - wrapper.t > EVENT_MAX_AGE) return; // Stale replay
+      const wrapper = parseReplayWrapper(plaintext);
+      if (isReplayStale(Date.now(), wrapper.t, eventReplayMaxAgeMs())) return; // Stale replay
 
-      const decoded = wrapper.d;
+      const decoded = this.config.decode(wrapper.d) as {
+        name: string;
+        payload: unknown;
+      };
       const key = `${spaceId}:${decoded.name}`;
       const listeners = this.listeners.get(key);
       if (listeners) {

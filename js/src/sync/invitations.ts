@@ -8,6 +8,11 @@
 import { encryptJwe, decryptJwe } from "../auth/internals.js";
 import { bytesToBase64, base64ToBytes } from "./encoding.js";
 import { parseHandle } from "./handle.js";
+import {
+  parseMailboxMessage,
+  serializeInvitationPayload,
+} from "./invitation-wire.js";
+import type { InvitationPayloadWire } from "./invitation-wire.js";
 import type { TokenProvider } from "./types.js";
 import type { WSClient } from "./ws-client.js";
 
@@ -23,17 +28,12 @@ export interface InvitationPayload {
   };
 }
 
-/** Wire format of InvitationPayload inside JWE (space_key as base64 string). */
-interface InvitationPayloadWire {
-  space_id: string;
-  space_key: string;
-  ucan_chain: string[];
-  metadata: {
-    space_name?: string;
-    inviter_display_name?: string;
-    epoch?: number;
-  };
-}
+/**
+ * Wire format of InvitationPayload inside JWE (space_key as base64 string)
+ * — Rust-canonical (`invitation-wire.ts`, audit #9); re-exported for the
+ * send path.
+ */
+export type { InvitationPayloadWire } from "./invitation-wire.js";
 
 /** An invitation record from the server. */
 export interface Invitation {
@@ -161,7 +161,9 @@ export class InvitationClient {
       metadata: payload.metadata,
     };
 
-    const plaintext = new TextEncoder().encode(JSON.stringify(wirePayload));
+    const plaintext = new TextEncoder().encode(
+      serializeInvitationPayload(wirePayload),
+    );
     const jwe = encryptJwe(plaintext, recipientPublicKey);
 
     const result = await this.config.ws.createInvitation({
@@ -196,15 +198,19 @@ export class InvitationClient {
 
   /**
    * Decrypt an invitation payload using the recipient's private key.
+   * Throws when the plaintext is not an invitation payload (the canonical
+   * parser validates the frozen wire schema).
    */
   decryptInvitationPayload(
     invitation: Invitation,
     privateKeyJwk: JsonWebKey,
   ): InvitationPayload {
     const plaintext = decryptJwe(invitation.payload, privateKeyJwk);
-    const wire: InvitationPayloadWire = JSON.parse(
-      new TextDecoder().decode(plaintext),
-    );
+    const message = parseMailboxMessage(new TextDecoder().decode(plaintext));
+    if (message.kind !== "invitation") {
+      throw new Error("invitation payload: not an invitation payload");
+    }
+    const wire: InvitationPayloadWire = message;
 
     const spaceKey = base64ToBytes(wire.space_key);
 
@@ -212,7 +218,7 @@ export class InvitationClient {
       space_id: wire.space_id,
       space_key: spaceKey,
       ucan_chain: wire.ucan_chain,
-      metadata: wire.metadata,
+      metadata: wire.metadata ?? {},
     };
   }
 

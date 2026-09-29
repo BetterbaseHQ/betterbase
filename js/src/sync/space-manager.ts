@@ -25,6 +25,11 @@ import {
   UCAN_LIFETIME_SECONDS,
   type SpaceCredentials,
 } from "./spaces.js";
+import { INVALID_JSON_ERROR, parseMailboxMessage } from "./invitation-wire.js";
+import type {
+  InvitationPayloadWire,
+  MailboxMessageWire,
+} from "./invitation-wire.js";
 import { InvitationClient, type InvitationPayload } from "./invitations.js";
 import { SyncClient, AuthenticationError } from "./client.js";
 import { RPCCallError } from "./rpc-connection.js";
@@ -1554,11 +1559,16 @@ export class SpaceManager {
   ): Promise<boolean> {
     // Decrypt the raw JWE payload first
     const plaintext = decryptJwe(invitation.payload, privateKeyJwk);
-    let rawPayload: unknown;
+    let message: MailboxMessageWire;
     try {
-      rawPayload = JSON.parse(new TextDecoder().decode(plaintext));
-    } catch {
-      // Not valid JSON — skip this message
+      message = parseMailboxMessage(new TextDecoder().decode(plaintext));
+    } catch (err) {
+      // Not valid JSON at all — delete this message (pre-existing
+      // behavior). A malformed-but-valid-JSON payload throws to the
+      // caller's quarantine instead.
+      if (!(err instanceof Error) || err.message !== INVALID_JSON_ERROR) {
+        throw err;
+      }
       await this.invitationClient
         .deleteInvitation(invitation.id)
         .catch((err) => {
@@ -1571,13 +1581,13 @@ export class SpaceManager {
     }
 
     // Check if this is a revocation notice
-    if (isRevocationNotice(rawPayload)) {
+    if (message.kind === "revocation") {
       const verified = await this.verifyRevocation(
-        rawPayload.space_id,
-        rawPayload.epoch,
+        message.space_id,
+        message.epoch,
       );
       if (verified) {
-        await this.handleRevocation(rawPayload.space_id);
+        await this.handleRevocation(message.space_id);
       }
       // Delete notice regardless (verified or stale)
       await this.invitationClient
@@ -1592,7 +1602,7 @@ export class SpaceManager {
     }
 
     // Parse as invitation payload
-    const payload = parseInvitationWirePayload(rawPayload);
+    const payload = wireToInvitationPayload(message);
 
     // Dedup by spaceId field — skip if we already have an active/invited record
     const existing = await this.findBySpaceId(payload.space_id);
@@ -2157,52 +2167,23 @@ export class SpaceManager {
 }
 
 // ---------------------------------------------------------------------------
-// Invitation wire payload parsing
+// Invitation wire payload conversion
 // ---------------------------------------------------------------------------
 
 /**
- * Parse a decrypted invitation wire payload into InvitationPayload.
- * Converts the wire format (space_key as base64 string) to domain format.
+ * Convert a parsed invitation wire message (Rust-canonical schema,
+ * `invitation-wire.ts`) into the domain format (space_key as raw bytes).
  */
-function parseInvitationWirePayload(raw: unknown): InvitationPayload {
-  const wire = raw as {
-    space_id: string;
-    space_key: string;
-    ucan_chain: string[];
-    metadata: {
-      space_name?: string;
-      inviter_display_name?: string;
-      epoch?: number;
-    };
-  };
-  const binaryString = atob(wire.space_key);
-  const spaceKey = Uint8Array.from(binaryString, (c) => c.charCodeAt(0));
+function wireToInvitationPayload(
+  wire: InvitationPayloadWire,
+): InvitationPayload {
+  const spaceKey = base64ToBytes(wire.space_key);
   return {
     space_id: wire.space_id,
     space_key: spaceKey,
     ucan_chain: wire.ucan_chain,
-    metadata: wire.metadata,
+    metadata: wire.metadata ?? {},
   };
-}
-
-// ---------------------------------------------------------------------------
-// Revocation notice type guard
-// ---------------------------------------------------------------------------
-
-/** A revocation notice delivered via the mailbox. */
-interface RevocationNotice {
-  type: "revocation";
-  space_id: string;
-  epoch?: number;
-}
-
-function isRevocationNotice(p: unknown): p is RevocationNotice {
-  return (
-    typeof p === "object" &&
-    p !== null &&
-    (p as Record<string, unknown>).type === "revocation" &&
-    typeof (p as Record<string, unknown>).space_id === "string"
-  );
 }
 
 // ---------------------------------------------------------------------------

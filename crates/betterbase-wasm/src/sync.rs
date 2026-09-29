@@ -4,11 +4,14 @@ use crate::error::{to_js_error, to_js_value};
 use betterbase_sync_core::{
     build_membership_signing_message, classify_push_rejection, decode_envelope,
     decrypt_membership_payload, decrypt_record, derive_forward, encode_envelope,
-    encrypt_membership_payload, encrypt_record, fold_membership_log, pad_to_bucket,
-    parse_membership_entry, parse_spaces_record, peek_epoch, rewrap_deks,
-    serialize_membership_entry, unpad, verify_membership_entry, BlobEnvelope, MembershipEntryType,
-    PushRejectionKind, RejectionSource, DEFAULT_PADDING_BUCKETS, SPACES_COLLECTION, SPACES_FIELDS,
-    SPACES_MEMBER_STATUS_VALUES, SPACES_ROLE_VALUES, SPACES_SCHEMA_VERSION, SPACES_STATUS_VALUES,
+    encode_replay_wrapper, encrypt_membership_payload, encrypt_record, fold_membership_log,
+    is_replay_stale, pad_to_bucket, parse_mailbox_message, parse_membership_entry,
+    parse_replay_wrapper, parse_spaces_record, peek_epoch, rewrap_deks,
+    serialize_invitation_payload, serialize_membership_entry, unpad, verify_membership_entry,
+    BlobEnvelope, InvitationPayloadWire, MailboxMessage, MembershipEntryType, PushRejectionKind,
+    RejectionSource, DEFAULT_PADDING_BUCKETS, EVENT_REPLAY_MAX_AGE_MS, PRESENCE_REPLAY_MAX_AGE_MS,
+    SPACES_COLLECTION, SPACES_FIELDS, SPACES_MEMBER_STATUS_VALUES, SPACES_ROLE_VALUES,
+    SPACES_SCHEMA_VERSION, SPACES_STATUS_VALUES,
 };
 use wasm_bindgen::prelude::*;
 
@@ -428,4 +431,103 @@ pub fn wasm_parse_spaces_record(json: &str) -> Result<JsValue, JsValue> {
     let record = parse_spaces_record(json).map_err(to_js_error)?;
     let value: serde_json::Value = serde_json::to_value(&record).map_err(to_js_error)?;
     to_js_value(&value)
+}
+
+// --- Replay wrapper + windows (audit: presence/event wire) ---
+
+/// Max age of a presence heartbeat (ms) — Rust-canonical replay window.
+#[wasm_bindgen(js_name = "presenceReplayMaxAgeMs")]
+pub fn wasm_presence_replay_max_age_ms() -> i64 {
+    PRESENCE_REPLAY_MAX_AGE_MS
+}
+
+/// Max age of a one-shot event (ms) — Rust-canonical replay window.
+#[wasm_bindgen(js_name = "eventReplayMaxAgeMs")]
+pub fn wasm_event_replay_max_age_ms() -> i64 {
+    EVENT_REPLAY_MAX_AGE_MS
+}
+
+/// Replay-window decision: stale when the timestamp is absent/zero/negative
+/// or older than `maxAgeMs` (inclusive boundary; future timestamps are
+/// fresh). Pass `null` for `sentAtMs` when absent.
+#[wasm_bindgen(js_name = "isReplayStale")]
+pub fn wasm_is_replay_stale(now_ms: i64, sent_at_ms: Option<i64>, max_age_ms: i64) -> bool {
+    is_replay_stale(now_ms, sent_at_ms, max_age_ms)
+}
+
+/// Parse a CBOR `{d, t}` replay wrapper. Returns `{ d: Uint8Array, t: bigint }`
+/// where `d` is the re-serialized CBOR of the payload (value-equivalent to
+/// what was sent). Throws on malformed input.
+#[wasm_bindgen(js_name = "parseReplayWrapper")]
+pub fn wasm_parse_replay_wrapper(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let wrapper = parse_replay_wrapper(bytes).map_err(to_js_error)?;
+    // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
+    let obj = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &obj,
+        &"d".into(),
+        &js_sys::Uint8Array::from(wrapper.data_cbor.as_slice()),
+    )
+    .unwrap();
+    let t = js_sys::BigInt::new(&JsValue::from_str(&wrapper.sent_at_ms.to_string())).unwrap();
+    js_sys::Reflect::set(&obj, &"t".into(), &t).unwrap();
+    Ok(obj.into())
+}
+
+/// Encode a CBOR `{d, t}` replay wrapper from the payload's CBOR bytes and
+/// a millisecond timestamp.
+#[wasm_bindgen(js_name = "encodeReplayWrapper")]
+pub fn wasm_encode_replay_wrapper(data_cbor: &[u8], sent_at_ms: i64) -> Result<Vec<u8>, JsValue> {
+    encode_replay_wrapper(data_cbor, sent_at_ms).map_err(to_js_error)
+}
+
+// --- Mailbox messages (audit: invitation payload wire schema) ---
+
+/// Parse a mailbox message JWE plaintext (JSON): an invitation payload or a
+/// revocation notice, dispatched by the `type` field. Returns
+/// `{ kind: "invitation", space_id, space_key, ucan_chain, metadata? }` or
+/// `{ kind: "revocation", space_id, epoch? }` (`epoch` is always within
+/// the JS-safe integer range by the parser's rule, so it crosses as a
+/// plain Number). Throws on invalid JSON or a
+/// malformed payload with the frozen error message.
+#[wasm_bindgen(js_name = "parseMailboxMessage")]
+pub fn wasm_parse_mailbox_message(json: &str) -> Result<JsValue, JsValue> {
+    use serde::Serialize;
+    #[derive(Serialize)]
+    struct RevocationView {
+        space_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        epoch: Option<i64>,
+    }
+    #[derive(Serialize)]
+    #[serde(tag = "kind", rename_all = "camelCase")]
+    enum View {
+        Invitation(InvitationPayloadWire),
+        Revocation(RevocationView),
+    }
+    let view = match parse_mailbox_message(json).map_err(to_js_error)? {
+        MailboxMessage::Invitation(p) => View::Invitation(p),
+        MailboxMessage::Revocation(n) => View::Revocation(RevocationView {
+            space_id: n.space_id,
+            epoch: n.epoch,
+        }),
+    };
+    to_js_value(&view)
+}
+
+/// Validate an invitation payload (given as JSON text) and serialize it to
+/// its canonical wire JSON (frozen field order, compact).
+#[wasm_bindgen(js_name = "serializeInvitationPayload")]
+pub fn wasm_serialize_invitation_payload(json: &str) -> Result<String, JsValue> {
+    let payload = match parse_mailbox_message(json).map_err(to_js_error)? {
+        MailboxMessage::Invitation(p) => p,
+        // The canonical parser dispatches `type: "revocation"` elsewhere;
+        // an invitation serializer input is never a notice.
+        MailboxMessage::Revocation(_) => {
+            return Err(JsValue::from_str(
+                "invitation payload: not an invitation payload",
+            ))
+        }
+    };
+    Ok(serialize_invitation_payload(&payload))
 }

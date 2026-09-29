@@ -3,11 +3,14 @@
 pub mod envelope;
 pub mod error;
 pub mod frames;
+pub mod invitation;
+pub mod js_numbers;
 pub mod membership;
 pub mod padding;
 pub mod pull;
 pub mod push_policy;
 pub mod reencrypt;
+pub mod replay;
 pub mod rotation;
 pub mod spaces;
 pub mod transport;
@@ -22,6 +25,12 @@ pub use frames::{
     CLOSE_TOO_MANY_CONNECTIONS, KEEPALIVE_FRAME, MAX_FRAME_BYTES, RPC_CHUNK, RPC_NOTIFICATION,
     RPC_REQUEST, RPC_RESPONSE, WS_SUBPROTOCOL,
 };
+pub use invitation::{
+    parse_mailbox_message, serialize_invitation_payload, InvitationMetadata, InvitationPayloadWire,
+    MailboxMessage, MailboxMessageError, RevocationNotice, INVITATION_METADATA_FIELDS,
+    INVITATION_PAYLOAD_FIELDS, REVOCATION_NOTICE_FIELDS, REVOCATION_NOTICE_TYPE,
+};
+pub use js_numbers::{js_safe_uint, number_js_safe_uint, MAX_JS_SAFE_INTEGER};
 pub use membership::{
     build_membership_signing_message, decrypt_membership_payload, encrypt_membership_payload,
     fold_membership_log, parse_membership_entry, serialize_membership_entry, sha256_hash,
@@ -35,6 +44,10 @@ pub use pull::{
 };
 pub use push_policy::{classify_push_rejection, PushRejectionKind, RejectionSource};
 pub use reencrypt::{derive_forward, peek_epoch, rewrap_deks, RewrapEntry};
+pub use replay::{
+    encode_replay_wrapper, is_replay_stale, parse_replay_wrapper, ReplayError, ReplayWrapper,
+    EVENT_REPLAY_MAX_AGE_MS, PRESENCE_REPLAY_MAX_AGE_MS, REPLAY_WRAPPER_FIELDS,
+};
 pub use rotation::{
     should_rotate, KeyMode, RotationAction, RotationError, RotationEvent, RotationKind,
     RotationSpec, RotationState,

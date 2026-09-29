@@ -14,12 +14,13 @@
 //!
 //! Counter fields (`epoch`, `epochAdvancedAt`, `membershipLogSeq`) accept
 //! any JSON integer-valued number (incl. `1e3` / `1000.0` notation) up to
-//! `MAX_COUNTER` (2^53 − 1, JS `Number.MAX_SAFE_INTEGER`) so Rust, the wasm
-//! → JS boundary, and the node mirror all agree on acceptance. Only the
-//! semantic error messages are part of the frozen contract; the
-//! `malformed JSON: …` detail is engine-specific (serde vs. V8) and is not
-//! vector-pinned.
+//! the JS-safe ceiling (2^53 − 1, JS `Number.MAX_SAFE_INTEGER`) so Rust, the
+//! wasm → JS boundary, and the node mirror all agree on acceptance (see
+//! `crate::js_numbers`). Only the semantic error messages are part of the
+//! frozen contract; the `malformed JSON: …` detail is engine-specific
+//! (serde vs. V8) and is not vector-pinned.
 
+use crate::js_numbers::number_js_safe_uint;
 use crate::membership::{MemberRole, MemberStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -68,11 +69,6 @@ pub const SPACES_ROLE_VALUES: &[&str] = &["admin", "write", "read"];
 
 /// Frozen member `status` values (wire strings — the `MemberStatus` set).
 pub const SPACES_MEMBER_STATUS_VALUES: &[&str] = &["joined", "pending", "declined", "revoked"];
-
-/// Maximum counter value: JS `Number.MAX_SAFE_INTEGER` (2^53 − 1). Keeping
-/// counters inside the exact-integer range of a JS `Number` is what makes
-/// the acceptance rule identical across Rust, wasm→JS, and the node mirror.
-const MAX_COUNTER: u64 = 9_007_199_254_740_991;
 
 /// Membership status of the local user in a space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,22 +209,12 @@ pub fn parse_spaces_record(json: &str) -> Result<SpacesRecord, SpacesRecordError
                     Ok(None)
                 }
             }
-            Some(Value::Number(n)) => {
-                // Integer-valued numbers in any notation (u64 or f64-backed,
-                // e.g. `1e3` / `1000.0`) are accepted, capped at MAX_COUNTER
-                // so the JS mirror's `Number.isSafeInteger` check agrees.
-                let v = n.as_u64().or_else(|| {
-                    n.as_f64()
-                        .filter(|f| f.is_finite() && f.fract() == 0.0 && *f >= 0.0)
-                        .map(|f| f as u64)
-                });
-                match v.filter(|&u| u <= MAX_COUNTER) {
-                    Some(u) => Ok(Some(u)),
-                    None => Err(invalid(&format!(
-                        "field '{name}' must be a non-negative integer"
-                    ))),
-                }
-            }
+            Some(Value::Number(n)) => match number_js_safe_uint(n) {
+                Some(u) => Ok(Some(u)),
+                None => Err(invalid(&format!(
+                    "field '{name}' must be a non-negative integer"
+                ))),
+            },
             Some(_) => Err(invalid(&format!(
                 "field '{name}' must be a non-negative integer"
             ))),

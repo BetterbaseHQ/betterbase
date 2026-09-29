@@ -415,7 +415,85 @@ export interface WasmModule {
    * G7).
    */
   defaultEpochAdvanceIntervalMs(): bigint;
+  /**
+   * Replay windows (audit: presence/event wire) — Rust-canonical max ages
+   * for presence heartbeats (120 s) and one-shot events (60 s).
+   */
+  presenceReplayMaxAgeMs(): bigint;
+  eventReplayMaxAgeMs(): bigint;
+  /**
+   * Replay-window decision: stale when the timestamp is absent
+   * (`sentAtMs: null`), zero, or negative, or older than `maxAgeMs`
+   * (inclusive boundary; future timestamps are fresh — clock skew).
+   */
+  isReplayStale(
+    nowMs: bigint,
+    sentAtMs: bigint | null,
+    maxAgeMs: bigint,
+  ): boolean;
+  /**
+   * Parse a CBOR `{d, t}` replay wrapper (canonical parser). Returns the
+   * payload's CBOR bytes (value-equivalent to what was sent) and the
+   * timestamp. Throws on malformed input.
+   */
+  parseReplayWrapper(bytes: Uint8Array): ReplayWrapperDecoded;
+  /** Encode a `{d, t}` wrapper from payload CBOR bytes and a timestamp. */
+  encodeReplayWrapper(dataCbor: Uint8Array, sentAtMs: bigint): Uint8Array;
+  /**
+   * Parse a mailbox message JWE plaintext (audit: invitation payload wire
+   * schema): an invitation payload or a revocation notice, dispatched by
+   * the `type` field. Throws on invalid JSON / malformed payloads with the
+   * frozen error messages.
+   */
+  parseMailboxMessage(json: string): MailboxMessageWire;
+  /**
+   * Validate an invitation payload (JSON text) and serialize it to its
+   * canonical wire JSON (frozen field order, compact).
+   */
+  serializeInvitationPayload(json: string): string;
 }
+
+/** Decoded `{d, t}` replay wrapper as produced by `parseReplayWrapper`. */
+export interface ReplayWrapperDecoded {
+  /** Re-serialized CBOR of the payload (value-equivalent to what was sent). */
+  d: Uint8Array;
+  /** Sender timestamp (ms since epoch) — ≤ 2^53 − 1. */
+  t: bigint;
+}
+
+/**
+ * Mailbox message wire types (Rust-canonical:
+ * `betterbase-sync-core::invitation`, audit #9): the JSON inside a
+ * JWE-encrypted mailbox item. Two message types share the envelope,
+ * dispatched by `type: "revocation"`. Pinned by
+ * `crates/betterbase-sync-core/test-vectors/invitation-payload.json`.
+ */
+export interface InvitationMetadataWire {
+  space_name?: string;
+  inviter_display_name?: string;
+  /** Non-negative integer ≤ 2^53 − 1. */
+  epoch?: number;
+}
+
+/** Invitation payload wire schema (`space_key` is standard base64). */
+export interface InvitationPayloadWire {
+  space_id: string;
+  space_key: string;
+  ucan_chain: string[];
+  metadata?: InvitationMetadataWire;
+}
+
+/** Revocation notice wire schema. */
+export interface RevocationNoticeWire {
+  space_id: string;
+  /** Non-negative integer ≤ 2^53 − 1. */
+  epoch?: number;
+}
+
+/** A decoded mailbox message (invitation or revocation notice). */
+export type MailboxMessageWire =
+  | ({ kind: "invitation" } & InvitationPayloadWire)
+  | ({ kind: "revocation" } & RevocationNoticeWire);
 
 /** Decoded betterbase-rpc-v1 frame as produced by `decodeRpcFrame`. */
 export interface DecodedRpcFrame {
