@@ -5,9 +5,10 @@ use betterbase_sync_core::{
     build_membership_signing_message, classify_push_rejection, decode_envelope,
     decrypt_membership_payload, decrypt_record, derive_forward, encode_envelope,
     encrypt_membership_payload, encrypt_record, fold_membership_log, pad_to_bucket,
-    parse_membership_entry, peek_epoch, rewrap_deks, serialize_membership_entry, unpad,
-    verify_membership_entry, BlobEnvelope, MembershipEntryType, PushRejectionKind, RejectionSource,
-    DEFAULT_PADDING_BUCKETS,
+    parse_membership_entry, parse_spaces_record, peek_epoch, rewrap_deks,
+    serialize_membership_entry, unpad, verify_membership_entry, BlobEnvelope, MembershipEntryType,
+    PushRejectionKind, RejectionSource, DEFAULT_PADDING_BUCKETS, SPACES_COLLECTION, SPACES_FIELDS,
+    SPACES_MEMBER_STATUS_VALUES, SPACES_ROLE_VALUES, SPACES_SCHEMA_VERSION, SPACES_STATUS_VALUES,
 };
 use wasm_bindgen::prelude::*;
 
@@ -387,4 +388,44 @@ fn parse_entry_type(s: &str) -> Result<MembershipEntryType, JsValue> {
         "r" => Ok(MembershipEntryType::Revoked),
         _ => Err(JsValue::from_str(&format!("invalid entry type: {}", s))),
     }
+}
+
+// --- __spaces collection wire schema (audit G7) ---
+
+/// The `__spaces` collection schema (audit G7): collection name, schema
+/// version, canonical field names, and the frozen value sets for `status`,
+/// `role`, and member statuses. Rust-canonical — the TS `spaces` collection
+/// mirrors these constants and the vector file pins both sides.
+#[wasm_bindgen(js_name = "spacesSchema")]
+pub fn wasm_spaces_schema() -> JsValue {
+    use serde::Serialize;
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Schema<'a> {
+        collection: &'a str,
+        version: u32,
+        fields: &'a [&'a str],
+        status_values: &'a [&'a str],
+        role_values: &'a [&'a str],
+        member_status_values: &'a [&'a str],
+    }
+    to_js_value(&Schema {
+        collection: SPACES_COLLECTION,
+        version: SPACES_SCHEMA_VERSION,
+        fields: SPACES_FIELDS,
+        status_values: SPACES_STATUS_VALUES,
+        role_values: SPACES_ROLE_VALUES,
+        member_status_values: SPACES_MEMBER_STATUS_VALUES,
+    })
+    .expect("schema serializes")
+}
+
+/// Parse a `__spaces` record from its wire JSON (the canonical parser —
+/// explicit validation, stable error messages). Returns the record as a
+/// plain object (camelCase keys, absent optionals omitted).
+#[wasm_bindgen(js_name = "parseSpacesRecord")]
+pub fn wasm_parse_spaces_record(json: &str) -> Result<JsValue, JsValue> {
+    let record = parse_spaces_record(json).map_err(to_js_error)?;
+    let value: serde_json::Value = serde_json::to_value(&record).map_err(to_js_error)?;
+    to_js_value(&value)
 }

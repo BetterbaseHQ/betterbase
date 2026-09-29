@@ -395,8 +395,26 @@ export interface WasmModule {
     nowMs: bigint,
     advancedAtMs: bigint | null,
     isAdmin: boolean,
-    intervalMs: bigint,
+    intervalMs: bigint | null,
   ): boolean;
+  /**
+   * The `__spaces` collection schema (Rust-canonical, audit G7): collection
+   * name, schema version, canonical field names, and the frozen value sets
+   * for `status`, `role`, and member statuses.
+   */
+  spacesSchema(): SpacesSchema;
+  /**
+   * Parse a `__spaces` record from its wire JSON (canonical parser —
+   * explicit validation, stable error messages). Returns the record as a
+   * plain object (camelCase keys, absent optionals omitted).
+   */
+  parseSpacesRecord(json: string): SpacesRecord;
+  /**
+   * Rust-canonical epoch advance interval in milliseconds (30 days) — the
+   * value `shouldRotateSpaceEpoch` uses when `intervalMs` is null (audit
+   * G7).
+   */
+  defaultEpochAdvanceIntervalMs(): bigint;
 }
 
 /** Decoded betterbase-rpc-v1 frame as produced by `decodeRpcFrame`. */
@@ -702,6 +720,61 @@ export interface CallbackMachineState {
   mailboxRegistrationFailed: boolean;
   refreshFailed: boolean;
   tokenRefreshed: boolean;
+}
+
+/**
+ * `__spaces` record wire types (Rust-canonical:
+ * `betterbase-sync-core::spaces`, audit G7). The committed vectors
+ * (`crates/betterbase-sync-core/test-vectors/spaces-record.json`) pin these
+ * against the TS `spaces` collection definition.
+ */
+export type SpacesRecordStatus = "invited" | "active" | "removed";
+export type SpacesRecordRole = "admin" | "write" | "read";
+export type SpacesMemberStatus = "joined" | "pending" | "declined" | "revoked";
+
+/** One cached member entry from the membership log fold. */
+export interface SpacesMember {
+  did: string;
+  role: SpacesRecordRole;
+  status: SpacesMemberStatus;
+  handle?: string;
+}
+
+/** One `__spaces` record: a shared space the user belongs to. */
+export interface SpacesRecord {
+  /** Shared space id (used for lookups — NOT the record id). */
+  spaceId: string;
+  /** Display name (from invitation or creation). */
+  name: string;
+  status: SpacesRecordStatus;
+  role: SpacesRecordRole;
+  invitedBy?: string;
+  /** Base64-encoded AES-256 space key. */
+  spaceKey: string;
+  /** UCAN JWT (leaf token with proof chain embedded in `prf`). */
+  ucanChain: string;
+  /** Base64-encoded compressed P-256 public key of the space root. */
+  rootPublicKey: string;
+  /** Server-side invitation id (deleted on accept/decline). */
+  serverInvitationId?: string;
+  /** Key epoch number — how many times the space key has been rotated. */
+  epoch: number;
+  /** Unix ms the current epoch was established at (rotation scheduling). */
+  epochAdvancedAt?: number;
+  /** Cached parsed member list from the membership log. */
+  members?: SpacesMember[];
+  /** Highest seq seen in the membership log (incremental-fetch cursor). */
+  membershipLogSeq?: number;
+}
+
+/** The `__spaces` schema as exported by `wasm.spacesSchema()`. */
+export interface SpacesSchema {
+  collection: string;
+  version: number;
+  fields: string[];
+  statusValues: string[];
+  roleValues: string[];
+  memberStatusValues: string[];
 }
 
 // --- Shared types ---

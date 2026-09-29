@@ -69,13 +69,25 @@ pub fn wasm_rotation_abort(state: JsValue) -> Result<JsValue, JsValue> {
 /// (never as epoch zero); the interval is inclusive.
 ///
 /// Pass `null` for non-finite `advancedAtMs` (wasm `i64` cannot carry the
-/// distinction a `Number.isFinite` check makes in TS).
+/// distinction a `Number.isFinite` check makes in TS). Pass `null` (or omit)
+/// for `intervalMs` to use the Rust-canonical default
+/// (`DEFAULT_EPOCH_ADVANCE_INTERVAL_MS`, audit G7).
 #[wasm_bindgen(js_name = "shouldRotateSpaceEpoch")]
 pub fn wasm_should_rotate_space_epoch(
     now_ms: i64,
     advanced_at_ms: Option<i64>,
     is_admin: bool,
-    interval_ms: i64,
+    interval_ms: Option<i64>,
 ) -> bool {
-    should_rotate(now_ms, advanced_at_ms, is_admin, interval_ms)
+    let interval =
+        interval_ms.unwrap_or(betterbase_crypto::types::DEFAULT_EPOCH_ADVANCE_INTERVAL_MS as i64);
+    should_rotate(now_ms, advanced_at_ms, is_admin, interval)
+}
+
+/// The Rust-canonical epoch advance interval in milliseconds (audit G7).
+/// TS mirrors this as `DEFAULT_EPOCH_ADVANCE_INTERVAL_MS`; the browser test
+/// pins the two equal.
+#[wasm_bindgen(js_name = "defaultEpochAdvanceIntervalMs")]
+pub fn wasm_default_epoch_advance_interval_ms() -> i64 {
+    betterbase_crypto::types::DEFAULT_EPOCH_ADVANCE_INTERVAL_MS as i64
 }

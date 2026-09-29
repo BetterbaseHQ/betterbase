@@ -15,6 +15,11 @@ export const SUPPORTED_VERSIONS = new Set([4]);
 
 /**
  * Default epoch advance interval in milliseconds (30 days).
+ *
+ * Rust-canonical: `betterbase-crypto::types::DEFAULT_EPOCH_ADVANCE_INTERVAL_MS`
+ * (audit G7). The wasm `shouldRotateSpaceEpoch` uses that value when no
+ * interval is passed (and `defaultEpochAdvanceIntervalMs()` reads it); this
+ * mirror is the node-path value and the browser test pins the two equal.
  */
 export const DEFAULT_EPOCH_ADVANCE_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
 

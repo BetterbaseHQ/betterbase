@@ -385,7 +385,7 @@ pub fn sha256_hash(data: &[u8]) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 /// Member role derived from the UCAN's `cmd` permission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemberRole {
     Admin,
@@ -395,7 +395,7 @@ pub enum MemberRole {
 
 /// Membership status derived from the fold (revocation wins, then decline,
 /// then join, else pending).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemberStatus {
     Joined,

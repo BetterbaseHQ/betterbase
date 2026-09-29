@@ -493,6 +493,57 @@ describe("SpaceManager", () => {
       expect(typeof record.epochAdvancedAt).toBe("number");
       expect(manager.shouldRotateSpace("s1")).toBe(false);
     });
+
+    it("skips active records that violate the __spaces wire schema (audit G7 poison tolerance)", async () => {
+      // A record synced from a peer device (or written by a buggy SDK) must
+      // not poison the sync stack: warn + skip, continue initializing the
+      // rest.
+      db.records.set("rec-bad", spaceRecord({ role: "owner" }));
+      db.records.set(
+        "rec-good",
+        spaceRecord({ id: "rec-good", spaceId: "s2" }),
+      );
+
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const activated = await manager.initializeFromSpaces();
+
+      expect(activated).toBe(1);
+      expect(manager.getActiveSpaceIds()).toEqual(["s2"]);
+      // mockRestore would clear the recorded calls, so assert before
+      // restoring (the suite's clearAllMocks/unstubAllGlobals clean up).
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/s1.*__spaces/));
+      warn.mockRestore();
+    });
+
+    it("skips schema-valid records with undecodable credentials instead of aborting", async () => {
+      // `spaceKey` is a valid *string* (wire schema passes) but not base64:
+      // activation must not throw and take the whole loop down with it.
+      db.records.set(
+        "rec-badkey",
+        spaceRecord({
+          id: "rec-badkey",
+          spaceId: "s1",
+          spaceKey: "not!!base64",
+        }),
+      );
+      db.records.set(
+        "rec-good",
+        spaceRecord({ id: "rec-good", spaceId: "s2" }),
+      );
+
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const activated = await manager.initializeFromSpaces();
+
+      expect(activated).toBe(1);
+      expect(manager.getActiveSpaceIds()).toEqual(["s2"]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/unusable __spaces record for space s1/),
+        expect.anything(),
+      );
+      // mockRestore would clear the recorded calls, so restore after the
+      // assert (the suite's clearAllMocks/unstubAllGlobals clean up too).
+      warn.mockRestore();
+    });
   });
 
   describe("getMembers — membership log state machine", () => {

@@ -25,6 +25,7 @@ import type {
   RotationSpec,
   RotationState,
 } from "../wasm-init.js";
+import { DEFAULT_EPOCH_ADVANCE_INTERVAL_MS } from "../crypto/index.js";
 
 // ---------------------------------------------------------------------------
 // Errors (byte-pinned to the Rust machine)
@@ -630,15 +631,24 @@ function finishFrame(st: RotationState): void {
  * Whether a space's epoch key is due for scheduled rotation (canonical
  * policy — mirrors the pre-port TS check exactly): admin-only; a missing
  * or invalid `advancedAtMs` reads as "not due" (never as epoch zero); the
- * interval is inclusive.
+ * interval is inclusive. Omitted `intervalMs` defaults to the Rust-canonical
+ * `DEFAULT_EPOCH_ADVANCE_INTERVAL_MS` (audit G7) — mirrors the wasm export.
  */
 export function shouldRotateSpaceEpochMock(
   nowMs: number,
   advancedAtMs: number | null,
   isAdmin: boolean,
-  intervalMs: number,
+  intervalMs?: number,
 ): boolean {
+  const interval = intervalMs ?? DEFAULT_EPOCH_ADVANCE_INTERVAL_MS;
+  // Fail loud if a test's barrel mock of ../crypto/index.js dropped the
+  // constant: `>= undefined` would otherwise silently read "never due".
+  if (typeof interval !== "number") {
+    throw new Error(
+      "shouldRotateSpaceEpochMock: no epoch advance interval (barrel mock must export DEFAULT_EPOCH_ADVANCE_INTERVAL_MS)",
+    );
+  }
   if (!isAdmin) return false;
   if (advancedAtMs === null || advancedAtMs <= 0) return false;
-  return nowMs - advancedAtMs >= intervalMs;
+  return nowMs - advancedAtMs >= interval;
 }

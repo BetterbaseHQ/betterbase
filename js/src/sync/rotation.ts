@@ -134,23 +134,28 @@ export function rotationAbort(state: RotationState | null): RotationState {
  * policy — mirrors the pre-port TS check exactly): admin-only; a missing
  * or invalid `advancedAtMs` reads as "not due" (never as epoch zero); the
  * interval is inclusive.
+ *
+ * When `intervalMs` is omitted, the Rust-canonical default
+ * (`DEFAULT_EPOCH_ADVANCE_INTERVAL_MS`, audit G7) is used.
  */
 export function shouldRotateSpaceEpoch(
   nowMs: number,
   advancedAtMs: number | null,
   isAdmin: boolean,
-  intervalMs: number,
+  intervalMs?: number,
 ): boolean {
   const mod = wasmModule();
   if (mod && typeof mod.shouldRotateSpaceEpoch === "function") {
     try {
       // The wasm signature takes i64s (js bigints) — timestamps don't fit
-      // in a JS number at the wasm boundary.
+      // in a JS number at the wasm boundary. `== null` (not
+      // `=== undefined`): a null interval means "use the Rust-canonical
+      // default", exactly like the wasm signature's null.
       return mod.shouldRotateSpaceEpoch(
         BigInt(nowMs),
         advancedAtMs === null ? null : BigInt(advancedAtMs),
         isAdmin,
-        BigInt(intervalMs),
+        intervalMs == null ? null : BigInt(intervalMs),
       );
     } catch (e) {
       throw normalize(e);

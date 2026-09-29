@@ -9,6 +9,7 @@ pub mod pull;
 pub mod push_policy;
 pub mod reencrypt;
 pub mod rotation;
+pub mod spaces;
 pub mod transport;
 pub mod types;
 
@@ -37,6 +38,11 @@ pub use reencrypt::{derive_forward, peek_epoch, rewrap_deks, RewrapEntry};
 pub use rotation::{
     should_rotate, KeyMode, RotationAction, RotationError, RotationEvent, RotationKind,
     RotationSpec, RotationState,
+};
+pub use spaces::{
+    parse_spaces_record, serialize_spaces_record, SpaceMember, SpaceStatus, SpacesRecord,
+    SpacesRecordError, SPACES_COLLECTION, SPACES_FIELDS, SPACES_MEMBER_STATUS_VALUES,
+    SPACES_ROLE_VALUES, SPACES_SCHEMA_VERSION, SPACES_STATUS_VALUES,
 };
 pub use transport::{decrypt_record, encrypt_record};
 pub use types::BlobEnvelope;

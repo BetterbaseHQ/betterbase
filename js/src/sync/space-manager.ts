@@ -13,10 +13,7 @@
  */
 
 import type { TypedAdapter, CollectionRead } from "../db";
-import {
-  SyncCrypto,
-  DEFAULT_EPOCH_ADVANCE_INTERVAL_MS,
-} from "../crypto/index.js";
+import { SyncCrypto } from "../crypto/index.js";
 import {
   delegateUCAN,
   sign,
@@ -70,6 +67,7 @@ import {
   type SpaceRole,
   type SpaceStatus,
 } from "./spaces-collection.js";
+import { validateSpacesRecord } from "./spaces-record.js";
 import type {
   SpaceFields,
   SpaceWriteOptions,
@@ -1003,12 +1001,13 @@ export class SpaceManager {
         ? null
         : advancedAt;
     // Canonical policy (audit G3, wasm machine module): admin-only (only
-    // admins can call `epoch.begin`), inclusive interval.
+    // admins can call `epoch.begin`), inclusive interval. The interval is
+    // the Rust-canonical default (audit G7) — not passed across the
+    // boundary.
     return shouldRotateSpaceEpoch(
       Date.now(),
       normalized,
       this.spaceRoles.get(spaceId) === "admin",
-      DEFAULT_EPOCH_ADVANCE_INTERVAL_MS,
     );
   }
 
@@ -1635,10 +1634,6 @@ export class SpaceManager {
     return true;
   }
 
-  /**
-   * Initialize sync stacks for all active spaces from the spaces collection.
-   * Called during app startup after personal space sync has delivered space records.
-   */
   /** Initialize sync stacks from persisted space records. Returns count of newly activated spaces. */
   async initializeFromSpaces(): Promise<number> {
     const allSpaces = await this.config.db.getAll(spaces);
@@ -1647,26 +1642,54 @@ export class SpaceManager {
       if ((record.status as SpaceStatus) !== "active") continue;
       if (this.syncCryptos.has(record.spaceId)) continue; // Already initialized
 
-      this.createSyncStack({
-        spaceId: record.spaceId,
-        spaceKey: base64ToBytes(record.spaceKey),
-        rootUCAN: record.ucanChain,
-        rootPublicKey: record.rootPublicKey
-          ? base64ToBytes(record.rootPublicKey)
-          : new Uint8Array(0),
-        epoch: record.epoch,
-      });
-      this.spaceRoles.set(record.spaceId, record.role as SpaceRole);
+      // Validate against the frozen wire schema (Rust-canonical, audit G7):
+      // a record synced from a peer device or written by a buggy SDK must
+      // not poison the sync stack (garbage credentials/epoch would break
+      // createSyncStack or derive wrong keys). Poison tolerance (G4
+      // convention): warn + skip, never abort the whole initialization.
+      const validated = validateSpacesRecord(
+        record as unknown as Record<string, unknown>,
+      );
+      if (!validated.ok) {
+        console.warn(
+          `[betterbase-sync] Skipping invalid __spaces record for space ${record.spaceId}: ${validated.error}`,
+        );
+        continue;
+      }
+      const space = validated.record;
 
-      // Populate epochAdvancedAt from persisted record, backfilling if
-      // missing (null and undefined both mean "never recorded" — unset
-      // optionals can materialize as null in stored records)
-      if (record.epochAdvancedAt != null) {
-        this.spaceEpochAdvancedAt.set(record.spaceId, record.epochAdvancedAt);
+      // Schema-valid records can still carry undecodable or wrong-length
+      // credentials (a buggy SDK or a tampered peer record) — activation
+      // must not throw and take the whole loop down with it.
+      try {
+        this.createSyncStack({
+          spaceId: space.spaceId,
+          spaceKey: base64ToBytes(space.spaceKey),
+          rootUCAN: space.ucanChain,
+          rootPublicKey: space.rootPublicKey
+            ? base64ToBytes(space.rootPublicKey)
+            : new Uint8Array(0),
+          epoch: space.epoch,
+        });
+      } catch (err) {
+        console.warn(
+          `[betterbase-sync] Skipping unusable __spaces record for space ${record.spaceId}:`,
+          err,
+        );
+        continue;
+      }
+      this.spaceRoles.set(space.spaceId, space.role as SpaceRole);
+
+      // Populate epochAdvancedAt from the validated record, backfilling if
+      // missing or zero (null, undefined, and 0 all mean "never recorded" —
+      // unset optionals can materialize as null in stored records, and 0 is
+      // not a timestamp; a real one always exceeds the rotation interval)
+      if (space.epochAdvancedAt != null && space.epochAdvancedAt > 0) {
+        this.spaceEpochAdvancedAt.set(space.spaceId, space.epochAdvancedAt);
       } else {
         // Space record missing epochAdvancedAt — backfill with current time
         const now = Date.now();
-        this.spaceEpochAdvancedAt.set(record.spaceId, now);
+        this.spaceEpochAdvancedAt.set(space.spaceId, now);
         this.config.db
           .patch(spaces, { id: record.id, epochAdvancedAt: now } as never)
           .catch((err) => {

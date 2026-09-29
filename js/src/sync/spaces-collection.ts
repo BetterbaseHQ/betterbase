@@ -32,6 +32,13 @@ export type SpaceRole = "admin" | "write" | "read";
  *
  * Each record represents a shared space the user belongs to.
  * The record ID is auto-generated; use `spaceId` field for lookups.
+ *
+ * Wire schema (field names, value sets, and record validation) is
+ * Rust-canonical: `betterbase-sync-core::spaces` (audit G7). The committed
+ * vectors (`crates/betterbase-sync-core/test-vectors/spaces-record.json`)
+ * pin this schema against the Rust constants: the node test
+ * (`spaces-record.test.ts`) cross-checks these keys and the browser test
+ * (`spaces-record.test.ts`) cross-checks them against `wasm.spacesSchema()`.
  */
 export const spaces = collection("__spaces")
   .v(1, {
@@ -70,8 +77,6 @@ export const spaces = collection("__spaces")
     ),
     /** Highest seq seen in the membership log (cursor for incremental fetch). */
     membershipLogSeq: t.optional(t.number()),
-    /** Server metadata_version for this space (persisted from pull responses). */
-    /** Server rewrap_epoch for this space (non-null means rewrap in progress). */
   })
   .index(["spaceId"], { unique: true })
   .build();
