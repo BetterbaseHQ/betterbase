@@ -14,13 +14,10 @@
  * events fed between actions, and `finalState` the terminal machine state.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { CallbackMachineError } from "./oauth-callback-mock.js";
 import rawVectors from "../../../crates/betterbase-auth/test-vectors/oauth-callback.json";
-import {
-  CallbackMachineError,
-  oauthCallbackStart,
-  oauthCallbackStep,
-} from "./oauth-callback.js";
+import { oauthCallbackStart, oauthCallbackStep } from "./oauth-callback.js";
 import type {
   CallbackEvent,
   CallbackMachineState,
@@ -148,4 +145,9 @@ describe("oauth callback wrapper API", () => {
     expect(done.outcome.errorKind).toBe("csrf");
     expect(done.outcome.clearOAuthState).toBe(true);
   });
+});
+
+vi.mock("../wasm-init.js", async () => {
+  const { createProtocolWasmMock } = await import("../protocol-wasm-mock.js");
+  return { ensureWasm: createProtocolWasmMock };
 });

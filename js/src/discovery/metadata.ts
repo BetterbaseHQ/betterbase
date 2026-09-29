@@ -1,3 +1,4 @@
+import { initWasm } from "../wasm-init.js";
 import type { ServerMetadata } from "./types.js";
 
 /** Timeout for all discovery HTTP requests (10 seconds). */
@@ -10,19 +11,6 @@ export const DISCOVERY_TIMEOUT_MS = 10_000;
 function inferScheme(domain: string): string {
   const host = domain.split(":")[0]!;
   return host === "localhost" || host === "127.0.0.1" ? "http" : "https";
-}
-
-/** Wire format from the server (snake_case). */
-interface ServerMetadataWire {
-  version: number;
-  federation: boolean;
-  accounts_endpoint: string;
-  sync_endpoint: string;
-  federation_ws: string;
-  jwks_uri: string;
-  webfinger: string;
-  protocols: string[];
-  pow_required: boolean;
 }
 
 /**
@@ -57,46 +45,24 @@ export async function fetchServerMetadata(
     );
   }
 
-  const data: unknown = await response.json();
-  return parseServerMetadata(data);
-}
-
-/** Validate and map a wire-format response to camelCase ServerMetadata. */
-function parseServerMetadata(data: unknown): ServerMetadata {
-  if (typeof data !== "object" || data === null) {
-    throw new Error("Invalid discovery response: expected object");
+  const json = await response.text();
+  // Discovery is also used before SDK bootstrap; preserve its standalone
+  // async API by loading WASM here rather than requiring caller setup.
+  const wasm = await initWasm();
+  try {
+    const wire = wasm.validateServerMetadata(json);
+    return {
+      version: wire.version,
+      federation: wire.federation,
+      accountsEndpoint: wire.accounts_endpoint,
+      syncEndpoint: wire.sync_endpoint,
+      federationWs: wire.federation_ws,
+      jwksUri: wire.jwks_uri,
+      webfinger: wire.webfinger,
+      protocols: wire.protocols,
+      powRequired: wire.pow_required,
+    };
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error));
   }
-
-  const obj = data as Record<string, unknown>;
-
-  if (typeof obj["version"] !== "number") {
-    throw new Error("Invalid discovery response: missing or invalid version");
-  }
-  if (obj["version"] !== 1) {
-    throw new Error(
-      `Unsupported discovery version ${obj["version"]} (this client supports version 1)`,
-    );
-  }
-  if (
-    typeof obj["accounts_endpoint"] !== "string" ||
-    !obj["accounts_endpoint"]
-  ) {
-    throw new Error("Invalid discovery response: missing accounts_endpoint");
-  }
-  if (typeof obj["sync_endpoint"] !== "string" || !obj["sync_endpoint"]) {
-    throw new Error("Invalid discovery response: missing sync_endpoint");
-  }
-
-  const wire = data as ServerMetadataWire;
-  return {
-    version: wire.version,
-    federation: wire.federation,
-    accountsEndpoint: wire.accounts_endpoint,
-    syncEndpoint: wire.sync_endpoint,
-    federationWs: wire.federation_ws,
-    jwksUri: wire.jwks_uri,
-    webfinger: wire.webfinger,
-    protocols: wire.protocols,
-    powRequired: wire.pow_required,
-  };
 }

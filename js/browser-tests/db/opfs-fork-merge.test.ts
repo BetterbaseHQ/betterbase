@@ -109,7 +109,7 @@ describe("Base-aware patching (online stale write)", () => {
     const { db: dbB } = await openFreshOpfsDb([notes], "opfs-baseaware-b");
     try {
       // Seed on A; the app captures the base snapshot when rendering
-      const created = await dbA.put(notes, { body: BASE, pinned: false });
+      const created = await dbA.put(notes, { body: BASE });
       const seed = await outbound(dbA, created.id);
       const base = await dbA.snapshotBase(notes, created.id);
       expect(base).toBeInstanceOf(Uint8Array);
@@ -157,7 +157,7 @@ describe("Base-aware patching (online stale write)", () => {
     const { db: dbA } = await openFreshOpfsDb([notes], "opfs-baseaware-a");
     const { db: dbB } = await openFreshOpfsDb([notes], "opfs-baseaware-b");
     try {
-      const created = await dbA.put(notes, { body: BASE, pinned: false });
+      const created = await dbA.put(notes, { body: BASE });
       const seed = await outbound(dbA, created.id);
       await dbA.markSynced(notes, created.id, 1);
 
@@ -182,7 +182,7 @@ describe("observeWithBase (atomic base delivery)", () => {
     const { db } = await openFreshOpfsDb([notes], "opfs-obsbase-a");
     try {
       // Subscribe before writing — deliveries fire on mutations.
-      const created = await db.put(notes, { body: "v0", pinned: false });
+      const created = await db.put(notes, { body: "v0" });
       const deliveries: Array<{ body: string; base: Uint8Array | null }> = [];
 
       const unsub = db.observeWithBase(notes, created.id, (record, base) => {
@@ -218,7 +218,7 @@ describe("observeWithBase (atomic base delivery)", () => {
     try {
       // The app renders v1 and captures (record, base) atomically.
       // Subscribe before the first write so the render delivery fires.
-      const created = await dbA.put(notes, { body: "seed", pinned: false });
+      const created = await dbA.put(notes, { body: "seed" });
       let rendered: { body: string; base: Uint8Array | null } | null = null;
       const unsub = dbA.observeWithBase(notes, created.id, (record, base) => {
         if (record && record.body !== "seed")
@@ -264,7 +264,7 @@ describe("observeWithBase (atomic base delivery)", () => {
     const { db: dbA } = await openFreshOpfsDb([notes], "opfs-obsbase-d");
     const { db: dbB } = await openFreshOpfsDb([notes], "opfs-obsbase-e");
     try {
-      const created = await dbA.put(notes, { body: BASE, pinned: false });
+      const created = await dbA.put(notes, { body: BASE });
       const seed = await outbound(dbA, created.id);
       await dbA.markSynced(notes, created.id, 1);
 

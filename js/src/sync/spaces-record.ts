@@ -9,37 +9,12 @@
  * mirror, cross-checked against `wasm.spacesSchema()` and the committed
  * vectors (`crates/betterbase-sync-core/test-vectors/spaces-record.json`).
  *
- * Node tests run the 1:1 JS mirror (`spaces-record-mock.ts`) — node tests
- * never run wasm (see `membership-fold.ts`). Both are pinned to the same
- * behavior by the committed conformance vectors, and the real wasm module
- * is pinned by `browser-tests/sync/spaces-record.test.ts`.
  */
 
 import { ensureWasm } from "../wasm-init.js";
-import type { SpacesRecord, WasmModule } from "../wasm-init.js";
-import { parseSpacesRecordMirror } from "./spaces-record-mock.js";
-export {
-  parseSpacesRecordMirror,
-  type ParsedSpacesMember,
-  type ParsedSpacesRecord,
-} from "./spaces-record-mock.js";
+import type { SpacesRecord } from "../wasm-init.js";
 
-/**
- * The wasm module, or `null` when the spaces exports are unavailable
- * (node test environment, or a wasm build predating these exports).
- * Mirrors the fallback pattern in `rotation.ts`.
- */
-function wasmModule(): WasmModule | null {
-  try {
-    const mod = ensureWasm();
-    return typeof mod === "object" && mod !== null ? mod : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Wasm bindings can throw bare strings — normalize so the wasm and
- *  fallback paths produce the same `Error` shape. */
+/** Wasm bindings can throw bare strings — normalize to the JavaScript Error shape. */
 function normalize(e: unknown): Error {
   if (e instanceof Error) return e;
   return new Error(typeof e === "string" ? e : JSON.stringify(e));
@@ -52,15 +27,13 @@ function normalize(e: unknown): Error {
  * non-integer counter beyond 2^53 − 1).
  */
 export function parseSpacesRecord(json: string): SpacesRecord {
-  const mod = wasmModule();
-  if (mod && typeof mod.parseSpacesRecord === "function") {
-    try {
-      return mod.parseSpacesRecord(json) as SpacesRecord;
-    } catch (e) {
-      throw normalize(e);
-    }
+  const mod = ensureWasm();
+
+  try {
+    return mod.parseSpacesRecord(json) as SpacesRecord;
+  } catch (e) {
+    throw normalize(e);
   }
-  return parseSpacesRecordMirror(json) as unknown as SpacesRecord;
 }
 
 /**

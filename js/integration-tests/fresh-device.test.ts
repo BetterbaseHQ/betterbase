@@ -41,8 +41,9 @@ describe("fresh device pull hygiene", () => {
       session,
       `it-fresh-a-${stamp}`,
     );
-    const onEpochAdvanced = (epoch: number) =>
+    const onEpochAdvanced = (epoch: number) => {
       rotations.push(`personal:${epoch}`);
+    };
     // (engine exposes onEpochAdvanced as a mutable callback)
     engineA.onEpochAdvanced = onEpochAdvanced;
     for (let i = 0; i < 3; i++) {

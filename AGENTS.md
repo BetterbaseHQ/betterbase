@@ -35,7 +35,7 @@ Always run `just check` after implementation before reporting back.
 
 ## Workspace Structure
 
-Cargo workspace with 7 crates + vendored sqlite-wasm-vfs:
+Cargo workspace with 8 crates + vendored sqlite-wasm-vfs:
 
 | Crate | Target | Purpose |
 |-------|--------|---------|
@@ -43,8 +43,9 @@ Cargo workspace with 7 crates + vendored sqlite-wasm-vfs:
 | `betterbase-auth` | native | PKCE, JWE ECDH-ES+A256KW decrypt, JWK thumbprint, scoped key extraction, mailbox ID |
 | `betterbase-discovery` | native | Server metadata and WebFinger validation |
 | `betterbase-sync-core` | native | BlobEnvelope CBOR, padding, transport encrypt/decrypt, rpc-v1 frame codec, pull-assembly reducer, epoch key ladder, membership crypto + log fold |
+| `betterbase-file-store` | native | File queue, eviction, migration planning, and storage layout policy |
 | `betterbase-db` | native | SQLite-backed document store, CRDTs (json-joy), schema migrations, reactive queries |
-| `betterbase-wasm` | wasm32 | `wasm-bindgen` exports for crypto, auth, discovery, sync-core |
+| `betterbase-wasm` | wasm32 | `wasm-bindgen` exports for crypto, auth, discovery, sync-core, file-store |
 | `betterbase-db-wasm` | wasm32 | `wasm-bindgen` exports for the DB engine (SQLite WASM + OPFS VFS) |
 | `sqlite-wasm-vfs` | wasm32 | Vendored OPFS-backed VFS for SQLite WASM (patched upstream) |
 
@@ -53,7 +54,7 @@ Cargo workspace with 7 crates + vendored sqlite-wasm-vfs:
 ```
 betterbase-auth ──→ betterbase-crypto
 betterbase-sync-core ──→ betterbase-crypto
-betterbase-wasm ──→ betterbase-crypto, betterbase-auth, betterbase-discovery, betterbase-sync-core
+betterbase-wasm ──→ betterbase-crypto, betterbase-auth, betterbase-discovery, betterbase-sync-core, betterbase-file-store
 betterbase-db-wasm ──→ betterbase-db, sqlite-wasm-vfs
 ```
 
@@ -87,7 +88,7 @@ Key functions by crate:
 - **betterbase-auth**: `generate_code_verifier()`, `compute_code_challenge()`, `decrypt_jwe_compact()`, `extract_encryption_key()`, `derive_mailbox_id()`
 - **betterbase-discovery**: `validate_server_metadata()`, `parse_webfinger_response()`
 - **betterbase-sync-core**: `encode_envelope()`, `decode_envelope()`, `encrypt_record()`, `decrypt_record()`, `pad_to_bucket()`, `unpad()`, `peek_epoch()`, `derive_forward()`, `rewrap_deks()`, `encrypt_membership_payload()`, `fold_membership_log()` (verified membership-log fold — all three space-manager member-state folds), `encode_request_frame()` / `decode_frame()` (rpc-v1), `apply_chunk()` (pull assembly)
-- **betterbase-db**: Collection definitions, schema validation, CRDT merge (json-joy Rust port), query engine, sync manager
+- **betterbase-db**: Collection definitions, schema validation, CRDT merge (json-joy Rust port), query engine
 
 ### WASM boundary
 
@@ -95,7 +96,7 @@ Key functions by crate:
 
 ### Key decisions
 
-- **No Web Crypto**: All crypto in Rust for cross-platform portability. Accepts losing non-extractable CryptoKey property.
+- **Portable crypto core, browser key custody**: Rust owns portable cryptography. The browser retains a Web Crypto path for non-extractable CryptoKeys, pinned against the Rust path by conformance tests.
 - **`zeroize`**: Key material zeroed on drop.
 - **camelCase at JS boundary**: Server wire format uses snake_case; discovery module maps to camelCase at the fetch boundary.
 - **Envelope format v4**: `[0x04][IV:12][ciphertext+tag]` — frozen as v1 contract.
@@ -104,7 +105,8 @@ Key functions by crate:
 
 - **Naming**: `snake_case` in Rust, `camelCase` in TypeScript.
 - **Errors**: `thiserror` for Rust error types. `AuthError` hierarchy in TypeScript.
-- **Testing**: Rust `#[test]` for pure crates. Vitest for TypeScript. Browser tests (Playwright via `@vitest/browser`) for real WASM integration.
+- **WASM boundary**: Production wrappers require initialized WASM and never import protocol test mirrors. Node orchestration tests inject their doubles explicitly. The export guard resolves production call signatures and records unused exports separately.
+- **Testing**: Rust `#[test]` for pure crates. Vitest for TypeScript. Browser tests (Playwright via `@vitest/browser`) for real WASM integration. `pnpm typecheck` checks source plus browser/integration fixtures; the latter retain strict API checking with test-only unused/index-access diagnostics disabled. Run `just sdk-integration` from the orchestration repo for SDK construction or lifecycle changes.
 - **Wire format versions**: Frozen as v1 contracts — do not change without a versioned migration path.
 - **Idiomatic Rust**: `Option`/`Result` over sentinel values. Iterators over manual loops. Pattern matching over if-else chains.
 - **Dependencies**: `json-joy` npm package for JS CRDTs; `json-joy-rs` (local path) for Rust CRDTs. `cborg` for CBOR in JS.

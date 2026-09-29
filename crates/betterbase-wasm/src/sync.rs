@@ -8,10 +8,10 @@ use betterbase_sync_core::{
     is_replay_stale, pad_to_bucket, parse_mailbox_message, parse_membership_entry,
     parse_replay_wrapper, parse_spaces_record, peek_epoch, rewrap_deks,
     serialize_invitation_payload, serialize_membership_entry, unpad, verify_membership_entry,
-    BlobEnvelope, InvitationPayloadWire, MailboxMessage, MembershipEntryType, PushRejectionKind,
-    RejectionSource, DEFAULT_PADDING_BUCKETS, EVENT_REPLAY_MAX_AGE_MS, PRESENCE_REPLAY_MAX_AGE_MS,
-    SPACES_COLLECTION, SPACES_FIELDS, SPACES_MEMBER_STATUS_VALUES, SPACES_ROLE_VALUES,
-    SPACES_SCHEMA_VERSION, SPACES_STATUS_VALUES,
+    BlobEnvelope, InvitationPayloadWire, MailboxMessage, MembershipEntryPayload,
+    MembershipEntryType, PushRejectionKind, RejectionSource, DEFAULT_PADDING_BUCKETS,
+    EVENT_REPLAY_MAX_AGE_MS, PRESENCE_REPLAY_MAX_AGE_MS, SPACES_COLLECTION, SPACES_FIELDS,
+    SPACES_MEMBER_STATUS_VALUES, SPACES_ROLE_VALUES, SPACES_SCHEMA_VERSION, SPACES_STATUS_VALUES,
 };
 use wasm_bindgen::prelude::*;
 
@@ -281,48 +281,18 @@ pub fn wasm_build_membership_signing_message(
 #[wasm_bindgen(js_name = "parseMembershipEntry")]
 pub fn wasm_parse_membership_entry(payload: &str) -> Result<JsValue, JsValue> {
     let entry = parse_membership_entry(payload).map_err(to_js_error)?;
-    // Reflect::set on a plain Object cannot fail (no proxy traps, no sealed object).
-    let obj = js_sys::Object::new();
-    js_sys::Reflect::set(&obj, &"ucan".into(), &JsValue::from_str(&entry.ucan)).unwrap();
-    js_sys::Reflect::set(
-        &obj,
-        &"entryType".into(),
-        &JsValue::from_str(entry.entry_type.as_str()),
-    )
-    .unwrap();
-    js_sys::Reflect::set(
-        &obj,
-        &"signature".into(),
-        &js_sys::Uint8Array::from(entry.signature.as_slice()),
-    )
-    .unwrap();
-    js_sys::Reflect::set(
-        &obj,
-        &"signerPublicKey".into(),
-        &to_js_value(&entry.signer_public_key)?,
-    )
-    .unwrap();
-    if let Some(epoch) = entry.epoch {
-        js_sys::Reflect::set(&obj, &"epoch".into(), &JsValue::from(epoch)).unwrap();
-    }
-    if let Some(ref m) = entry.mailbox_id {
-        js_sys::Reflect::set(&obj, &"mailboxId".into(), &JsValue::from_str(m)).unwrap();
-    }
-    if let Some(ref pk) = entry.public_key_jwk {
-        js_sys::Reflect::set(&obj, &"publicKeyJwk".into(), &to_js_value(pk)?).unwrap();
-    }
-    if let Some(ref h) = entry.signer_handle {
-        js_sys::Reflect::set(&obj, &"signerHandle".into(), &JsValue::from_str(h)).unwrap();
-    }
-    if let Some(ref h) = entry.recipient_handle {
-        js_sys::Reflect::set(&obj, &"recipientHandle".into(), &JsValue::from_str(h)).unwrap();
-    }
-    Ok(obj.into())
+    to_js_value(&entry)
 }
 
+/// Serialize a structured entry; wire JSON strings remain accepted for
+/// compatibility with the original low-level WASM API.
 #[wasm_bindgen(js_name = "serializeMembershipEntry")]
-pub fn wasm_serialize_membership_entry(entry_json: &str) -> Result<String, JsValue> {
-    let entry = parse_membership_entry(entry_json).map_err(to_js_error)?;
+pub fn wasm_serialize_membership_entry(value: JsValue) -> Result<String, JsValue> {
+    let entry: MembershipEntryPayload = if let Some(json) = value.as_string() {
+        parse_membership_entry(&json).map_err(to_js_error)?
+    } else {
+        serde_wasm_bindgen::from_value(value).map_err(to_js_error)?
+    };
     Ok(serialize_membership_entry(&entry))
 }
 
@@ -368,9 +338,10 @@ pub fn wasm_encrypt_membership_payload(
     payload: &str,
     key: &[u8],
     space_id: &str,
-    seq: u32,
+    seq: f64,
 ) -> Result<Vec<u8>, JsValue> {
-    encrypt_membership_payload(payload, key, space_id, seq).map_err(to_js_error)
+    encrypt_membership_payload(payload, key, space_id, membership_sequence(seq)?)
+        .map_err(to_js_error)
 }
 
 #[wasm_bindgen(js_name = "decryptMembershipPayload")]
@@ -378,9 +349,19 @@ pub fn wasm_decrypt_membership_payload(
     encrypted: &[u8],
     key: &[u8],
     space_id: &str,
-    seq: u32,
+    seq: f64,
 ) -> Result<String, JsValue> {
-    decrypt_membership_payload(encrypted, key, space_id, seq).map_err(to_js_error)
+    decrypt_membership_payload(encrypted, key, space_id, membership_sequence(seq)?)
+        .map_err(to_js_error)
+}
+
+fn membership_sequence(seq: f64) -> Result<u32, JsValue> {
+    if !seq.is_finite() || seq.fract() != 0.0 || seq < 0.0 || seq > u32::MAX as f64 {
+        return Err(to_js_error(
+            "Membership sequence must be an unsigned 32-bit integer",
+        ));
+    }
+    Ok(seq as u32)
 }
 
 fn parse_entry_type(s: &str) -> Result<MembershipEntryType, JsValue> {

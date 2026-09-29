@@ -163,6 +163,11 @@ export async function setup(): Promise<() => Promise<void>> {
 
   config.ownerPid = process.pid;
   if (!config.available) {
+    if (process.env.BB_INTEGRATION_REQUIRED === "1") {
+      throw new Error(
+        `[sdk-integration] required stack unavailable: ${config.reason}`,
+      );
+    }
     console.warn(`[sdk-integration] skipping: ${config.reason}`);
   }
 

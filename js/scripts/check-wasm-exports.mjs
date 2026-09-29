@@ -1,191 +1,112 @@
 #!/usr/bin/env node
-/**
- * CI guard: every function exported by the WASM surface must have a live
- * TypeScript call site, or be suppressed in one of the two tables below with
- * a reason.
- *
- * The surface is parsed from the generated pkg/*.d.ts files (the actual JS
- * API wasm-bindgen produces), so `pnpm build:wasm` must have run first.
- * Call sites are searched in src/ and browser-tests/ (the two wasm-init
- * declaration files are excluded — they name every export without calling
- * any of them).
- *
- * Liveness is a WORD-BOUNDARY TEXTUAL check over a corpus with comments and
- * string literals stripped. Consequences:
- *   - A non-wasm TS identifier with the same name (e.g. the `WSClient.rewrapDEKs`
- *     RPC method vs the wasm `rewrapDEKs` batch fn) counts as "live". Such
- *     collisions are recorded in NAME_COLLISIONS below.
- *   - A semantic check (resolving identifiers via the TS compiler) is a
- *     follow-up; the tables are the source of truth in the meantime.
- *
- * The check fails in two directions:
- *   - a dead export that is not suppressed (new dead surface), and
- *   - a DEAD_WITH_PLAN entry whose export has gained a call site (stale —
- *     the list must shrink as the surface is wired up).
- * NAME_COLLISIONS entries are exempt from the stale check by definition.
- *
- * Scope: function exports only. The db-wasm class surface (WasmDb, etc.) is
- * covered by typecheck and direct usage.
- *
- * Run: pnpm check:wasm-exports   (also part of `pnpm check`)
+/** Check actual production WASM calls and prohibit production test doubles.
+ * Requires `pnpm build:wasm`. Tests cannot make a production export live.
+ * The explicit exceptions below are stale-checked in both directions.
  */
-
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import ts from "typescript";
+import { readFileSync } from "node:fs";
+import { resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(fileURLToPath(new URL("..", import.meta.url)), "");
-
-const DTS_FILES = [
-  join(root, "../crates/betterbase-wasm/pkg/betterbase_wasm.d.ts"),
-  join(root, "../crates/betterbase-db-wasm/pkg/betterbase_db_wasm.d.ts"),
+const root = fileURLToPath(new URL("..", import.meta.url));
+const declarations = [
+  resolve(root, "../crates/betterbase-wasm/pkg/betterbase_wasm.d.ts"),
+  resolve(root, "../crates/betterbase-db-wasm/pkg/betterbase_db_wasm.d.ts"),
 ];
-
-// Declaration files that enumerate the wasm API without calling it.
-const DECL_FILES = new Set([
-  join(root, "src/wasm-init.ts"),
-  join(root, "src/db/wasm-init.ts"),
+const boundaries = new Set([
+  ...declarations,
+  resolve(root, "src/wasm-init.ts"),
+  resolve(root, "src/db/wasm-init.ts"),
 ]);
-
-/**
- * Intentionally dead exports, each with the change that will consume it.
- * Adding an entry here must come with the plan that removes it. These are
- * stale-checked: once an export gains a real call site, the entry is
- * flagged — the list must shrink as the surface is wired up.
- */
-const DEAD_WITH_PLAN = {
+const deferred = {
+  classifyPushRejectionCode:
+    "Conformance oracle: TS push policy uses the shared rejection table without requiring initialized WASM.",
+  defaultEpochAdvanceIntervalMs:
+    "Conformance oracle for the TS public constant; rotation policy reads its default inside Rust.",
+  generateP256Keypair:
+    "Conformance/interop helper; browser auth receives the app keypair from accounts.",
+  spacesSchema:
+    "Conformance oracle for the TS collection builder; production validates through parseSpacesRecord.",
+  verifyMembershipEntry:
+    "Conformance helper; production verifies inside the Rust membership fold.",
   CURRENT_VERSION:
-    "version constants: TS hardcodes 4 in sync/types.ts instead of reading the wasm constant (audit: drift risk)",
-  filesBlobDir:
-    "G8: file-storage.ts recomputes the blob dir name; should call the wasm constant",
-  filesPoolDir:
-    "G8: file-storage.ts recomputes the pool dir name; should call the wasm constant",
-  parseWebfingerResponse:
-    "discovery: discovery.ts parses .well-known/webfinger itself; wire to wasm or delete",
-  validateServerMetadata:
-    "discovery: discovery.ts validates well-known metadata itself; wire to wasm or delete",
-};
-
-/**
- * Wasm exports whose names collide with live non-wasm TS identifiers. The
- * textual liveness check cannot distinguish a wasm call site from an
- * unrelated same-named identifier, so these are suppressed from both dead
- * and stale detection. Each entry documents the collision and the plan for
- * the wasm export.
- */
-const NAME_COLLISIONS = {
-  rewrapDEKs:
-    "live hits are the WSClient.rewrapDEKs RPC method; the wasm export of the same name is also live (the canonical re-wrap computation called from reencrypt.ts) — the textual check cannot tell the two apart",
+    "Version constants still mirrored in TS; consolidate with synchronous package initialization.",
   SUPPORTED_VERSIONS:
-    "live hits are the TS-hardcoded Set([4]) in crypto/types.ts; same version-constant drift risk as CURRENT_VERSION",
-  // Membership entry-construction twins: the live hits are the same-named
-  // TS functions in sync/membership.ts (entry construction stays TS; the
-  // FOLD is canonical in Rust — G4). The wasm exports are the canonical
-  // twins for future SDKs; the textual check cannot tell them apart.
-  parseMembershipEntry:
-    "live hits are the TS twin in sync/membership.ts (entry construction); wasm export is the canonical twin for future SDKs (G4 residual)",
-  serializeMembershipEntry:
-    "live hits are the TS twin in sync/membership.ts (entry construction); wasm export is the canonical twin for future SDKs (G4 residual)",
-  buildMembershipSigningMessage:
-    "live hits are the TS twin in sync/membership.ts (entry construction); wasm export is the canonical twin for future SDKs (G4 residual)",
-  encryptMembershipPayload:
-    "live hits are the TS twin in sync/membership.ts (entry construction); wasm export is the canonical twin for future SDKs (G4 residual)",
-  decryptMembershipPayload:
-    "live hits are the TS twin in sync/membership.ts (entry construction); wasm export is the canonical twin for future SDKs (G4 residual)",
+    "Version constants still mirrored in TS; consolidate with synchronous package initialization.",
+  filesBlobDir: "File storage directory naming remains in the TS host.",
+  filesPoolDir: "File storage directory naming remains in the TS host.",
 };
 
-function walkTs(dir) {
-  const out = [];
-  for (const entry of readdirSync(dir)) {
-    const p = join(dir, entry);
-    const st = statSync(p);
-    if (st.isDirectory()) {
-      if (entry === "node_modules" || entry === "dist") continue;
-      out.push(...walkTs(p));
-    } else if (/\.[mt]s(x?)$/.test(p)) {
-      out.push(p);
-    }
-  }
-  return out;
+const surface = new Set();
+for (const file of declarations) {
+  for (const match of readFileSync(file, "utf8").matchAll(
+    /export function ([\w$]+)/g,
+  ))
+    surface.add(match[1]);
 }
-
-/**
- * Strip comments and string literals so that mentions in prose/strings don't
- * count as call sites. Conservative: block comments, then '...', "...", then
- * `...` templates, then // line comments. Edge cases fail safe — missed text
- * only makes a name look MORE live (a visible failure), never less.
- */
-function stripCommentsAndStrings(src) {
-  let out = src.replace(/\/\*[\s\S]*?\*\//g, " ");
-  out = out.replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"/g, '""');
-  out = out.replace(/`(?:[^`\\]|\\.)*`/g, '""');
-  out = out.replace(/\/\/[^\n]*/g, " ");
-  return out;
-}
-
-function main() {
-  // 1. Enumerate the wasm function surface from the generated d.ts files.
-  const exports = new Set();
-  for (const dts of DTS_FILES) {
-    let content;
-    try {
-      content = readFileSync(dts, "utf8");
-    } catch {
-      console.error(`✗ Cannot read ${dts} — run \`pnpm build:wasm\` first.`);
-      process.exit(2);
+const configPath = resolve(root, "tsconfig.json");
+const config = ts.readConfigFile(configPath, ts.sys.readFile);
+const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
+const program = ts.createProgram(parsed.fileNames, parsed.options);
+const checker = program.getTypeChecker();
+const live = new Set();
+const violations = [];
+const isTest = (path) =>
+  /(?:\.test\.[cm]?tsx?$|-mock\.[cm]?tsx?$|\/testing\/)/.test(path);
+for (const file of program.getSourceFiles()) {
+  if (
+    !file.fileName.startsWith(resolve(root, "src") + "/") ||
+    file.isDeclarationFile ||
+    isTest(file.fileName)
+  )
+    continue;
+  function visit(node) {
+    // Resolve the called function's declaration, not its spelling: a
+    // WSClient.rewrapDEKs call must never count as a WASM rewrapDEKs call.
+    if (ts.isCallExpression(node)) {
+      const signature = checker.getResolvedSignature(node);
+      const declaration = signature?.declaration;
+      if (
+        declaration &&
+        boundaries.has(resolve(declaration.getSourceFile().fileName))
+      ) {
+        const name = declaration.name?.getText();
+        if (surface.has(name)) live.add(name);
+      }
     }
-    for (const m of content.matchAll(/export function ([A-Za-z0-9_$]+)/g)) {
-      exports.add(m[1]);
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      !node.isTypeOnly &&
+      !node.importClause?.isTypeOnly
+    ) {
+      const specifier = node.moduleSpecifier.text;
+      const resolved = ts.resolveModuleName(
+        specifier,
+        file.fileName,
+        parsed.options,
+        ts.sys,
+      ).resolvedModule;
+      if (resolved && isTest(resolved.resolvedFileName)) {
+        violations.push(
+          `${relative(root, file.fileName)} imports test code ${specifier}`,
+        );
+      }
     }
+    ts.forEachChild(node, visit);
   }
-
-  // 2. Collect call-site candidates (src + browser-tests, minus declarations).
-  const files = [
-    ...walkTs(join(root, "src")),
-    ...walkTs(join(root, "browser-tests")),
-  ].filter((f) => !DECL_FILES.has(f));
-  const haystack = files
-    .map((f) => stripCommentsAndStrings(readFileSync(f, "utf8")))
-    .join("\n");
-
-  // 3. Liveness: word-boundary reference in the stripped corpus.
-  const isLive = (name) =>
-    new RegExp(`(?<![A-Za-z0-9_$])${name}(?![A-Za-z0-9_$])`).test(haystack);
-
-  const dead = [...exports].filter((n) => !isLive(n));
-  const unexpectedDead = dead
-    .filter((n) => !DEAD_WITH_PLAN[n] && !NAME_COLLISIONS[n])
-    .sort();
-  const stale = Object.keys(DEAD_WITH_PLAN)
-    .filter((n) => isLive(n))
-    .sort();
-
-  let ok = true;
-  if (unexpectedDead.length > 0) {
-    ok = false;
-    console.error(
-      "✗ Dead wasm exports (no TS call site, not suppressed in the script):",
-    );
-    for (const n of unexpectedDead) console.error(`  - ${n}`);
-    console.error(
-      "  Wire them up, or add them to DEAD_WITH_PLAN / NAME_COLLISIONS in scripts/check-wasm-exports.mjs with a reason.",
-    );
-  }
-  if (stale.length > 0) {
-    ok = false;
-    console.error(
-      "✗ Stale DEAD_WITH_PLAN entries (export now has a call site — remove them):",
-    );
-    for (const n of stale) console.error(`  - ${n}`);
-  }
-
-  console.log(
-    `wasm-export guard: ${exports.size} exports, ${exports.size - dead.length} live, ` +
-      `${Object.keys(DEAD_WITH_PLAN).length} dead-with-plan, ` +
-      `${Object.keys(NAME_COLLISIONS).length} name-collisions, ` +
-      `${unexpectedDead.length} unexpected-dead, ${stale.length} stale`,
-  );
-  if (!ok) process.exit(1);
+  visit(file);
 }
-
-main();
+for (const name of surface) {
+  if (!live.has(name) && !deferred[name])
+    violations.push(`No production WASM call: ${name}`);
+}
+for (const name of Object.keys(deferred)) {
+  if (live.has(name) || !surface.has(name))
+    violations.push(`Stale deferred export: ${name}`);
+}
+console.log(
+  `WASM guard: ${surface.size} exports, ${live.size} production calls, ${Object.keys(deferred).length} explicitly deferred.`,
+);
+for (const violation of violations) console.error(violation);
+if (violations.length) process.exit(1);

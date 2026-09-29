@@ -11,11 +11,6 @@
  * rewraps DEKs, re-encrypts the membership log) and feeds the result back
  * via `rotationStep`. Keys never enter the machine.
  *
- * Node tests run the 1:1 JS mirror (`rotation-mock.ts`) — node tests never
- * run wasm (see `membership-fold.ts`). Both are pinned to the same behavior
- * by the committed conformance vectors
- * (`crates/betterbase-sync-core/test-vectors/rotation.json`), and the real
- * wasm module is pinned by browser tests.
  */
 
 import { ensureWasm } from "../wasm-init.js";
@@ -23,16 +18,8 @@ import type {
   RotationEvent,
   RotationSpec,
   RotationState,
-  WasmModule,
 } from "../wasm-init.js";
-import {
-  rotationAbortMock,
-  rotationStartMock,
-  rotationStepMock,
-  shouldRotateSpaceEpochMock,
-} from "./rotation-mock.js";
 
-export { newRotationState } from "./rotation-mock.js";
 export type {
   RotationAction,
   RotationEvent,
@@ -43,22 +30,7 @@ export type {
   RotationState,
 } from "../wasm-init.js";
 
-/**
- * The wasm module, or `null` when the rotation exports are unavailable
- * (node test environment, or a wasm build predating these exports).
- * Mirrors the fallback pattern in `membership-fold.ts`.
- */
-function wasmModule(): WasmModule | null {
-  try {
-    const mod = ensureWasm();
-    return typeof mod === "object" && mod !== null ? mod : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Wasm bindings can throw bare strings — normalize so the wasm and
- * mock paths raise the same Error shape with the same message. */
+/** Wasm bindings can throw bare strings — normalize to the JavaScript Error shape. */
 function normalize(e: unknown): Error {
   if (e instanceof Error) return e;
   return new Error(String(e));
@@ -76,15 +48,13 @@ export function rotationStart(
   state: RotationState | null,
   spec: RotationSpec,
 ): RotationState {
-  const mod = wasmModule();
-  if (mod && typeof mod.rotationStart === "function") {
-    try {
-      return mod.rotationStart(state, spec);
-    } catch (e) {
-      throw normalize(e);
-    }
+  const mod = ensureWasm();
+
+  try {
+    return mod.rotationStart(state, spec);
+  } catch (e) {
+    throw normalize(e);
   }
-  return rotationStartMock(state, spec);
 }
 
 /**
@@ -100,15 +70,13 @@ export function rotationStep(
   state: RotationState,
   event: RotationEvent,
 ): RotationState {
-  const mod = wasmModule();
-  if (mod && typeof mod.rotationStep === "function") {
-    try {
-      return mod.rotationStep(state, event);
-    } catch (e) {
-      throw normalize(e);
-    }
+  const mod = ensureWasm();
+
+  try {
+    return mod.rotationStep(state, event);
+  } catch (e) {
+    throw normalize(e);
   }
-  return rotationStepMock(state, event);
 }
 
 /**
@@ -118,15 +86,13 @@ export function rotationStep(
  * runs one extra bounded pass, never a loop.
  */
 export function rotationAbort(state: RotationState | null): RotationState {
-  const mod = wasmModule();
-  if (mod && typeof mod.rotationAbort === "function") {
-    try {
-      return mod.rotationAbort(state);
-    } catch (e) {
-      throw normalize(e);
-    }
+  const mod = ensureWasm();
+
+  try {
+    return mod.rotationAbort(state);
+  } catch (e) {
+    throw normalize(e);
   }
-  return rotationAbortMock(state);
 }
 
 /**
@@ -144,22 +110,36 @@ export function shouldRotateSpaceEpoch(
   isAdmin: boolean,
   intervalMs?: number,
 ): boolean {
-  const mod = wasmModule();
-  if (mod && typeof mod.shouldRotateSpaceEpoch === "function") {
-    try {
-      // The wasm signature takes i64s (js bigints) — timestamps don't fit
-      // in a JS number at the wasm boundary. `== null` (not
-      // `=== undefined`): a null interval means "use the Rust-canonical
-      // default", exactly like the wasm signature's null.
-      return mod.shouldRotateSpaceEpoch(
-        BigInt(nowMs),
-        advancedAtMs === null ? null : BigInt(advancedAtMs),
-        isAdmin,
-        intervalMs == null ? null : BigInt(intervalMs),
-      );
-    } catch (e) {
-      throw normalize(e);
-    }
+  const mod = ensureWasm();
+
+  try {
+    // The wasm signature takes i64s (js bigints) — timestamps don't fit
+    // in a JS number at the wasm boundary. `== null` (not
+    // `=== undefined`): a null interval means "use the Rust-canonical
+    // default", exactly like the wasm signature's null.
+    return mod.shouldRotateSpaceEpoch(
+      BigInt(nowMs),
+      advancedAtMs === null ? null : BigInt(advancedAtMs),
+      isAdmin,
+      intervalMs == null ? null : BigInt(intervalMs),
+    );
+  } catch (e) {
+    throw normalize(e);
   }
-  return shouldRotateSpaceEpochMock(nowMs, advancedAtMs, isAdmin, intervalMs);
+}
+
+/** Empty host state; rotationStart initializes the Rust machine. */
+export function newRotationState(
+  currentEpoch: number,
+  shared: boolean,
+): RotationState {
+  return {
+    currentEpoch,
+    shared,
+    followupActive: false,
+    followupPending: false,
+    followupDeferred: false,
+    action: null,
+    stack: [],
+  };
 }

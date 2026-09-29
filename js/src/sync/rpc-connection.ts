@@ -326,7 +326,15 @@ export class RpcConnection {
       return;
     }
 
-    const result = frame.result !== undefined ? decode(frame.result) : null;
+    let result: unknown;
+    try {
+      result = frame.result !== undefined ? decode(frame.result) : null;
+    } catch (error) {
+      // The frame codec accepts CBOR values the application decoder may
+      // reject. This call is already detached from pending: settle it here.
+      call.reject(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
 
     // Validate chunk count for chunked RPCs (payload-level protocol rule,
     // deliberately not part of the frame codec)

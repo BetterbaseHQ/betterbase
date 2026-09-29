@@ -1,3 +1,4 @@
+import { spaces } from "../src/sync/spaces-collection.js";
 /**
  * Shared-space lifecycle — the richest SDK↔server contract: space
  * creation, membership log, UCAN delegation, encrypted invitation
@@ -82,7 +83,9 @@ describe("shared space across accounts", () => {
     );
     let sawShared = false;
     for (let i = 0; i < 20 && !sawShared; i++) {
-      const invited = await engineB.spaceManager.findBySpaceId(spaceId);
+      const invited = (await engineB.db.getAll(spaces)).find(
+        (space) => space.spaceId === spaceId,
+      );
       if (invited && (invited.status as string) === "invited") {
         await engineB.spaceManager.accept(invited as never);
         await engineB.spaceManager.initializeFromSpaces();

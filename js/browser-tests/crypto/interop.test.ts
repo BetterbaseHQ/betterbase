@@ -323,7 +323,7 @@ describe("WASM ↔ Web Crypto interoperability (browser)", () => {
       const apu = new TextEncoder().encode("sender-party");
       const apv = new TextEncoder().encode("receiver-party");
       const jwe = await buildJweWithPartyInfo(
-        plaintext,
+        new Uint8Array(plaintext),
         keyPair.privateKey,
         apu,
         apv,
@@ -431,7 +431,7 @@ describe("WASM ↔ Web Crypto interoperability (browser)", () => {
           additionalData: new TextEncoder().encode(headerB64),
         },
         cekKey,
-        plaintext,
+        new Uint8Array(plaintext),
       );
       const ct = new Uint8Array(ctWithTag, 0, ctWithTag.byteLength - 16);
       const tag = new Uint8Array(ctWithTag, ctWithTag.byteLength - 16, 16);

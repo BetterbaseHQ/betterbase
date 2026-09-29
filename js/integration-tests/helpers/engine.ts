@@ -4,7 +4,13 @@ import type { AuthSession } from "../../src/auth/session.js";
  * Engine factory for integration scenarios: real OPFS database (own worker),
  * real SyncEngine over the live stack, bootstrapped to ready (or thrown).
  */
-import { createDatabase, deleteDatabase } from "../../src/db/index.js";
+import {
+  createDatabase,
+  deleteDatabase,
+  type Database,
+} from "../../src/db/index.js";
+import { FileStore } from "../../src/sync/file-store.js";
+import { InMemoryFileStorage } from "../../src/sync/file-storage.js";
 import { SyncEngine } from "../../src/sync/sync-engine.js";
 import type { SdkIdentity } from "./account.ts";
 import { documents, notes } from "./collections.ts";
@@ -13,9 +19,23 @@ import type { IntegrationConfig } from "./stack.ts";
 /** Databases created this run — cleaned in afterAll so OPFS doesn't
  * accumulate garbage across repeated suite runs. */
 const createdDbs: string[] = [];
+const fileStores: FileStore[] = [];
+const adapters: Database[] = [];
+const engines: SyncEngine[] = [];
 
 export async function cleanupDatabases(): Promise<void> {
-  await Promise.allSettled(createdDbs.map((name) => deleteDatabase(name)));
+  for (const engine of engines.splice(0)) engine.dispose();
+  await Promise.all(adapters.splice(0).map((adapter) => adapter.close()));
+  for (const store of fileStores.splice(0)) store.dispose();
+  await Promise.all(
+    createdDbs.map((name) =>
+      deleteDatabase(name, {
+        worker: new Worker(new URL("./db-worker.ts", import.meta.url), {
+          type: "module",
+        }),
+      }),
+    ),
+  );
   createdDbs.length = 0;
 }
 
@@ -31,7 +51,15 @@ export async function makeEngine(
       type: "module",
     }),
   });
+  adapters.push(adapter);
+  // These scenarios exercise record sync. The fixture owns the file store;
+  // SyncEngine only connects/disconnects it and never disposes it.
+  const fileStore = new FileStore({
+    storage: new InMemoryFileStorage(),
+  });
+  fileStores.push(fileStore);
   const engine = await SyncEngine.create({
+    fileStore,
     adapter,
     collections: [notes],
     personalSpaceId: identity.personalSpaceId,
@@ -54,6 +82,7 @@ export async function makeEngine(
     epochDeriveKey: (await session.getEpochDeriveKey()) ?? undefined,
     epochAdvancedAt: session.getEpochAdvancedAt(),
   });
+  engines.push(engine);
   await vi.waitFor(() => {
     const s = engine.getSnapshot();
     if (s.phase !== "ready") {

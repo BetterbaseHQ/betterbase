@@ -111,7 +111,7 @@ describe("Epoch rotation — low-level crypto (browser)", () => {
 
     // All records readable via forward derivation
     for (const rec of records) {
-      let key = transportCopy;
+      let key: Uint8Array = transportCopy;
       for (let e = 2; e <= rec.epoch; e++) {
         key = deriveNextEpochKey(key, spaceId, e);
       }
@@ -209,6 +209,7 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
         id: "rec-1",
         _v: 1,
         sequence: 0,
+        deleted: false,
         crdt,
       },
     ]);
@@ -247,11 +248,11 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
     });
 
     await transport.push("items", [
-      { id: "rec-1", _v: 1, sequence: 0, crdt: fakeCrdt() },
+      { id: "rec-1", _v: 1, sequence: 0, deleted: false, crdt: fakeCrdt() },
     ]);
     transport.updateEncryptionEpoch(3);
     await transport.push("items", [
-      { id: "rec-2", _v: 1, sequence: 0, crdt: fakeCrdt() },
+      { id: "rec-2", _v: 1, sequence: 0, deleted: false, crdt: fakeCrdt() },
     ]);
 
     // Every push declares the epoch its ciphertext was encrypted under —
@@ -362,7 +363,9 @@ describe("Epoch rotation — SyncTransport integration (browser)", () => {
 
     // Push a record — should be encrypted at epoch 2
     const crdt = fakeCrdt();
-    await transport.push("items", [{ id: "rec-5", _v: 1, sequence: 0, crdt }]);
+    await transport.push("items", [
+      { id: "rec-5", _v: 1, sequence: 0, deleted: false, crdt },
+    ]);
 
     expect(pushed.length).toBe(1);
     const wrappedDEK = pushed[0]!.wrappedDek!;

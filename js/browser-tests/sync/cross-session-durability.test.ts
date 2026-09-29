@@ -75,7 +75,7 @@ describe("Cross-session durability — personal space (browser)", () => {
     });
 
     await sessionA.push("items", [
-      { id: "rec-1", _v: 1, sequence: 0, crdt: fakeCrdt() },
+      { id: "rec-1", _v: 1, sequence: 0, deleted: false, crdt: fakeCrdt() },
     ]);
 
     expect(pushed.length).toBe(1);
@@ -135,7 +135,7 @@ describe("Cross-session durability — personal space (browser)", () => {
       },
     });
     await buggySession.push("items", [
-      { id: "rec-1", _v: 1, sequence: 0, crdt: fakeCrdt() },
+      { id: "rec-1", _v: 1, sequence: 0, deleted: false, crdt: fakeCrdt() },
     ]);
     expect(wrappedDekEpoch(pushed[0]!.wrappedDek!)).toBe(
       SERVER_INITIAL_EPOCH - 1,

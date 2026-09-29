@@ -1,3 +1,7 @@
+import type {
+  ServerMetadataWire,
+  UserResolutionWire,
+} from "./discovery/types.js";
 /**
  * WASM module singleton — lazy-loaded, idempotent initialization.
  *
@@ -10,7 +14,7 @@
 export interface WasmModule {
   // --- crypto ---
   CURRENT_VERSION(): number;
-  SUPPORTED_VERSIONS(): number[];
+  SUPPORTED_VERSIONS(): Uint8Array;
   base64urlEncode(data: Uint8Array): string;
   base64urlDecode(encoded: string): Uint8Array;
   encryptV4(
@@ -159,7 +163,7 @@ export interface WasmModule {
    * or "transient" (retry with backoff). `statusCode` is null for
    * transport-level failures.
    */
-  classifyRefreshFailure(statusCode: number | null): "transient" | "invalid";
+  classifyRefreshFailure(statusCode: number | null): string;
   /**
    * Derive the session's purpose-specific keys from the OPAQUE root key
    * (canonical: betterbase-auth::derive_session_keys; pinned by
@@ -200,8 +204,8 @@ export interface WasmModule {
   extractAppKeypair(scopedKeysJson: string): AppKeypairJwk | null;
 
   // --- discovery ---
-  validateServerMetadata(json: string): Record<string, unknown>;
-  parseWebfingerResponse(json: string): Record<string, unknown>;
+  validateServerMetadata(json: string): ServerMetadataWire;
+  parseWebfingerResponse(json: string): UserResolutionWire;
 
   // --- sync ---
   /**
@@ -304,7 +308,7 @@ export interface WasmModule {
     recipientHandle: string,
   ): Uint8Array;
   parseMembershipEntry(payload: string): MembershipEntryPayload;
-  serializeMembershipEntry(entryJson: string): string;
+  serializeMembershipEntry(entry: MembershipEntryPayload | string): string;
   verifyMembershipEntry(payload: string, spaceId: string): boolean;
   /**
    * Canonical verified membership-log fold (audit G4): parse + verify +
@@ -883,7 +887,7 @@ export interface AppKeypairJwk {
 
 export interface MembershipEntryPayload {
   ucan: string;
-  entryType: string;
+  entryType: "d" | "a" | "x" | "r";
   signature: Uint8Array;
   signerPublicKey: JsonWebKey;
   epoch?: number;
@@ -964,7 +968,7 @@ export async function initWasm(): Promise<WasmModule> {
     try {
       const mod =
         await import("../../crates/betterbase-wasm/pkg/betterbase_wasm.js");
-      wasmModule = mod as unknown as WasmModule;
+      wasmModule = mod satisfies WasmModule;
       return wasmModule;
     } catch (e) {
       initPromise = null;

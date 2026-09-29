@@ -35,13 +35,17 @@ const { claims, keyStoreState, tokenForms } = vi.hoisted(() => ({
   tokenForms: [] as URLSearchParams[],
 }));
 
-vi.mock("../wasm-init.js", () => ({
-  initWasm: vi.fn(async () => ({})),
-  ensureWasm: () => ({
-    decodeJwtPayload: () => ({ ...claims.value }),
-  }),
-  initialEpoch: () => 1,
-}));
+vi.mock("../wasm-init.js", async () => {
+  const { createProtocolWasmMock } = await import("../protocol-wasm-mock.js");
+  return {
+    initWasm: vi.fn(async () => ({})),
+    ensureWasm: () => ({
+      ...createProtocolWasmMock(),
+      decodeJwtPayload: () => ({ ...claims.value }),
+    }),
+    initialEpoch: () => 1,
+  };
+});
 
 vi.mock("./crypto.js", () => ({
   generateCodeVerifier: () => "verifier",

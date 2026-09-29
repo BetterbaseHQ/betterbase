@@ -68,7 +68,7 @@ describe("Epoch key selection ladder conformance vectors (AUD-024)", () => {
 
       if (c.expect === null) {
         expect(select()).toBeNull();
-      } else if (c.expect === "error") {
+      } else if (typeof c.expect === "string") {
         expect(() => select()).toThrow(/too far ahead/);
       } else {
         const res = select()!;

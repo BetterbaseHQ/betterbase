@@ -75,7 +75,7 @@
     "build:wasm": "./scripts/build-wasm.sh",
     "build:ts": "tsc --project tsconfig.json",
     "build": "pnpm build:wasm && pnpm build:ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.tests.json",
     "check:wasm-exports": "node scripts/check-wasm-exports.mjs",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
@@ -99,6 +99,7 @@
   "devDependencies": {
     "@serenity-kit/opaque": "^1.1.0",
     "@testing-library/react": "16.3.3",
+    "@types/node": "^24.19.0",
     "@types/react": "^19.2.14",
     "@vitest/browser-playwright": "5.0.1",
     "@vitest/coverage-v8": "5.0.1",

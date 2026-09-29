@@ -36,14 +36,21 @@ pub fn derive_forward(
             base: from_epoch,
         });
     }
+    if to_epoch - from_epoch > MAX_EPOCH_DERIVE_DISTANCE {
+        return Err(SyncError::EpochAdvanceTooFar {
+            new: to_epoch,
+            current: from_epoch,
+            max_distance: MAX_EPOCH_DERIVE_DISTANCE,
+        });
+    }
     if to_epoch == from_epoch {
         return Ok(key.to_vec());
     }
-    let mut current = key.to_vec();
+    let mut current = Zeroizing::new(key.to_vec());
     for e in (from_epoch + 1)..=to_epoch {
-        current = derive_next_epoch_key(&current, space_id, e)?.to_vec();
+        current = Zeroizing::new(derive_next_epoch_key(&current, space_id, e)?.to_vec());
     }
-    Ok(current)
+    Ok(current.to_vec())
 }
 
 /// One DEK re-wrap entry ready for upload (AUD-026).
@@ -211,6 +218,13 @@ mod tests {
         let result = derive_forward(&key, "space-1", 0, 3).unwrap();
         assert_ne!(result, key.to_vec());
         assert_eq!(result.len(), 32);
+    }
+
+    #[test]
+    fn derive_forward_rejects_excessive_distance_before_work() {
+        let err = derive_forward(&[1; 32], "space-1", 1, u32::MAX).unwrap_err();
+        assert!(matches!(err, SyncError::EpochAdvanceTooFar { .. }));
+        assert!(derive_forward(&[1; 32], "space-1", 1, 2 + MAX_EPOCH_DERIVE_DISTANCE).is_err());
     }
 
     #[test]

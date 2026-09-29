@@ -1,0 +1,200 @@
+diff --git a/js/browser-tests/sync/review-regressions.test.ts b/js/browser-tests/sync/review-regressions.test.ts
+new file mode 100644
+--- /dev/null
++++ b/js/browser-tests/sync/review-regressions.test.ts
+@@ -0,0 +1,195 @@
++import { beforeAll, expect, it } from "vitest";
++import { initWasm, ensureWasm } from "../../src/wasm-init.js";
++import { SpaceManager } from "../../src/sync/space-manager.js";
++import { FileStore } from "../../src/sync/file-store.js";
++import { InMemoryFileStorage } from "../../src/sync/file-storage.js";
++import { bytesToBase64 } from "../../src/sync/encoding.js";
++import {
++  serializeMembershipEntry,
++  buildMembershipSigningMessage,
++  encryptMembershipPayload,
++} from "../../src/sync/membership.js";
++
++beforeAll(async () => {
++  await initWasm();
++});
++
++it("REVIEW real WASM removal conflict must not distribute the fresh key to the removed member", async () => {
++  const wasm = ensureWasm();
++  const owner = wasm.generateP256Keypair();
++  const victim = wasm.generateP256Keypair();
++  const ownerDid = wasm.encodeDIDKeyFromJwk(owner.publicKeyJwk);
++  const victimDid = wasm.encodeDIDKeyFromJwk(victim.publicKeyJwk);
++  const spaceId = crypto.randomUUID();
++  const key = new Uint8Array(32).fill(7);
++  const epoch2 = new Uint8Array(32).fill(8);
++  const root = wasm.issueRootUCAN(
++    owner.privateKeyJwk,
++    ownerDid,
++    ownerDid,
++    spaceId,
++    "/space/admin",
++    3600,
++  );
++  const delegated = wasm.delegateUCAN(
++    owner.privateKeyJwk,
++    ownerDid,
++    victimDid,
++    spaceId,
++    "/space/write",
++    3600,
++    root,
++  );
++  const payload = serializeMembershipEntry({
++    ucan: delegated,
++    type: "d",
++    epoch: 1,
++    signerPublicKey: owner.publicKeyJwk,
++    signature: wasm.sign(
++      owner.privateKeyJwk,
++      buildMembershipSigningMessage("d", spaceId, ownerDid, delegated, "", ""),
++    ),
++    publicKeyJwk: victim.publicKeyJwk,
++  });
++  const entries = [
++    {
++      chain_seq: 1,
++      entry_hash: new Uint8Array(32),
++      payload: encryptMembershipPayload(payload, key, spaceId, 1),
++    },
++  ];
++  const record = {
++    id: "record",
++    spaceId,
++    name: "Review",
++    status: "active",
++    role: "admin",
++    spaceKey: bytesToBase64(key),
++    ucanChain: root,
++    rootPublicKey: bytesToBase64(
++      wasm.compressP256PublicKey(owner.publicKeyJwk),
++    ),
++    epoch: 1,
++  };
++  const db = {
++    getAll: async () => [record],
++    query: async () => ({ records: [record] }),
++    patch: async (_: unknown, patch: object) => Object.assign(record, patch),
++  };
++  let advances = 0;
++  const puts: Array<{
++    epoch: number;
++    keys: Array<{ member_did: string; wrapped_key: Uint8Array }>;
++  }> = [];
++  const ws = {
++    listMembers: async () => ({ entries, metadata_version: 1 }),
++    revokeUCAN: async () => ({}),
++    epochBegin: async ({ epoch }: { epoch: number }) =>
++      ++advances === 1
++        ? { error: "conflict", current_epoch: 2, rewrap_epoch: 2 }
++        : { epoch },
++    epochKeysGet: async () => ({
++      wrapped_key: new TextEncoder().encode(
++        wasm.encryptJwe(epoch2, owner.publicKeyJwk),
++      ),
++    }),
++    epochKeysPut: async (params: (typeof puts)[number]) => {
++      puts.push(params);
++      return { count: params.keys.length };
++    },
++    getDEKs: async () => [],
++    getFileDEKs: async () => [],
++    epochComplete: async () => ({}),
++    appendMember: async () => ({ chain_seq: 2, metadata_version: 2 }),
++  };
++  const manager = new SpaceManager({
++    db: db as never,
++    keypair: owner,
++    selfDID: ownerDid,
++    personalSpaceId: crypto.randomUUID(),
++    clientId: "review",
++    accountsBaseUrl: "https://example.invalid",
++    getToken: () => "token",
++  });
++  manager.setWSClient(ws as never);
++  try {
++    expect(await manager.initializeFromSpaces()).toBe(1);
++    await manager.removeMember(spaceId, victimDid);
++    expect(manager.getSpaceEpoch(spaceId)).toBe(3);
++    const recipients = puts
++      .find((p) => p.epoch === 3)!
++      .keys.map((k) => k.member_did);
++    expect(recipients).not.toContain(victimDid);
++  } finally {
++    manager.destroy();
++  }
++});
++
++it("REVIEW real WASM planning failure preserves the source file", async () => {
++  const source = crypto.randomUUID(),
++    target = crypto.randomUUID(),
++    fileId = crypto.randomUUID();
++  const storage = new InMemoryFileStorage();
++  const store = new FileStore({ spaceId: source, storage });
++  try {
++    await store.put(fileId, new Uint8Array([1, 2, 3]), crypto.randomUUID());
++    const result = await store.migrateFilesToSpace([fileId], target, {
++      recordIdOf: () => {
++        throw new Error("mapping unavailable");
++      },
++    });
++    expect({
++      result,
++      sourcePresent: await store.has(fileId),
++      targetPresent: await store.has(fileId, target),
++    }).toEqual({
++      result: { migrated: 0, skipped: 0, failed: 1 },
++      sourcePresent: true,
++      targetPresent: false,
++    });
++  } finally {
++    store.dispose();
++  }
++});
++
++it("REVIEW real WASM malformed RPC result must not orphan its promise", async () => {
++  const { RpcConnection } = await import("../../src/sync/rpc-connection.js");
++  const { encode, decode } = await import("cborg");
++  const rpc = new RpcConnection({
++    url: "ws://review.invalid",
++    getToken: () => "token",
++  });
++  let requestId = "";
++  const internals = rpc as unknown as {
++    ws: unknown;
++    handleMessage(data: ArrayBuffer): void;
++  };
++  internals.ws = {
++    readyState: WebSocket.OPEN,
++    send: (bytes: Uint8Array) => {
++      requestId = (decode(bytes) as { id: string }).id;
++    },
++    close: () => {},
++  };
++  const outcome = rpc.call("review", {}).then(
++    () => "resolved",
++    () => "rejected",
++  );
++  // Valid CBOR to Rust, unsupported by cborg's object decoder: a numeric map key.
++  const frame = encode({
++    type: 1,
++    id: requestId,
++    result: new Map([[1, "bad"]]),
++  });
++  try {
++    internals.handleMessage(frame.slice().buffer);
++  } catch {
++    /* emulate browser reporting the event-handler error */
++  }
++  rpc.close();
++  const settled = await Promise.race([
++    outcome,
++    new Promise((resolve) => setTimeout(() => resolve("still pending"), 20)),
++  ]);
++  expect(settled).toBe("rejected");
++});

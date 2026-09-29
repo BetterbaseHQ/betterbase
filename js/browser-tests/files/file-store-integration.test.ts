@@ -29,7 +29,7 @@ function createTestWorker(): Worker {
 
 async function freshStore(
   namespace: string,
-  config: ConstructorParameters<typeof FileStore>[0] = {},
+  config: Omit<ConstructorParameters<typeof FileStore>[0], "storage"> = {},
 ): Promise<FileStore> {
   const storage = await createWorkerFileStorage(namespace, {
     worker: createTestWorker(),
@@ -170,6 +170,7 @@ describe("FileStore on WorkerFileStorage", () => {
       expect(url).toMatch(/^blob:/);
       // LRU hit path — same URL, no flicker.
       expect(await store.getUrl(UUID, "image/png")).toBe(url);
+      if (!url) throw new Error("expected cached file URL");
       URL.revokeObjectURL(url);
     } finally {
       store.dispose();

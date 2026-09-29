@@ -15,10 +15,6 @@
  * result back via `oauthCallbackStep`. Tokens and keys never enter the
  * machine.
  *
- * Node tests run the 1:1 JS mirror (`oauth-callback-mock.ts`) — node tests
- * never run wasm. Both are pinned to the same behavior by the committed
- * conformance vectors (`crates/betterbase-auth/test-vectors/oauth-callback.json`),
- * and the real wasm module is pinned by browser tests.
  */
 
 import { ensureWasm } from "../wasm-init.js";
@@ -26,14 +22,8 @@ import type {
   CallbackEvent,
   CallbackMachineState,
   OAuthCallbackSpec,
-  WasmModule,
 } from "../wasm-init.js";
-import {
-  oauthCallbackStartMock,
-  oauthCallbackStepMock,
-} from "./oauth-callback-mock.js";
 
-export { CallbackMachineError } from "./oauth-callback-mock.js";
 export type {
   CallbackAction,
   CallbackEvent,
@@ -44,22 +34,7 @@ export type {
   OAuthCallbackSpec,
 } from "../wasm-init.js";
 
-/**
- * The wasm module, or `null` when the callback-machine exports are
- * unavailable (node test environment, or a wasm build predating these
- * exports). Mirrors the fallback pattern in `rotation.ts`.
- */
-function wasmModule(): WasmModule | null {
-  try {
-    const mod = ensureWasm();
-    return typeof mod === "object" && mod !== null ? mod : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Wasm bindings can throw bare strings — normalize so the wasm and
- * mock paths raise the same Error shape with the same message. */
+/** Wasm bindings can throw bare strings — normalize to the JavaScript Error shape. */
 function normalize(e: unknown): Error {
   if (e instanceof Error) return e;
   return new Error(String(e));
@@ -73,15 +48,13 @@ function normalize(e: unknown): Error {
 export function oauthCallbackStart(
   spec: OAuthCallbackSpec,
 ): CallbackMachineState {
-  const mod = wasmModule();
-  if (mod && typeof mod.oauthCallbackStart === "function") {
-    try {
-      return mod.oauthCallbackStart(spec);
-    } catch (e) {
-      throw normalize(e);
-    }
+  const mod = ensureWasm();
+
+  try {
+    return mod.oauthCallbackStart(spec);
+  } catch (e) {
+    throw normalize(e);
   }
-  return oauthCallbackStartMock(spec);
 }
 
 /**
@@ -93,13 +66,11 @@ export function oauthCallbackStep(
   state: CallbackMachineState,
   event: CallbackEvent,
 ): CallbackMachineState {
-  const mod = wasmModule();
-  if (mod && typeof mod.oauthCallbackStep === "function") {
-    try {
-      return mod.oauthCallbackStep(state, event);
-    } catch (e) {
-      throw normalize(e);
-    }
+  const mod = ensureWasm();
+
+  try {
+    return mod.oauthCallbackStep(state, event);
+  } catch (e) {
+    throw normalize(e);
   }
-  return oauthCallbackStepMock(state, event);
 }

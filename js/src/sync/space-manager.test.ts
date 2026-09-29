@@ -9,7 +9,6 @@ import {
 import { bytesToBase64, bytesToBase64Url, base64ToBytes } from "./encoding.js";
 import {
   serializeMembershipEntry,
-  parseMembershipEntry,
   parseUCANPayload,
   buildMembershipSigningMessage,
   type MembershipEntryPayload,
@@ -39,6 +38,12 @@ vi.mock("../crypto/index.js", () => {
     }
     decrypt(data: Uint8Array) {
       return data;
+    }
+    encryptMembershipPayload(payload: string) {
+      return new TextEncoder().encode(payload);
+    }
+    decryptMembershipPayload(payload: Uint8Array) {
+      return new TextDecoder().decode(payload);
     }
     destroy() {
       state.destroyedCryptos.push(this.id);
@@ -76,9 +81,45 @@ vi.mock("../crypto/internals.js", () => ({
 
 vi.mock("../wasm-init.js", async () => {
   const { createFrameCodec } = await import("./rpc-frames-mock.js");
+  const { createProtocolWasmMock } = await import("../protocol-wasm-mock.js");
+  const { shouldRotateSpaceEpochMock } = await import("./rotation-mock.js");
   return {
     ensureWasm: () => ({
       ...createFrameCodec(),
+      ...createProtocolWasmMock(),
+      encryptMembershipPayload: (payload: string) =>
+        new TextEncoder().encode(payload),
+      decryptMembershipPayload: (payload: Uint8Array) =>
+        new TextDecoder().decode(payload),
+      buildMembershipSigningMessage: (...fields: string[]) =>
+        new TextEncoder().encode(
+          `betterbase:membership:v1\0${fields.join("\0")}`,
+        ),
+      serializeMembershipEntry: (
+        entry: import("../wasm-init.js").MembershipEntryPayload,
+      ) =>
+        JSON.stringify({
+          u: entry.ucan,
+          t: entry.entryType,
+          s: bytesToBase64Url(entry.signature),
+          p: entry.signerPublicKey,
+          e: entry.epoch,
+          m: entry.mailboxId || undefined,
+          k: entry.publicKeyJwk,
+          n: entry.signerHandle || undefined,
+          rn: entry.recipientHandle || undefined,
+        }),
+      shouldRotateSpaceEpoch: (
+        now: bigint,
+        advanced: bigint | null,
+        admin: boolean,
+      ) =>
+        shouldRotateSpaceEpochMock(
+          Number(now),
+          advanced === null ? null : Number(advanced),
+          admin,
+          60_000,
+        ),
       sha256: (bytes: Uint8Array) => {
         const out = new Uint8Array(32);
         out.set(bytes.slice(0, 8));
@@ -1114,8 +1155,10 @@ describe("SpaceManager", () => {
       // friend + reinvite and nothing else.
       const appendedAudiences = appendedPayloads
         .map((payload) => {
-          const e = parseMembershipEntry(new TextDecoder().decode(payload));
-          return parseUCANPayload(e.ucan).audienceDID;
+          const e = JSON.parse(new TextDecoder().decode(payload)) as {
+            u: string;
+          };
+          return parseUCANPayload(e.u).audienceDID;
         })
         .sort();
       expect(appendedAudiences).toEqual([friend.did, reinvite.did].sort());

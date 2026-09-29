@@ -388,6 +388,8 @@ export async function authorize(
   );
   const auth = await oauthClient.handleCallback();
   if (!auth) throw new Error("handleCallback returned null");
+  if (!auth.personalSpaceId || !auth.handle)
+    throw new Error("callback delivered no sync identity");
   if (!auth.appKeypair) throw new Error("callback delivered no app keypair");
 
   return {

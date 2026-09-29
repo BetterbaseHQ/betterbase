@@ -837,27 +837,25 @@ export class FileStore {
         // Bytes not on this device — never cached, or evicted after a
         // completed upload. There is no persisted meta to reuse in that
         // case, so synthesize one for planning.
-        metas.push(
-          stored ?? {
-            key: fromKey,
-            spaceId: fromSpaceId,
-            fileId,
-            cachedAt: now,
-            lastAccessedAt: now,
-            size: 0,
-          },
-        );
-        if (stored && (await this.storage.getBlob(fromKey)))
-          cachedKeys.push(fromKey);
-        // A fetch is possible iff the source space can serve the file:
-        // a sync runtime is registered for it. (If the server no longer
-        // has it, the 404 during the actual fetch downgrades the re-key
-        // to a skip at execution time.)
-        if (this.syncConfig !== null && this.spaceRuntimes.has(fromSpaceId)) {
-          fetchableKeys.push(fromKey);
-        }
-        if (opts?.recordIdOf)
-          recordIds[fileId] = opts.recordIdOf(fileId) ?? null;
+        const meta = stored ?? {
+          key: fromKey,
+          spaceId: fromSpaceId,
+          fileId,
+          cachedAt: now,
+          lastAccessedAt: now,
+          size: 0,
+        };
+        const cached = stored && (await this.storage.getBlob(fromKey));
+        const fetchable =
+          this.syncConfig !== null && this.spaceRuntimes.has(fromSpaceId);
+        const recordId = opts?.recordIdOf?.(fileId) ?? null;
+
+        // Publish facts together: a failed read or remap must never leave
+        // a partially prepared file in the executable migration plan.
+        metas.push(meta);
+        if (cached) cachedKeys.push(fromKey);
+        if (fetchable) fetchableKeys.push(fromKey);
+        if (opts?.recordIdOf) recordIds[fileId] = recordId;
       } catch (e) {
         // Per-file failure boundary (storage read, validation, remap
         // callback) — count it and keep going, matching the execution

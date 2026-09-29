@@ -17,6 +17,7 @@ import { defineConfig } from "vitest/config";
  */
 export default defineConfig({
   plugins: [wasm(), topLevelAwait()],
+  optimizeDeps: { include: ["@serenity-kit/opaque", "jose"] },
   server: {
     fs: {
       allow: [".."],

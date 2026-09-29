@@ -8,7 +8,7 @@
  * (`browser-tests/sync/spaces-record.test.ts`) to the same contract.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import rawVectors from "../../../crates/betterbase-sync-core/test-vectors/spaces-record.json";
 import { spaces } from "./spaces-collection.js";
 import { parseSpacesRecordMirror } from "./spaces-record-mock.js";
@@ -145,4 +145,9 @@ describe("spaces-record wrapper (node path)", () => {
     expect(v.ok).toBe(true);
     if (v.ok) expect(v.record).toEqual(expected);
   });
+});
+
+vi.mock("../wasm-init.js", async () => {
+  const { createProtocolWasmMock } = await import("../protocol-wasm-mock.js");
+  return { ensureWasm: createProtocolWasmMock };
 });

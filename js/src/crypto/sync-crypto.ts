@@ -75,6 +75,33 @@ export class SyncCrypto implements Disposable {
     );
   }
 
+  /** Membership context encoding stays in Rust without exposing this key. */
+  encryptMembershipPayload(
+    payload: string,
+    spaceId: string,
+    seq: number,
+  ): Uint8Array {
+    return ensureWasm().encryptMembershipPayload(
+      payload,
+      this.key,
+      spaceId,
+      seq,
+    );
+  }
+
+  decryptMembershipPayload(
+    encrypted: Uint8Array,
+    spaceId: string,
+    seq: number,
+  ): string {
+    return ensureWasm().decryptMembershipPayload(
+      encrypted,
+      this.key,
+      spaceId,
+      seq,
+    );
+  }
+
   /** Zero the key material. Safe to call multiple times. */
   destroy(): void {
     this.key.fill(0);

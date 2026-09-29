@@ -164,3 +164,8 @@ describe("PresenceManager", () => {
     expect(ws.setPresence).not.toHaveBeenCalled();
   });
 });
+
+vi.mock("../wasm-init.js", async () => {
+  const { createProtocolWasmMock } = await import("../protocol-wasm-mock.js");
+  return { ensureWasm: createProtocolWasmMock };
+});

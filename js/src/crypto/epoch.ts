@@ -103,8 +103,8 @@ export function peekEpoch(wrappedDek: Uint8Array): number {
 
 /**
  * Derive a key forward from one epoch to another by chaining the epoch KDF.
- * Unbounded here (the DoS cap is enforced by the AUD-024 selection ladder,
- * `selectEpochKey`).
+ * Rust enforces MAX_EPOCH_DERIVE_DISTANCE before deriving, including recovery
+ * paths that do not pass through the key-selection ladder.
  *
  * Canonical in Rust (`derive_forward`, betterbase-sync-core): same epoch
  * returns a copy; backward derivation throws an error string.

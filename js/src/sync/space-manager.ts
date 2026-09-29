@@ -1276,9 +1276,15 @@ export class SpaceManager {
         }
       }
       case "readLog": {
-        const ms = await this.collectMemberState(spaceId);
+        // Recovery frames share this host context. Preserve the removal
+        // exclusion before distributing keys or re-encrypting membership.
+        const ms = await this.collectMemberState(
+          spaceId,
+          run.removal?.memberDID,
+        );
         run.contacts = ms.contacts;
         run.entryPayloads = ms.entryPayloads;
+        if (run.removal) run.removal.remainingEntries = ms.entryPayloads;
         return step();
       }
       case "distributeShares": {
@@ -1930,6 +1936,7 @@ export class SpaceManager {
    */
   private async collectMemberState(
     spaceId: string,
+    removedDid?: string,
   ): Promise<{ contacts: MemberContact[]; entryPayloads: string[] }> {
     const syncCrypto = this.syncCryptos.get(spaceId);
     const spaceUCAN = this.spaceUCANs.get(spaceId);
@@ -1941,7 +1948,12 @@ export class SpaceManager {
     );
     // Canonical verified fold (audit G4): active members + re-encryption
     // payloads in one Rust pass (the old TS fold also skipped verification).
-    const fold = await this.decryptAndFold(log.entries, syncCrypto, spaceId);
+    const fold = await this.decryptAndFold(
+      log.entries,
+      syncCrypto,
+      spaceId,
+      removedDid,
+    );
     return {
       contacts: fold.active.filter(
         (a): a is FoldedActive & { publicKeyJwk: JsonWebKey } =>

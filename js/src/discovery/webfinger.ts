@@ -1,6 +1,6 @@
-import type { WebFingerResponse, UserResolution } from "./types.js";
+import { initWasm } from "../wasm-init.js";
+import type { UserResolution } from "./types.js";
 import { DISCOVERY_TIMEOUT_MS } from "./metadata.js";
-const SYNC_REL = "https://betterbase.dev/ns/sync";
 
 /**
  * Resolve a user handle (user@domain) via WebFinger.
@@ -25,36 +25,15 @@ export async function resolveUser(
     );
   }
 
-  const data: unknown = await response.json();
-  validateWebFingerResponse(data);
-
-  const syncLink = data.links.find((link) => link.rel === SYNC_REL);
-  if (!syncLink) {
-    throw new Error(
-      `WebFinger response for ${handle} has no sync endpoint link`,
-    );
-  }
-
-  return {
-    subject: data.subject,
-    syncEndpoint: syncLink.href,
-  };
-}
-
-/** Validate that an unknown value is a valid WebFingerResponse. */
-function validateWebFingerResponse(
-  data: unknown,
-): asserts data is WebFingerResponse {
-  if (typeof data !== "object" || data === null) {
-    throw new Error("Invalid WebFinger response: expected object");
-  }
-
-  const obj = data as Record<string, unknown>;
-
-  if (typeof obj["subject"] !== "string") {
-    throw new Error("Invalid WebFinger response: missing subject");
-  }
-  if (!Array.isArray(obj["links"])) {
-    throw new Error("Invalid WebFinger response: missing links array");
+  const json = await response.text();
+  const wasm = await initWasm();
+  try {
+    const resolution = wasm.parseWebfingerResponse(json);
+    return {
+      subject: resolution.subject,
+      syncEndpoint: resolution.sync_endpoint,
+    };
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error));
   }
 }

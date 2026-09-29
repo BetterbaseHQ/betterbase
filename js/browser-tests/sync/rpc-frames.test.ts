@@ -82,28 +82,29 @@ describe("rpc-v1 frame conformance vectors", () => {
   const frames = (vectors as { frames: VectorFrame[] }).frames;
 
   for (const v of frames) {
-    if (v.expect) {
+    const expected = v.expect;
+    if (expected) {
       it(`vector decode: ${v.name}`, () => {
         const frame = decodeRpcFrame(hexToBytes(v.hex));
         expect(frame).not.toBeNull();
         const f = frame!;
-        expect(f.type).toBe(v.expect.type);
-        expect(f.id ?? undefined).toBe(v.expect.id);
-        expect(f.method ?? undefined).toBe(v.expect.method);
-        expect(f.name ?? undefined).toBe(v.expect.name);
+        expect(f.type).toBe(expected.type);
+        expect(f.id ?? undefined).toBe(expected.id);
+        expect(f.method ?? undefined).toBe(expected.method);
+        expect(f.name ?? undefined).toBe(expected.name);
         expect(f.params ? bytesToHex(f.params) : undefined).toBe(
-          v.expect.params,
+          expected.params,
         );
         expect(f.result ? bytesToHex(f.result) : undefined).toBe(
-          v.expect.result,
+          expected.result,
         );
-        expect(f.data ? bytesToHex(f.data) : undefined).toBe(v.expect.data);
-        expect(f.error ?? null).toEqual(v.expect.error ?? null);
+        expect(f.data ? bytesToHex(f.data) : undefined).toBe(expected.data);
+        expect(f.error ?? null).toEqual(expected.error ?? null);
       });
 
       if (v.canonical) {
         it(`vector encode: ${v.name} (byte-exact canonical CBOR)`, () => {
-          const e = v.expect;
+          const e = expected;
           let encoded: Uint8Array;
           if (e.type === RPC_REQUEST) {
             encoded = encodeRpcRequestFrame(
@@ -112,8 +113,8 @@ describe("rpc-v1 frame conformance vectors", () => {
               e.params ? hexToBytes(e.params) : new Uint8Array(0),
             );
           } else if (e.method === "auth") {
-            const token = cborDecode<{ token: string }>(
-              hexToBytes(e.params!),
+            const token = (
+              cborDecode(hexToBytes(e.params!)) as { token: string }
             ).token;
             encoded = encodeRpcAuthFrame(token);
           } else {

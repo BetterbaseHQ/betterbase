@@ -7,18 +7,26 @@
 
 import { SyncCrypto } from "../crypto/index.js";
 import type { EncryptionContext } from "../crypto/types.js";
+import { decodeBase64UrlJson } from "./encoding.js";
 import {
-  bytesToBase64Url,
-  base64UrlToBytes,
-  decodeBase64UrlJson,
-} from "./encoding.js";
+  ensureWasm,
+  type MembershipEntryPayload as WasmMembershipEntryPayload,
+} from "../wasm-init.js";
 import type { SyncCryptoInterface } from "./types.js";
 import { RPCCallError } from "./rpc-connection.js";
 import type { WSClient } from "./ws-client.js";
 import type { WSMembershipEntry } from "./ws-frames.js";
 
-/** Prefix for membership signing messages (null-byte separated fields). */
-const MEMBERSHIP_PREFIX = "betterbase:membership:v1\0";
+/** Normalize bare-string WASM errors at the public JS boundary. */
+function normalize(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function validateSequence(seq: number): void {
+  if (!Number.isInteger(seq) || seq < 0 || seq > 0xffffffff) {
+    throw new Error("Membership sequence must be an unsigned 32-bit integer");
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -197,31 +205,62 @@ export function encryptMembershipPayload(
   spaceId: string,
   seq: number,
 ): Uint8Array {
-  const sc =
-    cryptoOrKey instanceof Uint8Array
-      ? new SyncCrypto(cryptoOrKey)
-      : cryptoOrKey;
-  const plaintext = new TextEncoder().encode(payload);
-  const context: EncryptionContext = { spaceId, recordId: String(seq) };
-  return sc.encrypt(plaintext, context);
+  validateSequence(seq);
+  try {
+    if (cryptoOrKey instanceof Uint8Array) {
+      return ensureWasm().encryptMembershipPayload(
+        payload,
+        cryptoOrKey,
+        spaceId,
+        seq,
+      );
+    }
+    if (
+      cryptoOrKey instanceof SyncCrypto &&
+      cryptoOrKey.encrypt === SyncCrypto.prototype.encrypt
+    ) {
+      return cryptoOrKey.encryptMembershipPayload(payload, spaceId, seq);
+    }
+    // Custom adapters (including subclasses overriding encrypt/decrypt)
+    // retain custody of their keys. Only adapt the
+    // string and AAD to their public interface; the default path is Rust.
+    const context: EncryptionContext = { spaceId, recordId: String(seq) };
+    return cryptoOrKey.encrypt(new TextEncoder().encode(payload), context);
+  } catch (error) {
+    throw normalize(error);
+  }
 }
 
-/**
- * Decrypt a membership log entry payload.
- */
+/** Decrypt a membership payload bound to its space and sequence. */
 export function decryptMembershipPayload(
   encrypted: Uint8Array,
   cryptoOrKey: SyncCryptoInterface | Uint8Array,
   spaceId: string,
   seq: number,
 ): string {
-  const sc =
-    cryptoOrKey instanceof Uint8Array
-      ? new SyncCrypto(cryptoOrKey)
-      : cryptoOrKey;
-  const context: EncryptionContext = { spaceId, recordId: String(seq) };
-  const plaintext = sc.decrypt(encrypted, context);
-  return new TextDecoder().decode(plaintext);
+  validateSequence(seq);
+  try {
+    if (cryptoOrKey instanceof Uint8Array) {
+      return ensureWasm().decryptMembershipPayload(
+        encrypted,
+        cryptoOrKey,
+        spaceId,
+        seq,
+      );
+    }
+    if (
+      cryptoOrKey instanceof SyncCrypto &&
+      cryptoOrKey.decrypt === SyncCrypto.prototype.decrypt
+    ) {
+      return cryptoOrKey.decryptMembershipPayload(encrypted, spaceId, seq);
+    }
+    const context: EncryptionContext = { spaceId, recordId: String(seq) };
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      cryptoOrKey.decrypt(encrypted, context),
+    );
+  } catch (error) {
+    throw normalize(error);
+  }
 }
 
 /**
@@ -230,8 +269,6 @@ export function decryptMembershipPayload(
 export function sha256(payload: Uint8Array): Uint8Array {
   return ensureWasm().sha256(payload);
 }
-
-import { ensureWasm } from "../wasm-init.js";
 
 /**
  * Compute the content identifier (CID) for a UCAN string.
@@ -246,19 +283,14 @@ export function computeUCANCID(ucan: string): string {
 // ---------------------------------------------------------------------------
 
 /** Entry type: delegation, accepted, declined, revoked. */
-export type MembershipEntryType = "d" | "a" | "x" | "r";
+export type MembershipEntryType = WasmMembershipEntryPayload["entryType"];
 
-/** Structured payload stored in membership log entries. */
-export interface MembershipEntryPayload {
-  ucan: string;
+/** JS API uses `type`; the WASM DTO uses `entryType`. */
+export interface MembershipEntryPayload extends Omit<
+  WasmMembershipEntryPayload,
+  "entryType"
+> {
   type: MembershipEntryType;
-  signature: Uint8Array;
-  signerPublicKey: JsonWebKey;
-  epoch?: number;
-  mailboxId?: string;
-  publicKeyJwk?: JsonWebKey;
-  signerHandle?: string;
-  recipientHandle?: string;
 }
 
 /**
@@ -272,77 +304,45 @@ export function buildMembershipSigningMessage(
   signerHandle: string = "",
   recipientHandle: string = "",
 ): Uint8Array<ArrayBuffer> {
-  const message = `${MEMBERSHIP_PREFIX}${type}\0${spaceId}\0${signerDID}\0${ucan}\0${signerHandle}\0${recipientHandle}`;
-  return new TextEncoder().encode(message);
-}
-
-/**
- * Parse a membership log entry payload string.
- */
-export function parseMembershipEntry(payload: string): MembershipEntryPayload {
-  const parsed = JSON.parse(payload);
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    typeof parsed.u !== "string" ||
-    typeof parsed.t !== "string" ||
-    typeof parsed.s !== "string" ||
-    typeof parsed.p !== "object" ||
-    parsed.p === null
-  ) {
-    throw new Error("Invalid membership entry: requires u, t, s, and p fields");
+  try {
+    return new Uint8Array(
+      ensureWasm().buildMembershipSigningMessage(
+        type,
+        spaceId,
+        signerDID,
+        ucan,
+        signerHandle,
+        recipientHandle,
+      ),
+    );
+  } catch (error) {
+    throw normalize(error);
   }
-  return {
-    ucan: parsed.u,
-    type: parsed.t as MembershipEntryType,
-    signature: base64UrlToBytes(parsed.s),
-    signerPublicKey: parsed.p,
-    epoch: parsed.e,
-    mailboxId: parsed.m,
-    publicKeyJwk: parsed.k,
-    signerHandle: validateHandle(parsed.n),
-    recipientHandle: validateHandle(parsed.rn),
-  };
 }
 
-/** Maximum handle length per RFC 5321 (local@domain). */
-const MAX_HANDLE_LENGTH = 320;
-
-function validateHandle(value: unknown): string | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") return undefined;
-  if (value.length > MAX_HANDLE_LENGTH) return undefined;
-  return value;
+/** Parse the wire payload with the same Rust parser used by the verified fold. */
+export function parseMembershipEntry(payload: string): MembershipEntryPayload {
+  try {
+    const { entryType, ...entry } = ensureWasm().parseMembershipEntry(payload);
+    return { ...entry, type: entryType };
+  } catch (error) {
+    throw normalize(error);
+  }
 }
 
-/**
- * Serialize a membership entry payload to signed JSON format.
- */
+/** Rust owns the wire field names, optional fields, and signature encoding. */
 export function serializeMembershipEntry(
   entry: MembershipEntryPayload,
 ): string {
-  const obj: Record<string, unknown> = {
-    u: entry.ucan,
-    t: entry.type,
-    s: bytesToBase64Url(entry.signature),
-    p: entry.signerPublicKey,
-  };
-  if (entry.epoch !== undefined) {
-    obj.e = entry.epoch;
+  try {
+    const { type, ...fields } = entry;
+    return ensureWasm().serializeMembershipEntry({
+      ...fields,
+      entryType: type,
+    });
+  } catch (error) {
+    throw normalize(error);
   }
-  if (entry.mailboxId) {
-    obj.m = entry.mailboxId;
-  }
-  if (entry.publicKeyJwk) {
-    obj.k = entry.publicKeyJwk;
-  }
-  if (entry.signerHandle) {
-    obj.n = entry.signerHandle;
-  }
-  if (entry.recipientHandle) {
-    obj.rn = entry.recipientHandle;
-  }
-  return JSON.stringify(obj);
 }
 
 // ---------------------------------------------------------------------------

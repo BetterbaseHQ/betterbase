@@ -126,7 +126,7 @@ describe("envelope v4 pipeline conformance vectors", () => {
     it(`wrap ${i}: byte-exact wrap + unwrap round-trip`, () => {
       const wrapped = wasm.wrapDEK(
         hexToBytes(c.dek),
-        hexToBytes(c.kek),
+        new Uint8Array(hexToBytes(c.kek)),
         c.epoch,
       );
       expect(bytesToHex(wrapped)).toBe(c.expected);
@@ -142,7 +142,7 @@ describe("envelope v4 pipeline conformance vectors", () => {
     const c = wrapCases[0]!;
     const kekKey = await crypto.subtle.importKey(
       "raw",
-      hexToBytes(c.kek),
+      new Uint8Array(hexToBytes(c.kek)),
       { name: "AES-KW" },
       false,
       ["wrapKey"],
@@ -182,7 +182,7 @@ describe("envelope v4 pipeline conformance vectors", () => {
       c.expected.h,
       c.recordId,
       c.spaceId,
-      hexToBytes(c.kek),
+      new Uint8Array(hexToBytes(c.kek)),
       wrapEpoch,
       buckets,
     );
@@ -198,7 +198,7 @@ describe("envelope v4 pipeline conformance vectors", () => {
       wrappedDek,
       c.recordId,
       c.spaceId,
-      hexToBytes(c.kek),
+      new Uint8Array(hexToBytes(c.kek)),
       buckets,
     );
     expect(env.collection).toBe(c.expected.c);
@@ -214,7 +214,7 @@ describe("envelope v4 pipeline conformance vectors", () => {
         hexToBytes(c.wrappedDek),
         c.recordId,
         c.spaceId,
-        hexToBytes(c.kek),
+        new Uint8Array(hexToBytes(c.kek)),
       );
       expect(env.collection).toBe(c.expected.c);
       expect(env.version).toBe(c.expected.v);
@@ -229,7 +229,7 @@ describe("envelope v4 pipeline conformance vectors", () => {
           hexToBytes(c.wrappedDek),
           "rec-43",
           c.spaceId,
-          hexToBytes(c.kek),
+          new Uint8Array(hexToBytes(c.kek)),
         ),
       ).toThrow();
       expect(() =>
@@ -238,7 +238,7 @@ describe("envelope v4 pipeline conformance vectors", () => {
           hexToBytes(c.wrappedDek),
           c.recordId,
           "other-space",
-          hexToBytes(c.kek),
+          new Uint8Array(hexToBytes(c.kek)),
         ),
       ).toThrow();
     });

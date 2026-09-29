@@ -15,8 +15,6 @@
  */
 
 import { ensureWasm } from "../wasm-init.js";
-import type { WasmModule } from "../wasm-init.js";
-import { foldMembershipLogMock } from "./membership-fold-mock.js";
 import type {
   FoldedActive,
   FoldedMember,
@@ -40,8 +38,7 @@ export type {
 /**
  * Fold a decrypted membership log into member state (canonical Rust fold).
  *
- * Uses the wasm fold when available (browsers, real node); falls back to
- * the 1:1 JS mirror in node test environments where wasm-init is mocked.
+ * Requires initialized WASM. Tests inject their doubles explicitly.
  *
  * @param payloads - Serialized entry payloads in chain_seq order (after
  *   decryption).
@@ -57,18 +54,7 @@ export async function foldMembershipLog(
   now: number,
   removedDid?: string,
 ): Promise<MembershipLogFold> {
-  let mod: WasmModule;
-  try {
-    mod = ensureWasm();
-  } catch {
-    // wasm not available (e.g. mocked wasm-init in node tests) — use the
-    // 1:1 JS mirror.
-    return foldMembershipLogMock(payloads, spaceId, { now, removedDid });
-  }
-  if (typeof mod.foldMembershipLog !== "function") {
-    // Stale pkg without the fold export — use the 1:1 JS mirror.
-    return foldMembershipLogMock(payloads, spaceId, { now, removedDid });
-  }
+  const mod = ensureWasm();
   try {
     return mod.foldMembershipLog(payloads, spaceId, now, removedDid);
   } catch (e) {

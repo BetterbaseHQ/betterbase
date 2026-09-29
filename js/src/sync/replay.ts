@@ -13,24 +13,6 @@
  */
 
 import { ensureWasm } from "../wasm-init.js";
-import type { WasmModule } from "../wasm-init.js";
-import {
-  encodeReplayWrapperMirror,
-  EVENT_REPLAY_MAX_AGE_MS,
-  isReplayStaleMirror,
-  parseReplayWrapperMirror,
-  PRESENCE_REPLAY_MAX_AGE_MS,
-} from "./replay-mock.js";
-
-/** The wasm module, or `null` when unavailable (node tests, stale build). */
-function wasmModule(): WasmModule | null {
-  try {
-    const mod = ensureWasm();
-    return typeof mod === "object" && mod !== null ? mod : null;
-  } catch {
-    return null;
-  }
-}
 
 export interface ReplayWrapper {
   /** Re-serialized CBOR of the payload (value-equivalent to what was sent). */
@@ -41,12 +23,10 @@ export interface ReplayWrapper {
 
 /** Parse a CBOR `{d, t}` replay wrapper (canonical parser). Throws on malformed input. */
 export function parseReplayWrapper(bytes: Uint8Array): ReplayWrapper {
-  const mod = wasmModule();
-  if (mod && typeof mod.parseReplayWrapper === "function") {
-    const w = mod.parseReplayWrapper(bytes);
-    return { d: w.d, t: Number(w.t) };
-  }
-  return parseReplayWrapperMirror(bytes);
+  const mod = ensureWasm();
+
+  const w = mod.parseReplayWrapper(bytes);
+  return { d: w.d, t: Number(w.t) };
 }
 
 /** Encode a `{d, t}` wrapper from the payload's CBOR bytes and a timestamp. */
@@ -54,11 +34,9 @@ export function encodeReplayWrapper(
   dataCbor: Uint8Array,
   sentAtMs: number,
 ): Uint8Array {
-  const mod = wasmModule();
-  if (mod && typeof mod.encodeReplayWrapper === "function") {
-    return mod.encodeReplayWrapper(dataCbor, BigInt(sentAtMs));
-  }
-  return encodeReplayWrapperMirror(dataCbor, sentAtMs);
+  const mod = ensureWasm();
+
+  return mod.encodeReplayWrapper(dataCbor, BigInt(sentAtMs));
 }
 
 /** Replay-window decision: stale when absent/zero/negative timestamp or older than `maxAgeMs` (inclusive boundary). */
@@ -67,31 +45,25 @@ export function isReplayStale(
   sentAtMs: number | null,
   maxAgeMs: number,
 ): boolean {
-  const mod = wasmModule();
-  if (mod && typeof mod.isReplayStale === "function") {
-    return mod.isReplayStale(
-      BigInt(nowMs),
-      sentAtMs === null ? null : BigInt(sentAtMs),
-      BigInt(maxAgeMs),
-    );
-  }
-  return isReplayStaleMirror(nowMs, sentAtMs, maxAgeMs);
+  const mod = ensureWasm();
+
+  return mod.isReplayStale(
+    BigInt(nowMs),
+    sentAtMs === null ? null : BigInt(sentAtMs),
+    BigInt(maxAgeMs),
+  );
 }
 
 /** Rust-canonical max age of a presence heartbeat (ms). */
 export function presenceReplayMaxAgeMs(): number {
-  const mod = wasmModule();
-  if (mod && typeof mod.presenceReplayMaxAgeMs === "function") {
-    return Number(mod.presenceReplayMaxAgeMs());
-  }
-  return PRESENCE_REPLAY_MAX_AGE_MS;
+  const mod = ensureWasm();
+
+  return Number(mod.presenceReplayMaxAgeMs());
 }
 
 /** Rust-canonical max age of a one-shot event (ms). */
 export function eventReplayMaxAgeMs(): number {
-  const mod = wasmModule();
-  if (mod && typeof mod.eventReplayMaxAgeMs === "function") {
-    return Number(mod.eventReplayMaxAgeMs());
-  }
-  return EVENT_REPLAY_MAX_AGE_MS;
+  const mod = ensureWasm();
+
+  return Number(mod.eventReplayMaxAgeMs());
 }

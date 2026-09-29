@@ -25,7 +25,7 @@ import type {
   RotationSpec,
   RotationState,
 } from "../wasm-init.js";
-import { DEFAULT_EPOCH_ADVANCE_INTERVAL_MS } from "../crypto/index.js";
+import { DEFAULT_EPOCH_ADVANCE_INTERVAL_MS } from "../crypto/types.js";
 
 // ---------------------------------------------------------------------------
 // Errors (byte-pinned to the Rust machine)
@@ -641,7 +641,7 @@ export function shouldRotateSpaceEpochMock(
   intervalMs?: number,
 ): boolean {
   const interval = intervalMs ?? DEFAULT_EPOCH_ADVANCE_INTERVAL_MS;
-  // Fail loud if a test's barrel mock of ../crypto/index.js dropped the
+  // Fail loud if a test's barrel mock of ../crypto/types.js dropped the
   // constant: `>= undefined` would otherwise silently read "never due".
   if (typeof interval !== "number") {
     throw new Error(

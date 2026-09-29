@@ -53,25 +53,32 @@ impl MembershipEntryType {
 }
 
 /// Structured payload stored in membership log entries.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MembershipEntryPayload {
     /// UCAN JWT string.
     pub ucan: String,
     /// Entry type.
     pub entry_type: MembershipEntryType,
     /// ECDSA P-256 signature (64 bytes).
+    #[serde(with = "serde_bytes")]
     pub signature: Vec<u8>,
     /// Signer's public key JWK.
     pub signer_public_key: serde_json::Value,
     /// Epoch at time of writing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub epoch: Option<u32>,
     /// Recipient's mailbox ID (delegation entries only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mailbox_id: Option<String>,
     /// Recipient's P-256 public key JWK (delegation entries only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_key_jwk: Option<serde_json::Value>,
     /// Handle (user@domain) of the entry signer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer_handle: Option<String>,
     /// Handle (user@domain) of the invitee (delegation entries only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recipient_handle: Option<String>,
 }
 
@@ -123,6 +130,7 @@ pub fn parse_membership_entry(payload: &str) -> Result<MembershipEntryPayload, S
         .ok_or_else(|| SyncError::InvalidMembershipEntry("missing s field".to_string()))?;
     let signer_public_key = obj
         .get("p")
+        .filter(|value| value.is_object())
         .ok_or_else(|| SyncError::InvalidMembershipEntry("missing p field".to_string()))?
         .clone();
 
@@ -180,7 +188,7 @@ pub fn serialize_membership_entry(entry: &MembershipEntryPayload) -> String {
     if let Some(epoch) = entry.epoch {
         obj.insert("e".to_string(), serde_json::Value::from(epoch));
     }
-    if let Some(ref mailbox_id) = entry.mailbox_id {
+    if let Some(mailbox_id) = entry.mailbox_id.as_ref().filter(|value| !value.is_empty()) {
         obj.insert(
             "m".to_string(),
             serde_json::Value::String(mailbox_id.clone()),
@@ -189,10 +197,18 @@ pub fn serialize_membership_entry(entry: &MembershipEntryPayload) -> String {
     if let Some(ref pk) = entry.public_key_jwk {
         obj.insert("k".to_string(), pk.clone());
     }
-    if let Some(ref h) = entry.signer_handle {
+    if let Some(h) = entry
+        .signer_handle
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
         obj.insert("n".to_string(), serde_json::Value::String(h.clone()));
     }
-    if let Some(ref h) = entry.recipient_handle {
+    if let Some(h) = entry
+        .recipient_handle
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
         obj.insert("rn".to_string(), serde_json::Value::String(h.clone()));
     }
     serde_json::Value::Object(obj).to_string()
@@ -748,6 +764,53 @@ mod tests {
     fn parse_rejects_missing_fields() {
         assert!(parse_membership_entry(r#"{"u":"x"}"#).is_err());
         assert!(parse_membership_entry(r#"{"t":"d"}"#).is_err());
+    }
+
+    #[test]
+    fn membership_parser_rejects_non_object_signer_keys() {
+        for key in [
+            serde_json::json!(null),
+            serde_json::json!(42),
+            serde_json::json!("key"),
+            serde_json::json!([]),
+        ] {
+            let payload = serde_json::json!({"u": "token", "t": "a", "s": "AQID", "p": key});
+            assert!(parse_membership_entry(&payload.to_string()).is_err());
+        }
+    }
+
+    #[test]
+    fn structured_entry_uses_the_same_wire_writer() {
+        let value = serde_json::json!({
+            "ucan": "token", "entryType": "a", "signature": [1, 2, 3],
+            "signerPublicKey": {"kty": "EC"}, "epoch": 7,
+            "mailboxId": "", "signerHandle": "", "recipientHandle": ""
+        });
+        let entry: MembershipEntryPayload = serde_json::from_value(value).unwrap();
+        let wire: serde_json::Value =
+            serde_json::from_str(&serialize_membership_entry(&entry)).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "u": "token", "t": "a", "s": "AQID", "p": {"kty": "EC"}, "e": 7
+            })
+        );
+        let parsed = parse_membership_entry(&wire.to_string()).unwrap();
+        assert_eq!(parsed.signature, vec![1, 2, 3]);
+        assert_eq!(parsed.epoch, Some(7));
+    }
+
+    #[test]
+    fn structured_entry_rejects_unknown_type_and_overflowing_epoch() {
+        let value = serde_json::json!({
+            "ucan": "token", "entryType": "a", "signature": [], "signerPublicKey": {}
+        });
+        let mut invalid_type = value.clone();
+        invalid_type["entryType"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<MembershipEntryPayload>(invalid_type).is_err());
+        let mut invalid_epoch = value;
+        invalid_epoch["epoch"] = serde_json::json!(u32::MAX as u64 + 1);
+        assert!(serde_json::from_value::<MembershipEntryPayload>(invalid_epoch).is_err());
     }
 
     #[test]

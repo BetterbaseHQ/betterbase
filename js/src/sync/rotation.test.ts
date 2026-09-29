@@ -14,7 +14,7 @@
  * the exact thrown message when the run fails.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import rawVectors from "../../../crates/betterbase-sync-core/test-vectors/rotation.json";
 import {
   newRotationState,
@@ -228,4 +228,9 @@ describe("shouldRotateSpaceEpoch", () => {
       shouldRotateSpaceEpoch(2 * INTERVAL - 1, INTERVAL, true, INTERVAL),
     ).toBe(false);
   });
+});
+
+vi.mock("../wasm-init.js", async () => {
+  const { createProtocolWasmMock } = await import("../protocol-wasm-mock.js");
+  return { ensureWasm: createProtocolWasmMock };
 });

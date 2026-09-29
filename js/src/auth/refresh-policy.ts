@@ -61,5 +61,9 @@ export function refreshBackoffMs(attempt: number): number {
 export function classifyRefreshFailure(
   statusCode: number | null,
 ): "transient" | "invalid" {
-  return ensureWasm().classifyRefreshFailure(statusCode);
+  const kind = ensureWasm().classifyRefreshFailure(statusCode);
+  if (kind !== "transient" && kind !== "invalid") {
+    throw new Error(`Unknown refresh failure classification: ${kind}`);
+  }
+  return kind;
 }
