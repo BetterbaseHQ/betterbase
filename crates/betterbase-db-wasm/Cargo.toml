@@ -41,5 +41,13 @@ web-sys = { version = "0.3", features = [
 ] }
 console_error_panic_hook = "0.1"
 
+# wasm-pack runs its bundled wasm-opt after cargo by default. Two problems:
+# 1. A stale cached binaryen crashes on modern rustc output (bulk-memory
+#    opcodes), aborting the build midway with a confusing error.
+# 2. Even when it runs, it shrinks the raw binary while hurting entropy —
+#       the gzipped/zstd wire size grows. We serve compressed, so skip it.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

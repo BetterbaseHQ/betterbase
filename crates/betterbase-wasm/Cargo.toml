@@ -25,3 +25,9 @@ wasm-bindgen-futures = "0.4"
 ciborium = "0.2"
 zeroize = "1"
 sha2 = "0.11"
+
+# See crates/betterbase-db-wasm/Cargo.toml for why wasm-opt stays off:
+# stale cached binaryen crashes on modern rustc output, and its transforms
+# grow the compressed wire size we actually serve.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

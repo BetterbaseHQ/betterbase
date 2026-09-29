@@ -20,3 +20,18 @@ repository = "https://github.com/BetterbaseHQ/betterbase"
 
 [patch.crates-io]
 sqlite-wasm-vfs = { path = "crates/sqlite-wasm-vfs" }
+
+# Size-oriented release profile: the SDK ships as wasm to browsers where
+# download size dominates. opt-level="s" + fat LTO + a single codegen unit
+# measure ~24% smaller compressed than the defaults. wasm-opt is disabled
+# per-crate (see crates/betterbase-*-wasm/Cargo.toml): its transforms shrink
+# the raw binary but hurt entropy, making the compressed transfer larger.
+# If crypto or SQLite hot paths ever regress measurably, restore speed for
+# the affected crate surgically:
+#   [profile.release.package.betterbase-crypto]
+#   opt-level = 3
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = "symbols"

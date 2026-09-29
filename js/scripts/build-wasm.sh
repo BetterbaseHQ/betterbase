@@ -22,3 +22,15 @@ fi
 
 wasm-pack build --target bundler ../crates/betterbase-wasm "$@"
 wasm-pack build --target bundler ../crates/betterbase-db-wasm "$@"
+
+# Wire-size report: what a cold app load actually downloads (we serve these
+# zstd/gzip-compressed). Baseline before the size profile was ~4.6 MB raw /
+# ~1.7 MB gzip across the two blobs. `wc -c` (not `stat -f%z`) so the report
+# works on both BSD and GNU userlands — CI runs this on ubuntu.
+echo ""
+echo "SDK wasm sizes (raw / gzip -9):"
+for pkg in ../crates/betterbase-wasm/pkg ../crates/betterbase-db-wasm/pkg; do
+    f=$(ls "$pkg"/*_bg.wasm 2>/dev/null | head -1)
+    [ -n "$f" ] || continue
+    echo "  $(basename "$f"): $(wc -c < "$f" | tr -d ' ') / $(gzip -9 -c "$f" | wc -c | tr -d ' ')"
+done
