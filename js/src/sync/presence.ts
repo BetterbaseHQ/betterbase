@@ -120,7 +120,15 @@ export class PresenceManager {
       clearTimeout(existing.timer);
       this.localPresence.delete(spaceId);
     }
-    this.config.ws.clearPresence(spaceId);
+    // Fire-and-forget by contract. When the socket is already closed the
+    // server discarded our presence on disconnect, so there is nothing to
+    // clear — and rethrowing here would crash React teardown paths that
+    // clear presence during unmount (messenger blank-paged on Disconnect).
+    try {
+      this.config.ws.clearPresence(spaceId);
+    } catch {
+      // Already disconnected — nothing to clear.
+    }
   }
 
   /** Handle inbound "presence" notification (peer joined or updated). */

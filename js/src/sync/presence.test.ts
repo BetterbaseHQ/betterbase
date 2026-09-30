@@ -139,6 +139,20 @@ describe("PresenceManager", () => {
     expect(ws.setPresence).not.toHaveBeenCalled();
   });
 
+  it("clearPresence survives a closed socket during teardown", async () => {
+    const { pm, ws } = makeManager();
+    pm.setPresence("s1", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    // Disconnect closes the WS before React unmount clears presence —
+    // the WS layer throws synchronously in that state.
+    ws.clearPresence.mockImplementation(() => {
+      throw new Error("WebSocket not connected");
+    });
+
+    expect(() => pm.clearPresence("s1")).not.toThrow();
+    expect(ws.clearPresence).toHaveBeenCalledWith("s1");
+  });
+
   it("reset clears remote peers but keeps the local presence intent alive", async () => {
     const { pm, ws } = makeManager();
     pm.setPresence("s1", 1);
