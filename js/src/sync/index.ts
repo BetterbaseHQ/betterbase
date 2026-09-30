@@ -84,7 +84,11 @@ export { createSharedSpace, UCAN_LIFETIME_SECONDS } from "./spaces.js";
 export type { SpaceCredentials } from "./spaces.js";
 
 // Invitations
-export { InvitationClient, RecipientNotFoundError } from "./invitations.js";
+export {
+  InvitationClient,
+  RecipientNotFoundError,
+  RecipientNotProvisionedError,
+} from "./invitations.js";
 export type {
   InvitationPayload,
   Invitation,

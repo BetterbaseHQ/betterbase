@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { shareTree, ShareTreeError } from "./share-tree.js";
 import type { ShareTreeSpaces } from "./share-tree.js";
+import { RecipientNotProvisionedError } from "./invitations.js";
 
 // Minimal fakes: collections are opaque handles, the db only implements the
 // surface moveToSpace/bulkMoveToSpace touch.
@@ -114,6 +115,28 @@ describe("shareTree", () => {
         spaceName: "Trip planning",
       }),
     ).rejects.toThrow('User "ghost" not found');
+
+    expect(spaces.createSpace).not.toHaveBeenCalled();
+    expect(db.put).not.toHaveBeenCalled();
+    expect(spaces.invite).not.toHaveBeenCalled();
+  });
+
+  it("propagates RecipientNotProvisionedError so UIs can ask the recipient to connect the app", async () => {
+    const { db, spaces } = makeFixture();
+    const notProvisioned = new RecipientNotProvisionedError(
+      "alice@accounts.test",
+      "client-1",
+    );
+    spaces.userExists.mockRejectedValue(notProvisioned);
+
+    await expect(
+      callShareTree(db as never, spaces as unknown as ShareTreeSpaces, {
+        collection: notebooks,
+        id: "notebook-1",
+        invitee: "alice@accounts.test",
+        spaceName: "Trip planning",
+      }),
+    ).rejects.toBe(notProvisioned);
 
     expect(spaces.createSpace).not.toHaveBeenCalled();
     expect(db.put).not.toHaveBeenCalled();

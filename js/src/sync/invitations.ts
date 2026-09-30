@@ -65,6 +65,22 @@ export class RecipientNotFoundError extends Error {
   }
 }
 
+/**
+ * Thrown when the recipient exists but has never connected this app — no
+ * keypair/mailbox to address an invitation to (accounts 404 with code
+ * `user_key_not_provisioned`). Share UIs should tell the user to have the
+ * recipient open the app and sign in once.
+ */
+export class RecipientNotProvisionedError extends Error {
+  constructor(
+    public handle: string,
+    public clientId: string,
+  ) {
+    super(`Recipient has not connected this app yet: ${handle}`);
+    this.name = "RecipientNotProvisionedError";
+  }
+}
+
 /** Configuration for InvitationClient. */
 export interface InvitationClientConfig {
   ws: WSClient;
@@ -119,6 +135,17 @@ export class InvitationClient {
     );
 
     if (response.status === 404) {
+      // Newer accounts services tag "user exists but no key for this
+      // client" with a code; older ones (and unknown users) don't.
+      let code: string | undefined;
+      try {
+        code = ((await response.json()) as { code?: string }).code;
+      } catch {
+        // non-JSON body — treat as a plain miss
+      }
+      if (code === "user_key_not_provisioned") {
+        throw new RecipientNotProvisionedError(handle, clientId);
+      }
       throw new RecipientNotFoundError(handle, clientId);
     }
     if (!response.ok) {
