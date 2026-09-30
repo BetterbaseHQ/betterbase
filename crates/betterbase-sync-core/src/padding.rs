@@ -5,8 +5,18 @@
 
 use crate::error::SyncError;
 
-/// Default padding bucket sizes in bytes.
-pub const DEFAULT_PADDING_BUCKETS: &[usize] = &[256, 1024, 4096, 16384, 65536, 262144, 1048576];
+/// Default padding bucket sizes in bytes: powers of two up to the server's
+/// 5 MB blob cap, plus a final cap bucket.
+///
+/// Pow-2 granularity keeps anonymity sets uniformly sized across scales
+/// (modeling and expert review: compression-bench/README.md in the
+/// betterbase-dev repo). The final bucket (5,242,867) is the largest whose
+/// ciphertext blob (bucket + 13-byte v4 envelope) still passes the server's
+/// 5 MB stored-blob check; blobs in it fit the 8 MiB WS frame cap.
+pub const DEFAULT_PADDING_BUCKETS: &[usize] = &[
+    256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576,
+    2097152, 4194304, 5242867,
+];
 
 /// Length prefix size for padding (4 bytes, u32 LE).
 const LENGTH_PREFIX_SIZE: usize = 4;
@@ -94,7 +104,7 @@ mod tests {
     fn pads_to_next_bucket_when_needed() {
         let data = vec![0u8; 253]; // 253 + 4 = 257, doesn't fit in 256
         let padded = pad_to_bucket(&data, DEFAULT_PADDING_BUCKETS).unwrap();
-        assert_eq!(padded.len(), 1024);
+        assert_eq!(padded.len(), 512);
     }
 
     #[test]
@@ -106,7 +116,8 @@ mod tests {
 
     #[test]
     fn rejects_oversized_data() {
-        let data = vec![0u8; 1_048_577]; // Exceeds max bucket
+        // 4-byte length prefix + payload must exceed the top bucket
+        let data = vec![0u8; 5_242_864];
         assert!(pad_to_bucket(&data, DEFAULT_PADDING_BUCKETS).is_err());
     }
 

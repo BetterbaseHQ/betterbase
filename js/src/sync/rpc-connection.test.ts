@@ -275,9 +275,9 @@ describe("RpcConnection", () => {
       await expect(conn.call("ping", {})).resolves.toBe("pong");
     });
 
-    it("drops frames larger than 4 MiB", async () => {
+    it("drops frames larger than the 8 MiB frame limit", async () => {
       await connect();
-      const huge = new Uint8Array(4 * 1024 * 1024 + 1);
+      const huge = new Uint8Array(8 * 1024 * 1024 + 1);
       server.current.serverRaw(huge);
       server.handle("ping", () => "pong");
       await expect(conn.call("ping", {})).resolves.toBe("pong");

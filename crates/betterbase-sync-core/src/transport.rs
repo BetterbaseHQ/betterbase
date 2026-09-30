@@ -265,7 +265,9 @@ mod tests {
     #[test]
     fn data_too_large_fails() {
         let key = random_key();
-        let envelope = test_envelope(2_000_000);
+        // Envelope CBOR (payload + field overhead) busts the 5,242,867 top
+        // bucket, so no bucket fits and padding must fail.
+        let envelope = test_envelope(5_300_000);
 
         assert!(encrypt_record(
             &envelope,

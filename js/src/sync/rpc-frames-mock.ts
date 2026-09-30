@@ -13,7 +13,7 @@
  *   (0 request, 1 response, 2 notification, 3 chunk)
  * - encode emits canonical CBOR key order (length-first, then bytewise)
  * - decode: empty message and single 0xF6 byte -> null; oversized
- *   (> 4 MiB), non-map frames, unknown `type`, and missing fields throw
+ *   (> 8 MiB), non-map frames, unknown `type`, and missing fields throw
  * - payloads (`params`/`result`/`data`) cross as raw CBOR bytes
  *
  * Not part of the public package API (deep imports are blocked by the
@@ -22,7 +22,7 @@
 
 import { encode as cborEncode, decode as cborDecode } from "cborg";
 
-export const MAX_FRAME_BYTES = 4 * 1024 * 1024;
+export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 
 /** Must match the Rust `WS_SUBPROTOCOL`. */
 export const WS_SUBPROTOCOL = "betterbase-rpc-v1";

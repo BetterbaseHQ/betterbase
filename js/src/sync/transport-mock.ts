@@ -24,7 +24,8 @@
 
 /** Must match the Rust `DEFAULT_PADDING_BUCKETS` (padding.rs). */
 export const MOCK_PADDING_BUCKETS = [
-  256, 1024, 4096, 16384, 65536, 262144, 1048576,
+  256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288,
+  1048576, 2097152, 4194304, 5242867,
 ] as const;
 
 const LENGTH_PREFIX_SIZE = 4;
@@ -125,6 +126,18 @@ function cborBytes(major: number, bytes: number[]): number[] {
   return [(major << 5) | first, ...rest, ...bytes];
 }
 
+/** Like `cborBytes` but appends into `parts` — avoids `...bytes`, which
+ * exceeds the JS argument limit for MB-sized payloads. */
+function pushCborBytes(
+  parts: number[],
+  major: number,
+  bytes: Uint8Array,
+): void {
+  const [first, ...rest] = cborLen(bytes.length);
+  parts.push((major << 5) | first, ...rest);
+  for (const b of bytes) parts.push(b);
+}
+
 function cborText(s: string): number[] {
   return cborBytes(3, [...TEXT_ENCODER.encode(s)]);
 }
@@ -143,7 +156,8 @@ function encodeEnvelopeCbor(
   const parts: number[] = [0xa0 | (3 + (h !== null ? 1 : 0))];
   parts.push(...cborText("c"), ...cborText(c));
   parts.push(...cborText("v"), ...cborUint(v));
-  parts.push(...cborText("crdt"), ...cborBytes(2, [...crdt]));
+  parts.push(...cborText("crdt"));
+  pushCborBytes(parts, 2, crdt);
   if (h !== null) parts.push(...cborText("h"), ...cborText(h));
   return new Uint8Array(parts);
 }

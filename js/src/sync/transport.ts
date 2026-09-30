@@ -113,7 +113,8 @@ export interface SyncTransportConfig {
   spaceId?: string;
   /**
    * Padding bucket sizes in bytes. Data is padded to the smallest bucket that fits.
-   * Default: standard buckets (256 to 1MB). Set to empty array to disable padding.
+   * Default: pow-2 buckets from 256 to the 5 MB blob cap (see
+   * `DEFAULT_PADDING_BUCKETS` in betterbase-sync-core). Set to empty array to disable padding.
    * Padding is applied before encryption and removed after decryption.
    */
   paddingBuckets?: number[];

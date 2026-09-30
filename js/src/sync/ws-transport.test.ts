@@ -15,7 +15,13 @@ import { WSTransport } from "./ws-transport.js";
 vi.mock("../wasm-init.js", async () => {
   const { createWasmInitMock } = await import("./rpc-frames-mock.js");
   const { createPullAssembly } = await import("./pull-assembly-mock.js");
-  return createWasmInitMock(createPullAssembly());
+  // Include the transport wasm mock so live records (envelope encode +
+  // padding) can be pushed, not just tombstones.
+  const { wasmMock } = await import("./transport-mock.js");
+  return createWasmInitMock({
+    ...wasmMock.ensureWasm(),
+    ...createPullAssembly(),
+  });
 });
 
 vi.mock("../crypto/webcrypto.js", () => ({
@@ -161,6 +167,76 @@ describe("WSTransport", () => {
           (f.params as { space: string }).space === "shared-1",
       );
       expect((sharedFrame[0]!.params as { ucan?: string }).ucan).toBe("ucan-1");
+    });
+
+    it("splits pushes that exceed the frame budget into multiple messages", async () => {
+      const pushes: Array<{ ids: string[]; blobBytes: number }> = [];
+      server.handle("push", (params) => {
+        const p = params as {
+          changes: Array<{ id: string; blob: Uint8Array | null }>;
+        };
+        pushes.push({
+          ids: p.changes.map((c) => c.id),
+          blobBytes: p.changes.reduce(
+            (n, c) => n + (c.blob?.byteLength ?? 0),
+            0,
+          ),
+        });
+        return { ok: true, cursor: 1 };
+      });
+      const { ws, transport } = makeHarness();
+      await connect(ws);
+
+      // Two records padding to the 4 MiB bucket plus a small one: the
+      // small + first big fit the budget, the second big starts a new
+      // message.
+      const big = (id: string) => ({
+        id,
+        _v: 1 as const,
+        crdt: new Uint8Array(3_000_000),
+        deleted: false,
+        sequence: 0,
+        meta: undefined,
+      });
+      const acks = await transport.push("notes", [
+        { ...tombstone("small", 0), meta: undefined },
+        big("a"),
+        big("b"),
+      ]);
+
+      expect(pushes.map((p) => p.ids)).toEqual([["small", "a"], ["b"]]);
+      const frameCap = 8 * 1024 * 1024;
+      expect(pushes.every((p) => p.blobBytes < frameCap)).toBe(true);
+      expect(acks).toHaveLength(3);
+    });
+
+    it("keeps a large record in the same message when it fits the budget", async () => {
+      const pushes: Array<Array<string>> = [];
+      server.handle("push", (params) => {
+        const p = params as { changes: Array<{ id: string }> };
+        pushes.push(p.changes.map((c) => c.id));
+        return { ok: true, cursor: 1 };
+      });
+      const { ws, transport } = makeHarness();
+      await connect(ws);
+
+      // A record padding to the 4 MiB bucket is well under the 8 MiB
+      // frame cap on its own, so it shares a message with the small one.
+      const huge = {
+        id: "big",
+        _v: 1 as const,
+        crdt: new Uint8Array(3_000_000),
+        deleted: false,
+        sequence: 0,
+        meta: undefined,
+      };
+      const acks = await transport.push("notes", [
+        { ...tombstone("small", 0), meta: undefined },
+        huge,
+      ]);
+
+      expect(pushes).toEqual([["small", "big"]]);
+      expect(acks).toHaveLength(2);
     });
   });
 

@@ -28,7 +28,9 @@ pub const RPC_CHUNK: i32 = 3;
 pub const WS_SUBPROTOCOL: &str = "betterbase-rpc-v1";
 
 /// Inbound frame size limit in bytes (matches the server's wsReadLimit).
-pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+/// Sized for the top padding bucket: a single-record push carrying a
+/// 5,242,880-byte blob plus CBOR envelope fits with headroom.
+pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 /// WebSocket close codes negotiated under the rpc-v1 subprotocol.
 pub const CLOSE_AUTH_FAILED: i32 = 4000;

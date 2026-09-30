@@ -10,7 +10,8 @@
  * - Shared spaces: activated when SpaceManager creates sync stacks
  * - Pull: single WS pull request → per-space results → decrypt via per-space transports
  * - Events: WS subscription, events routed by space
- * - Push: per-space via WSClient (single connection)
+ * - Push: per-space via WSClient (single connection), split into
+ *   frame-budget-sized messages (see wsPush)
  */
 
 import type {
@@ -35,9 +36,16 @@ import type {
   WSSubscribeSpace,
   WSPullSpace,
   WSPushChange,
+  WSPushResult,
 } from "./ws-frames.js";
 import type { SpaceManager } from "./space-manager.js";
 import { deriveForward } from "./reencrypt.js";
+import { v1Constants } from "./rpc-frames.js";
+
+/** Per-record CBOR overhead estimate: id string, cursor, map tags. */
+const WS_PUSH_RECORD_OVERHEAD = 128;
+/** Frame envelope estimate: request id, method name, params map. */
+const WS_PUSH_FRAME_OVERHEAD = 512;
 import { webcryptoDeriveEpochKey } from "../crypto/webcrypto.js";
 
 /** Persistent storage for per-space-per-collection cursors. */
@@ -137,6 +145,13 @@ export class WSTransport implements SyncTransportInterface {
    * Push changes to a space via WebSocket.
    * Adapts WSClient.push() to the PushResult interface used by SyncTransport.
    * For shared spaces, includes the UCAN for authorization.
+   *
+   * The batch is split so no push message exceeds the RPC frame cap
+   * (`maxFrameBytes`, 8 MiB): the budget is the cap minus envelope
+   * overhead, and each record counts its blob bytes plus per-record CBOR
+   * overhead. Sub-batches run in order, and the first rejected result is
+   * returned (earlier sub-batches stay pushed — the same semantics as
+   * consecutive count-batched pushes in SyncManager).
    */
   private async wsPush(
     space: string,
@@ -153,11 +168,41 @@ export class WSTransport implements SyncTransportInterface {
       space !== this.config.personalSpaceId
         ? (this.config.spaceManager.getUCAN(space) ?? undefined)
         : undefined;
-    const ack = await this.wsClient.push(space, wsChanges, ucan, epoch);
+
+    const budget = v1Constants().maxFrameBytes - WS_PUSH_FRAME_OVERHEAD;
+    let bytes = 0;
+    let batch: WSPushChange[] = [];
+    const batches: WSPushChange[][] = [];
+    for (const change of wsChanges) {
+      const size =
+        (change.blob?.byteLength ?? 0) +
+        (change.wrapped_dek?.byteLength ?? 0) +
+        WS_PUSH_RECORD_OVERHEAD;
+      if (batch.length > 0 && bytes + size > budget) {
+        batches.push(batch);
+        batch = [];
+        bytes = 0;
+      }
+      batch.push(change);
+      bytes += size;
+    }
+    if (batch.length > 0) batches.push(batch);
+
+    if (batches.length === 0) {
+      return { ok: true, sequence: 0 };
+    }
+
+    let ack: WSPushResult | undefined;
+    for (const subBatch of batches) {
+      ack = await this.wsClient.push(space, subBatch, ucan, epoch);
+      if (!ack.ok) break;
+    }
+    // batches is non-empty (guard above), so ack is set here
+    const result = ack!;
     return {
-      ok: ack.ok,
-      sequence: ack.cursor ?? 0,
-      ...(ack.error !== undefined ? { error: ack.error } : {}),
+      ok: result.ok,
+      sequence: result.cursor ?? 0,
+      ...(result.error !== undefined ? { error: result.error } : {}),
     };
   }
 
