@@ -162,6 +162,7 @@ pub fn prepare_new(
     // Create CRDT model with schema-aware node types
     let model = create_model_with_schema(&validated, session_id, &def.current_schema)?;
     let crdt_binary = crdt::model_to_binary(&model);
+    ensure_syncable_size(&crdt_binary)?;
 
     let record = SerializedRecord {
         id,
@@ -179,6 +180,27 @@ pub fn prepare_new(
     };
 
     Ok(PrepareNewResult { record })
+}
+
+// ============================================================================
+// Size Guard
+// ============================================================================
+
+/// Reject writes whose CRDT binary can never sync: the transport pads the
+/// blob envelope into the ladder's top bucket, so anything over
+/// [`crdt::MAX_CRDT_BINARY_SIZE`] would fail push-encrypt on every sync
+/// cycle. Failing at write time surfaces the problem where it can be fixed
+/// (the app sees the error immediately) instead of as a permanently dirty
+/// record.
+fn ensure_syncable_size(crdt: &[u8]) -> Result<()> {
+    if crdt.len() > crdt::MAX_CRDT_BINARY_SIZE {
+        return Err(LessDbError::Crdt(format!(
+            "record too large to sync: {} bytes (max {}); use the file store for large payloads",
+            crdt.len(),
+            crdt::MAX_CRDT_BINARY_SIZE
+        )));
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -454,6 +476,7 @@ pub fn prepare_update(
             validated,
         )
     };
+    ensure_syncable_size(&crdt_binary)?;
 
     let final_validated = if base_used {
         validate(&full_schema, &final_data)

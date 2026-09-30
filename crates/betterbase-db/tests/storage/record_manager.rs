@@ -1300,3 +1300,46 @@ fn prepare_mark_synced_stays_dirty_when_meta_only_change_landed_after_snapshot()
     let synced = prepare_mark_synced(&rec, 44, Some(&legacy));
     assert!(!synced.dirty);
 }
+
+// ============================================================================
+// Sync size guard
+// ============================================================================
+
+#[test]
+fn prepare_new_rejects_unsyncable_size() {
+    let def = users_def();
+    // CRDT binary over MAX_CRDT_BINARY_SIZE: the blob envelope could never
+    // be padded into the transport ladder's top bucket, so the write must
+    // fail instead of producing a permanently-unpushable record.
+    let big = "x".repeat(5_242_801);
+    let data = json!({"name": big, "email": "a@b.c"});
+    let opts = PutOptions::default();
+    let err = prepare_new(&def, data, SID, &opts)
+        .expect_err("oversized record must be rejected at write time");
+    assert!(
+        err.to_string().contains("too large to sync"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn prepare_update_rejects_unsyncable_size() {
+    let def = users_def();
+    let opts = PutOptions::default();
+    let existing = prepare_new(&def, json!({"name": "Alice", "email": "a@b.c"}), SID, &opts)
+        .expect("seed record")
+        .record;
+
+    let update_opts = PatchOptions::default();
+    let big = "x".repeat(5_242_801);
+    // Keep the autofilled immutable fields (createdAt/updatedAt/id) so the
+    // update reaches the size guard instead of tripping immutability.
+    let mut new_obj = existing.data.as_object().unwrap().clone();
+    new_obj.insert("name".to_string(), json!(big));
+    let err = prepare_update(&def, &existing, Value::Object(new_obj), SID, &update_opts)
+        .expect_err("oversized update must be rejected at write time");
+    assert!(
+        err.to_string().contains("too large to sync"),
+        "unexpected error: {err}"
+    );
+}

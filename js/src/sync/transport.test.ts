@@ -99,6 +99,63 @@ describe("SyncTransport.push", () => {
     expect(acks).toEqual([{ id: "n1", sequence: 9 }]);
   });
 
+  it("carries per-record build failures in the ack instead of dropping them", async () => {
+    const pushes: unknown[][] = [];
+    const transport = new SyncTransport({
+      push: async (changes) => {
+        pushes.push(changes);
+        return { ok: true, sequence: 9 };
+      },
+      spaceId: "space-1",
+    });
+
+    // CRDT binary over the padding ladder's top bucket: the envelope can
+    // never be padded, so the record can never be pushed.
+    const oversize = {
+      id: "huge",
+      _v: 1 as const,
+      crdt: new Uint8Array(6_000_000),
+      deleted: false,
+      sequence: 4,
+      meta: undefined,
+    };
+    const acks = await transport.push("notes", [
+      tombstoneRecord("n1", 3),
+      oversize,
+    ]);
+
+    // Only the pushable record is sent; both records come back in acks,
+    // the failed one carrying its error.
+    expect(pushes).toHaveLength(1);
+    expect((pushes[0] as Array<{ id: string }>)[0]).toMatchObject({
+      id: "n1",
+    });
+    expect(acks).toHaveLength(2);
+    expect(acks[0]).toEqual({ id: "n1", sequence: 9 });
+    expect(acks[1]).toMatchObject({ id: "huge", sequence: 4 });
+    expect(typeof acks[1]!.error).toBe("string");
+  });
+
+  it("reports build failures even when no record can be sent", async () => {
+    const transport = new SyncTransport({
+      push: async () => ({ ok: true, sequence: 9 }),
+      spaceId: "space-1",
+    });
+
+    const oversize = {
+      id: "huge",
+      _v: 1 as const,
+      crdt: new Uint8Array(6_000_000),
+      deleted: false,
+      sequence: 4,
+      meta: undefined,
+    };
+    const acks = await transport.push("notes", [oversize]);
+
+    expect(acks).toHaveLength(1);
+    expect(acks[0]!.error).toBeDefined();
+  });
+
   it("throws PushRejectedError carrying the server code and cursor on rejection", async () => {
     const transport = new SyncTransport({
       push: async () => ({ ok: false, sequence: 0, error: "conflict" }),

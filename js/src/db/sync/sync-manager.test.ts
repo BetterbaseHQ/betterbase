@@ -145,6 +145,47 @@ describe("SyncManager.push", () => {
     });
   });
 
+  it("surfaces local push failures from error acks as permanent errors", async () => {
+    const { manager, adapter, transport } = makeHarness({
+      adapter: {
+        getDirty: vi
+          .fn()
+          .mockResolvedValue([
+            makeDirty({ id: "ok" }),
+            makeDirty({ id: "huge" }),
+          ]),
+      },
+    });
+    transport.push.mockResolvedValue([
+      { id: "ok", sequence: 5 },
+      {
+        id: "huge",
+        sequence: 3,
+        error: "data too large: 6000000 bytes exceeds max bucket 5242867",
+      },
+    ]);
+
+    const result = await manager.push(def);
+
+    // The failed record is surfaced as a permanent error and never marked
+    // synced; the healthy one goes through normally.
+    expect(result.pushed).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toMatchObject({
+      phase: "push",
+      collection: def.name,
+      id: "huge",
+      kind: "permanent",
+    });
+    expect(adapter.markSynced).toHaveBeenCalledTimes(1);
+    expect(adapter.markSynced).toHaveBeenCalledWith(
+      def,
+      "ok",
+      5,
+      expect.anything(),
+    );
+  });
+
   it("batches pushes by pushBatchSize", async () => {
     const { manager, transport } = makeHarness({
       adapter: {

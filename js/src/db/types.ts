@@ -409,6 +409,13 @@ export interface OutboundRecord {
 export interface PushAck {
   id: string;
   sequence: number;
+  /**
+   * Present when the record was NOT sent — a local, permanent failure
+   * (e.g., the CRDT binary exceeds the padding ladder's top bucket, so it
+   * can never be pushed). Sync surfaces this as a permanent error and
+   * eventually quarantines the record instead of retrying it forever.
+   */
+  error?: string;
 }
 
 export interface PullResult {

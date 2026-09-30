@@ -288,55 +288,55 @@ export class SyncTransport implements SyncTransportInterface {
   ): Promise<PushAck[]> {
     if (records.length === 0) return [];
 
-    const { changes, failedIds } = await this.buildPushChanges(
+    const { changes, failures } = await this.buildPushChanges(
       collection,
       records,
     );
 
-    if (changes.length === 0) return [];
+    let pushResult: PushResult | undefined;
+    if (changes.length > 0) {
+      // Declare the epoch used for encryption so the server can fast-fail
+      // pushes from stale writers (epoch_stale) before any write.
+      pushResult = await this.pushFn(changes, this.currentEpoch);
 
-    // Declare the epoch used for encryption so the server can fast-fail
-    // pushes from stale writers (epoch_stale) before any write.
-    const pushResult = await this.pushFn(changes, this.currentEpoch);
-
-    if (!pushResult.ok) {
-      // The server rejected the batch. Throwing (instead of returning empty
-      // acks) lets the sync layer classify the rejection — conflicts
-      // reconcile via pull — instead of silently retrying a stale cursor
-      // forever.
-      throw new PushRejectedError(
-        pushResult.error ?? "unknown",
-        pushResult.sequence,
-      );
+      if (!pushResult.ok) {
+        // The server rejected the batch. Throwing (instead of returning empty
+        // acks) lets the sync layer classify the rejection — conflicts
+        // reconcile via pull — instead of silently retrying a stale cursor
+        // forever.
+        throw new PushRejectedError(
+          pushResult.error ?? "unknown",
+          pushResult.sequence,
+        );
+      }
     }
 
-    // Only return acks for records that were actually sent
-    return this.buildPushAcks(records, failedIds, pushResult.sequence);
+    return this.buildPushAcks(records, failures, pushResult?.sequence ?? 0);
   }
 
   private async buildPushChanges(
     collection: string,
     records: OutboundRecord[],
-  ): Promise<{ changes: Change[]; failedIds: Set<string> }> {
+  ): Promise<{ changes: Change[]; failures: Map<string, string> }> {
     const changes: Change[] = [];
-    const failedIds = new Set<string>();
+    const failures = new Map<string, string>();
 
     for (const record of records) {
       const change = await this.buildChangeForPush(
         collection,
         record,
-        failedIds,
+        failures,
       );
       if (change) changes.push(change);
     }
 
-    return { changes, failedIds };
+    return { changes, failures };
   }
 
   private async buildChangeForPush(
     collection: string,
     record: OutboundRecord,
-    failedIds: Set<string>,
+    failedErrors: Map<string, string>,
   ): Promise<Change | null> {
     if (record.deleted) {
       return {
@@ -381,10 +381,15 @@ export class SyncTransport implements SyncTransportInterface {
         ...(wrappedDek ? { wrappedDek } : {}),
       };
     } catch (err) {
-      // Per-record encryption failure (e.g., padding overflow).
-      // Skip this record but continue with others.
-      failedIds.add(record.id);
-      console.error(`Push: encryption failed for record ${record.id}:`, err);
+      // Per-record encryption failure (e.g., padding overflow — the CRDT
+      // binary exceeds the ladder's top bucket and can never be pushed).
+      // Record it so the ack carries the failure to the sync layer, which
+      // surfaces it as a permanent error instead of an infinite silent
+      // dirty-retry loop.
+      failedErrors.set(
+        record.id,
+        err instanceof Error ? err.message : String(err),
+      );
       return null;
     }
   }
@@ -455,12 +460,19 @@ export class SyncTransport implements SyncTransportInterface {
 
   private buildPushAcks(
     records: OutboundRecord[],
-    failedIds: Set<string>,
+    failures: Map<string, string>,
     sequence: number,
   ): PushAck[] {
-    return records
-      .filter((record) => !failedIds.has(record.id))
-      .map((record) => ({ id: record.id, sequence }));
+    return records.map((record) => {
+      const error = failures.get(record.id);
+      if (error !== undefined) {
+        // Not sent: permanent local failure — carry it in the ack so the
+        // sync layer surfaces and quarantines the record instead of
+        // retrying it forever.
+        return { id: record.id, sequence: record.sequence, error };
+      }
+      return { id: record.id, sequence };
+    });
   }
 
   /**

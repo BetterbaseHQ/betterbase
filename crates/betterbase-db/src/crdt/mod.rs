@@ -20,7 +20,15 @@ pub const MIN_SESSION_ID: u64 = 65536;
 pub const MAX_SESSION_ID: u64 = (1 << 57) - 1;
 
 /// Maximum CRDT binary size (10 MB)
-pub const MAX_CRDT_BINARY_SIZE: usize = 10 * 1024 * 1024;
+/// Maximum CRDT binary size in bytes — the largest that can still sync.
+///
+/// The transport pads the blob envelope (CRDT binary + ~20B of CBOR
+/// fields) into the padding ladder's 5,242,867-byte top bucket (itself
+/// the largest whose ciphertext blob passes the server's 5MB check), so
+/// a record above this limit can never be pushed. Enforced at write time
+/// (record_manager) and on decode; large payloads belong in the file
+/// store, not record fields.
+pub const MAX_CRDT_BINARY_SIZE: usize = 5_242_800;
 
 /// Generate a cryptographically random session ID in `[MIN_SESSION_ID, MAX_SESSION_ID]`.
 ///

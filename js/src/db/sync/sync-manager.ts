@@ -344,6 +344,23 @@ export class SyncManager {
     }
 
     for (const ack of acks) {
+      if (ack.error !== undefined) {
+        // Local, permanent failure (e.g., CRDT binary over the padding
+        // ladder's top bucket): surface it and failure-track exactly like
+        // a permanent server rejection, so the record is eventually
+        // quarantined instead of retried forever.
+        result.errors.push(
+          this.makeSyncError(
+            "push",
+            collection,
+            ack.id,
+            ack.error,
+            "permanent",
+          ),
+        );
+        this.trackFailure(collection, ack.id, "permanent");
+        continue;
+      }
       try {
         const snapshot = snapshots.get(ack.id);
         await this.adapter.markSynced(
