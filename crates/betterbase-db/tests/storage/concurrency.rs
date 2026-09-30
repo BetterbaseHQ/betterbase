@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use betterbase_db::error::Result;
+use betterbase_db::error::{LessDbError, Result, StorageError};
 use betterbase_db::index::types::{IndexDefinition, IndexScan};
 use betterbase_db::storage::{
     adapter::Adapter,
@@ -255,18 +255,25 @@ fn concurrent_delete_cannot_be_resurrected_by_in_flight_patch() {
     });
 
     // The patch's put fires the armed gate: its write is withheld while
-    // the delete runs.
-    adapter
-        .patch(
-            &def,
-            json!({ "name": "Alice II" }),
-            &PatchOptions {
-                id: id.clone(),
-                session_id: Some(SID),
-                ..Default::default()
-            },
-        )
-        .expect("patch");
+    // the delete runs. Two serialized orders are legal: the gate holds the
+    // patch's write until the delete completes (patch-then-delete on the
+    // record), or the deleter thread wins scheduling and the delete fully
+    // lands first, in which case the patch reads the tombstone and errors
+    // instead of resurrecting. Both must end deleted.
+    let patch_result = adapter.patch(
+        &def,
+        json!({ "name": "Alice II" }),
+        &PatchOptions {
+            id: id.clone(),
+            session_id: Some(SID),
+            ..Default::default()
+        },
+    );
+    match patch_result {
+        Ok(_) => {}
+        Err(LessDbError::Storage(inner)) if matches!(*inner, StorageError::Deleted { .. }) => {}
+        Err(error) => panic!("patch: {error}"),
+    }
 
     deleter.join().expect("delete thread");
 
