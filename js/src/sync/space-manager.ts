@@ -30,7 +30,11 @@ import type {
   InvitationPayloadWire,
   MailboxMessageWire,
 } from "./invitation-wire.js";
-import { InvitationClient, RecipientNotFoundError, type InvitationPayload } from "./invitations.js";
+import {
+  InvitationClient,
+  RecipientNotFoundError,
+  type InvitationPayload,
+} from "./invitations.js";
 import { SyncClient, AuthenticationError } from "./client.js";
 import { RPCCallError } from "./rpc-connection.js";
 import { base64ToBytes, bytesToBase64 } from "./encoding.js";
