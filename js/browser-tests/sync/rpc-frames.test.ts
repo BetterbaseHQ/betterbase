@@ -191,6 +191,6 @@ describe("rpc-v1 protocol constants (pinned to the Rust source of truth)", () =>
       slowConsumer: CLOSE_SLOW_CONSUMER,
       rateLimited: CLOSE_RATE_LIMITED,
     });
-    expect(c.maxFrameBytes).toBe(4 * 1024 * 1024);
+    expect(c.maxFrameBytes).toBe(8 * 1024 * 1024);
   });
 });
