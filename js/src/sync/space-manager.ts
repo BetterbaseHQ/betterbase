@@ -30,7 +30,7 @@ import type {
   InvitationPayloadWire,
   MailboxMessageWire,
 } from "./invitation-wire.js";
-import { InvitationClient, type InvitationPayload } from "./invitations.js";
+import { InvitationClient, RecipientNotFoundError, type InvitationPayload } from "./invitations.js";
 import { SyncClient, AuthenticationError } from "./client.js";
 import { RPCCallError } from "./rpc-connection.js";
 import { base64ToBytes, bytesToBase64 } from "./encoding.js";
@@ -353,8 +353,12 @@ export class SpaceManager {
       );
       return true;
     } catch (err) {
+      // Only a definitive 404 means the user is absent — network or auth
+      // failures propagate so callers can tell "not found" from "couldn't
+      // check" (a share that fails offline must not read as a missing user).
+      if (err instanceof RecipientNotFoundError) return false;
       console.error("[betterbase-sync] Failed to check if user exists:", err);
-      return false;
+      throw err;
     }
   }
 
