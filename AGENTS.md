@@ -68,6 +68,8 @@ Standalone npm package `betterbase` in `js/` with its own `package.json`, `tscon
 - `betterbase/auth/react` — `AuthProvider`, `useAuth`, `useAuthSession`, `useSessionToken`
 - `betterbase/discovery` — `fetchServerMetadata()`, `resolveUser()` (fetch + WASM validation)
 - `betterbase/sync` — `SyncTransport`, `SyncEngine`, `SpaceManager`, `InvitationClient`, `PresenceManager`, `EventManager`, `FileStore`, `moveToSpace`/`bulkMoveToSpace`/`spaceOf`/`shareTree`/`isShared`/`deleteTree`
+- `betterbase/sync/protocol` — low-level transport primitives (`RpcConnection`, `WSClient`, `WSTransport`, WS frame codecs)
+- `betterbase/sync/files-worker` — `initFilesWorker()` worker entry point for file operations
 - `betterbase/sync/react` — `BetterbaseProvider`, `useSpaces`, `useQuery`, `useRecord`, `useFiles`, `usePeers`, `usePresence`, `useEvent`, `useEditChain`, `useConnectionStatus`, `useTyping`
 - `betterbase/db` — `collection`, `t`, `createDatabase`, `SyncManager`, `SyncScheduler`
 - `betterbase/db/react` — `DatabaseProvider`, `useQuery` (alias `useDbQuery`), `useRecord` (alias `useDbRecord`), `useSyncStatus`
@@ -85,7 +87,7 @@ All crypto uses RustCrypto crates with `zeroize` for key hygiene. No Web Crypto 
 Key functions by crate:
 
 - **betterbase-crypto**: `encrypt_v4()`, `decrypt_v4()`, `wrap_dek()`, `unwrap_dek()`, `derive_epoch_key_from_root()`, `sign()`, `verify()`, `issue_root_ucan()`, `sign_edit_entry()`, `value_diff()`
-- **betterbase-auth**: `generate_code_verifier()`, `compute_code_challenge()`, `decrypt_jwe_compact()`, `extract_encryption_key()`, `derive_mailbox_id()`
+- **betterbase-auth**: `generate_code_verifier()`, `compute_code_challenge()`, `decrypt_jwe()`, `extract_encryption_key()`, `derive_mailbox_id()`
 - **betterbase-discovery**: `validate_server_metadata()`, `parse_webfinger_response()`
 - **betterbase-sync-core**: `encode_envelope()`, `decode_envelope()`, `encrypt_record()`, `decrypt_record()`, `pad_to_bucket()`, `unpad()`, `peek_epoch()`, `derive_forward()`, `rewrap_deks()`, `encrypt_membership_payload()`, `fold_membership_log()` (verified membership-log fold — all three space-manager member-state folds), `encode_request_frame()` / `decode_frame()` (rpc-v1), `apply_chunk()` (pull assembly)
 - **betterbase-db**: Collection definitions, schema validation, CRDT merge (json-joy Rust port), query engine
