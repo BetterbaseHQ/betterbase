@@ -6,18 +6,24 @@ export const DISCOVERY_TIMEOUT_MS = 10_000;
 
 /**
  * Infer the URL scheme for a domain.
- * localhost / 127.0.0.1 → http, everything else → https.
+ * Loopback names — localhost, 127.0.0.1, and anything under the reserved
+ * .localhost TLD (RFC 6761, e.g. accounts.betterbase.localhost) — get http;
+ * everything else gets https.
  */
 function inferScheme(domain: string): string {
   const host = domain.split(":")[0]!;
-  return host === "localhost" || host === "127.0.0.1" ? "http" : "https";
+  return host === "localhost" ||
+    host === "127.0.0.1" ||
+    host.endsWith(".localhost")
+    ? "http"
+    : "https";
 }
 
 /**
  * Fetch server metadata from a domain's .well-known endpoint.
  *
  * The domain should NOT include a scheme — it is inferred automatically
- * (http for localhost/127.0.0.1, https for everything else).
+ * (http for loopback names incl. the .localhost TLD, https for everything else).
  *
  * @throws Error on network failure or invalid response.
  */

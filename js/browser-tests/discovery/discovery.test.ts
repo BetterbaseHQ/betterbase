@@ -51,6 +51,15 @@ describe("discovery fetch shell with real Rust validation", () => {
     );
   });
 
+  it("uses http for the reserved .localhost TLD (RFC 6761 loopback names)", async () => {
+    const fetchMock = respond(metadata);
+    await fetchServerMetadata("accounts.betterbase.localhost");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://accounts.betterbase.localhost/.well-known/betterbase",
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
   it("gets defaults for optional metadata from Rust", async () => {
     respond({
       version: 1,
